@@ -1,16 +1,19 @@
 import {
   BarsOutlined,
+  BugOutlined,
+  CloudUploadOutlined,
   CompassOutlined,
   CopyOutlined,
+  DeleteOutlined,
   EditOutlined,
+  EllipsisOutlined,
   FileSearchOutlined,
   GlobalOutlined,
   PaperClipOutlined,
-  PlusOutlined,
   ProductOutlined,
   QuestionCircleOutlined,
+  RobotOutlined,
   ScheduleOutlined,
-  SearchOutlined,
   ShareAltOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
@@ -31,34 +34,36 @@ import {
   Welcome,
   XProvider,
 } from '@ant-design/x';
+import type { BubbleListRef } from '@ant-design/x/es/bubble';
 import type { ComponentProps } from '@ant-design/x-markdown';
 import XMarkdown from '@ant-design/x-markdown';
 import { useXChat, useXConversations } from '@ant-design/x-sdk';
 import {
-  Alert,
   Avatar,
   Button,
   Card,
+  Drawer,
   Flex,
   List,
   Progress,
   Space,
-  Tabs,
   Tag,
+  Tabs,
   Typography,
   message,
 } from 'antd';
+import type { GetProp } from 'antd';
 import { createStyles } from 'antd-style';
 import dayjs from 'dayjs';
-import type { GetProp } from 'antd';
-import React, { useEffect, useMemo, useState } from 'react';
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   assistantScenes,
   audioImportTasks,
   researchSnapshots,
   sceneTasks,
   tenantContext,
+  traceLogs,
   visitBriefs,
 } from '@shared';
 import {
@@ -67,197 +72,221 @@ import {
   historyMessageFactory,
   providerFactory,
 } from './mock-chat';
-import { buildPromptGroups, getSceneByPath, sceneContextData, sceneOrder } from './scene-meta';
+import { buildPromptGroups, getSceneByPath, sceneOrder } from './scene-meta';
+import { useMarkdownTheme } from './use-markdown-theme';
 
 const { Paragraph, Text, Title } = Typography;
 
+const HOME_CONVERSATION_KEY = 'conv-home';
+
+const sceneIconMap: Record<string, React.ReactNode> = {
+  'audio-import': <ScheduleOutlined />,
+  'company-research': <FileSearchOutlined />,
+  'visit-prepare': <ProductOutlined />,
+  tasks: <BarsOutlined />,
+  chat: <CompassOutlined />,
+};
+
+const senderShortcutIcons = [
+  <ScheduleOutlined />,
+  <ProductOutlined />,
+  <FileSearchOutlined />,
+  <CompassOutlined />,
+];
+
+const promptGroupStyles = {
+  list: { height: '100%' },
+  item: {
+    flex: 1,
+    backgroundImage: 'linear-gradient(123deg, #e5f4ff 0%, #efe7ff 100%)',
+    borderRadius: 12,
+    border: 'none',
+  },
+  subItem: { background: '#ffffffa6' },
+} satisfies NonNullable<GetProp<typeof Prompts, 'styles'>>;
+
 const useStyles = createStyles(({ token, css }) => ({
   layout: css`
+    width: 100%;
+    height: 100vh;
     display: flex;
-    min-height: 100vh;
-    padding: 18px;
-    gap: 18px;
+    background: ${token.colorBgContainer};
+    font-family:
+      AlibabaPuHuiTi,
+      "Alibaba Sans",
+      ${token.fontFamily},
+      sans-serif;
   `,
-  rail: css`
+  side: css`
+    background: ${token.colorBgLayout}80;
     width: 280px;
-    border-radius: 24px;
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 250, 255, 0.9));
-    border: 1px solid rgba(22, 119, 255, 0.08);
-    box-shadow: 0 20px 45px rgba(22, 60, 124, 0.08);
+    height: 100%;
     display: flex;
     flex-direction: column;
-    padding: 16px;
-    backdrop-filter: blur(20px);
+    padding: 0 12px;
+    box-sizing: border-box;
+    flex-shrink: 0;
   `,
-  brand: css`
+  logo: css`
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
+    justify-content: start;
+    padding: 0 24px;
+    box-sizing: border-box;
+    gap: 10px;
+    margin: 24px 0 18px;
   `,
-  brandTitle: css`
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  `,
-  brandMark: css`
-    width: 44px;
-    height: 44px;
-    border-radius: 14px;
+  logoMark: css`
+    width: 24px;
+    height: 24px;
+    border-radius: 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    font-size: 14px;
     color: #fff;
-    font-weight: 700;
-    background: linear-gradient(135deg, #1677ff 0%, #2f54eb 100%);
-    box-shadow: 0 12px 24px rgba(22, 119, 255, 0.28);
+    background: linear-gradient(135deg, ${token.colorPrimary}, ${token.colorInfo});
+  `,
+  logoText: css`
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+
+    span {
+      font-weight: 600;
+      color: ${token.colorText};
+      font-size: 16px;
+      line-height: 1.2;
+    }
   `,
   conversations: css`
-    flex: 1;
     overflow-y: auto;
-    margin-top: 10px;
+    margin-top: 12px;
+    padding: 0;
+    flex: 1;
 
     .ant-conversations-list {
       padding-inline-start: 0;
     }
   `,
-  railFooter: css`
+  sideFooter: css`
     border-top: 1px solid ${token.colorBorderSecondary};
-    padding-top: 14px;
+    min-height: 48px;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
   `,
-  main: css`
+  sideFooterInfo: css`
     min-width: 0;
-    flex: 1;
+  `,
+  chat: css`
+    height: 100%;
+    width: calc(100% - 280px);
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    border-radius: 28px;
-    padding: 18px 18px 10px;
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 249, 252, 0.9));
-    border: 1px solid rgba(22, 119, 255, 0.08);
-    box-shadow: 0 20px 45px rgba(22, 60, 124, 0.08);
-    backdrop-filter: blur(22px);
-  `,
-  header: css`
-    display: flex;
-    align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 14px;
-  `,
-  sceneNav: css`
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-  `,
-  sceneLink: css`
-    padding: 10px 14px;
-    border-radius: 999px;
-    color: ${token.colorText};
-    text-decoration: none;
-    background: rgba(242, 246, 255, 0.85);
-    border: 1px solid rgba(22, 119, 255, 0.08);
-    transition: all 0.2s ease;
+    min-width: 0;
+    overflow: hidden;
 
-    &.active {
-      color: #fff;
-      background: linear-gradient(135deg, #1677ff 0%, #2f54eb 100%);
-      border-color: transparent;
-      box-shadow: 0 14px 24px rgba(22, 119, 255, 0.18);
+    .ant-bubble-content-updating {
+      background-image: linear-gradient(90deg, #ff6b23 0%, #af3cb8 31%, #53b6ff 89%);
+      background-size: 100% 2px;
+      background-repeat: no-repeat;
+      background-position: bottom;
     }
   `,
-  sceneSummary: css`
-    margin-bottom: 16px;
-  `,
-  content: css`
+  chatToolbar: css`
+    padding: 20px 24px 0;
     display: flex;
-    gap: 18px;
-    min-height: 0;
-    flex: 1;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
   `,
-  chatPane: css`
-    min-width: 0;
+  chatList: css`
     flex: 1;
-    display: flex;
-    flex-direction: column;
-  `,
-  messageViewport: css`
-    flex: 1;
-    min-height: 0;
     overflow-y: auto;
-    padding-right: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    min-height: 0;
+    padding: 0 24px 8px;
   `,
-  emptyState: css`
-    max-width: 920px;
-    margin: 0 auto;
-    padding: 8px 0 16px;
+  placeholder: css`
+    width: 100%;
+    padding: ${token.paddingLG}px 0;
+    box-sizing: border-box;
   `,
-  promptGrid: css`
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  welcome: css`
+    width: 100%;
+    max-width: 840px;
+  `,
+  promptRow: css`
+    display: flex;
     gap: 16px;
-    margin-top: 18px;
-
-    @media (max-width: 960px) {
-      grid-template-columns: 1fr;
-    }
+    justify-content: center;
+    width: 100%;
+    flex-wrap: wrap;
   `,
   promptCard: css`
-    .ant-prompts-item {
-      background: linear-gradient(135deg, #f5f9ff 0%, #edf6ff 100%);
-      border: 1px solid rgba(22, 119, 255, 0.08);
-      border-radius: 18px;
+    flex: 1;
+    min-width: 320px;
+    max-width: 408px;
+
+    .ant-prompts-label {
+      color: #000000e0 !important;
     }
 
-    .ant-prompts-sub-item {
-      background: rgba(255, 255, 255, 0.72);
-      border-radius: 12px;
+    .ant-prompts-desc {
+      color: #000000a6 !important;
+      width: 100%;
+    }
+
+    .ant-prompts-icon {
+      color: #000000a6 !important;
+    }
+
+    @media (max-width: 1180px) {
+      min-width: 100%;
+      max-width: none;
     }
   `,
   bubbleList: css`
+    width: 100%;
+
     .ant-bubble {
       max-width: 880px;
     }
   `,
-  senderWrap: css`
-    padding-top: 14px;
+  senderPanel: css`
+    width: 100%;
+    padding: 0 8px 12px;
+    box-sizing: border-box;
   `,
   sender: css`
     width: 100%;
+    max-width: 840px;
   `,
-  senderPrompts: css`
+  senderPrompt: css`
     width: 100%;
-    margin-bottom: 10px;
-  `,
-  context: css`
-    width: 320px;
-    border-radius: 24px;
-    background:
-      linear-gradient(180deg, rgba(250, 252, 255, 0.98), rgba(244, 248, 255, 0.96));
-    border: 1px solid rgba(22, 119, 255, 0.08);
-    box-shadow: 0 16px 32px rgba(22, 60, 124, 0.07);
-    padding: 16px;
-    overflow-y: auto;
-
-    @media (max-width: 1320px) {
-      display: none;
-    }
-  `,
-  contextCard: css`
-    border-radius: 18px;
-    margin-bottom: 14px;
-    box-shadow: none;
-  `,
-  footerActions: css`
-    margin-top: 10px;
+    max-width: 840px;
+    margin: 0 auto;
+    color: ${token.colorText};
   `,
   inlineRefs: css`
     margin-top: 12px;
+  `,
+  drawerCard: css`
+    border-radius: 16px;
+    box-shadow: none;
+    margin-bottom: 12px;
+  `,
+  tagWrap: css`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   `,
 }));
 
@@ -268,13 +297,6 @@ const statusConfig = {
   error: { title: '任务执行失败', status: 'error' },
   abort: { title: '任务已中止', status: 'abort' },
 } as const;
-
-const senderIcons = [
-  { key: 'sender-1', description: '录音导入与拜访分析', icon: <ScheduleOutlined /> },
-  { key: 'sender-2', description: '准备拜访材料', icon: <ProductOutlined /> },
-  { key: 'sender-3', description: '公司分析', icon: <SearchOutlined /> },
-  { key: 'sender-4', description: '我的任务', icon: <BarsOutlined /> },
-];
 
 const ChatContext = React.createContext<{
   onReload?: ReturnType<typeof useXChat<AssistantChatMessage>>['onReload'];
@@ -295,7 +317,49 @@ const ThinkComponent = React.memo((props: ComponentProps) => {
   return <Think title={title} loading={loading}>{props.children}</Think>;
 });
 
-const MessageFooter = ({
+function buildSceneEntryPrompts() {
+  return [
+    {
+      key: 'scene-entry',
+      label: '场景技能入口',
+      children: sceneOrder
+        .filter((item) => item.key !== 'chat')
+        .map((item) => ({
+          key: `scene-${item.key}`,
+          label: item.title,
+          description: item.subtitle,
+          icon: sceneIconMap[item.key],
+          route: item.route,
+        })),
+    },
+  ] satisfies GetProp<typeof Prompts, 'items'>;
+}
+
+function buildSenderPrompts(scene = assistantScenes.chat) {
+  return scene.prompts.slice(0, 4).map((item, index) => ({
+    key: item.key,
+    description: item.label,
+    icon: senderShortcutIcons[index] ?? <CompassOutlined />,
+  })) satisfies GetProp<typeof Prompts, 'items'>;
+}
+
+function getSceneSourceTags(sceneKey: string) {
+  if (sceneKey === 'audio-import') {
+    return ['客户上下文', '商机上下文', '跟进记录草稿', '录音附件'];
+  }
+  if (sceneKey === 'company-research') {
+    return ['外部检索', '研究快照', '来源引用'];
+  }
+  if (sceneKey === 'visit-prepare') {
+    return visitBriefs[0].sourceMix;
+  }
+  if (sceneKey === 'tasks') {
+    return ['traceId', 'taskId', '资产结果', '写回状态'];
+  }
+  return ['对话上下文', '记录系统技能', '场景技能', '外部技能'];
+}
+
+function MessageFooter({
   id,
   content,
   extraInfo,
@@ -305,7 +369,7 @@ const MessageFooter = ({
   content: string;
   status?: string;
   extraInfo?: AssistantChatMessage['extraInfo'];
-}) => {
+}) {
   const [messageApi, holder] = message.useMessage();
   const context = React.useContext(ChatContext);
   const items = [
@@ -351,25 +415,25 @@ const MessageFooter = ({
   return (
     <>
       {holder}
-      <div style={{ display: 'flex' }}>
-        {id ? <Actions items={items} /> : null}
-      </div>
+      <div style={{ display: 'flex' }}>{id ? <Actions items={items} /> : null}</div>
     </>
   );
-};
+}
 
-function buildRole(styles: ReturnType<typeof useStyles>['styles']): BubbleListProps['role'] {
+function buildRole(
+  styles: ReturnType<typeof useStyles>['styles'],
+  markdownClassName: string,
+): BubbleListProps['role'] {
   return {
     assistant: {
       placement: 'start',
       avatar: (
         <Avatar
-          size={36}
-          style={{
-            background: 'linear-gradient(135deg, #1677ff 0%, #2f54eb 100%)',
-          }}
-          icon={<CompassOutlined />}
-        />
+          size={30}
+          style={{ backgroundColor: '#1677ff' }}
+        >
+          YZ
+        </Avatar>
       ),
       header: (_, { status, extraInfo }) => {
         const config = statusConfig[status as keyof typeof statusConfig];
@@ -395,6 +459,7 @@ function buildRole(styles: ReturnType<typeof useStyles>['styles']): BubbleListPr
         <div>
           <XMarkdown
             paragraphTag="div"
+            className={markdownClassName}
             components={{ think: ThinkComponent }}
             streaming={{ hasNextChunk: info.status === 'updating', enableAnimation: true }}
           >
@@ -425,169 +490,226 @@ function buildRole(styles: ReturnType<typeof useStyles>['styles']): BubbleListPr
         </div>
       ),
     },
-    user: {
-      placement: 'end',
-      avatar: <Avatar size={32}>我</Avatar>,
-    },
+    user: { placement: 'end' },
   };
 }
 
-function SceneContextPanel({ sceneKey }: { sceneKey: string }) {
+function SceneDebugDrawer({ open, onClose, scene }: { open: boolean; onClose: () => void; scene: ReturnType<typeof getSceneByPath> }) {
   const { styles } = useStyles();
+  const relatedTasks =
+    scene.key === 'chat'
+      ? sceneTasks
+      : sceneTasks.filter((item) => item.route === scene.route);
+  const relatedTraces =
+    scene.key === 'chat'
+      ? traceLogs
+      : traceLogs.filter((item) =>
+          relatedTasks.some((task) => task.traceId === item.traceId || task.taskId === item.taskId),
+        );
 
-  if (sceneKey === 'audio-import') {
-    return (
-      <>
-        <Card className={styles.contextCard} title="录音导入分支">
-          <List
-            dataSource={audioImportTasks}
-            renderItem={(item) => (
-              <List.Item>
-                <List.Item.Meta
-                  title={
-                    <Space>
-                      <span>{item.branch}</span>
-                      <Tag color={item.progress === 100 ? 'success' : 'processing'}>
-                        {item.progress}%
-                      </Tag>
-                    </Space>
-                  }
-                  description={`${item.customerName ?? '客户待创建'} / ${item.opportunityName ?? '商机待补齐'}`}
-                />
-              </List.Item>
-            )}
-          />
-        </Card>
-        <Card className={styles.contextCard} title="时序说明">
-          <Paragraph>
-            正式流程固定为：补齐客户与商机上下文 {'->'} 创建商机跟进记录草稿 {'->'} 异步分析录音。不会直接把总结报告摆在最前面。
-          </Paragraph>
-        </Card>
-      </>
-    );
-  }
-
-  if (sceneKey === 'company-research') {
-    return (
-      <>
-        <Card className={styles.contextCard} title="最近研究快照">
-          <List
-            dataSource={researchSnapshots}
-            renderItem={(item) => (
-              <List.Item>
-                <List.Item.Meta
-                  title={item.companyName}
-                  description={`${item.sourceCount} 个来源 · ${item.updatedAt}`}
-                />
-              </List.Item>
-            )}
-          />
-        </Card>
-        <Card className={styles.contextCard} title="研究约束">
-          <Paragraph>
-            当前 v1 仍按外部技能入口设计。研究快照先资产化，后续再由拜访材料等场景消费。
-          </Paragraph>
-        </Card>
-      </>
-    );
-  }
-
-  if (sceneKey === 'visit-prepare') {
-    return (
-      <>
-        <Card className={styles.contextCard} title="多源输入">
-          <Space wrap>
-            {visitBriefs[0].sourceMix.map((item) => (
-              <Tag key={item} color="blue">
-                {item}
-              </Tag>
-            ))}
-          </Space>
-          <Paragraph style={{ marginTop: 12, marginBottom: 0 }}>
-            当前页面固定产出拜访摘要卡、问题清单、风险提示和建议动作。
-          </Paragraph>
-        </Card>
-        <Card className={styles.contextCard} title="近期拜访包">
-          <List
-            dataSource={visitBriefs}
-            renderItem={(item) => (
-              <List.Item>
-                <List.Item.Meta
-                  title={item.customerName}
-                  description={`${item.theme} · ${item.updatedAt}`}
-                />
-              </List.Item>
-            )}
-          />
-        </Card>
-      </>
-    );
-  }
-
-  if (sceneKey === 'tasks') {
-    return (
-      <>
-        <Card className={styles.contextCard} title="任务进度">
-          <List
-            dataSource={sceneTasks}
-            renderItem={(item) => (
-              <List.Item>
-                <Space direction="vertical" style={{ width: '100%' }} size={6}>
-                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                    <Text strong>{item.title}</Text>
-                    <Tag
-                      color={
-                        item.status === '已完成'
-                          ? 'success'
-                          : item.status === '运行中'
-                            ? 'processing'
-                            : 'warning'
-                      }
-                    >
-                      {item.status}
+  const assetContent = (() => {
+    if (scene.key === 'audio-import') {
+      return (
+        <List
+          dataSource={audioImportTasks}
+          renderItem={(item) => (
+            <List.Item>
+              <List.Item.Meta
+                title={
+                  <Space>
+                    <span>{item.title}</span>
+                    <Tag color={item.progress === 100 ? 'success' : 'processing'}>
+                      {item.branch}
                     </Tag>
                   </Space>
-                  <Progress percent={item.progress} size="small" showInfo={false} />
-                  <Text type="secondary">{item.traceId}</Text>
-                </Space>
-              </List.Item>
-            )}
-          />
-        </Card>
-      </>
+                }
+                description={`${item.transcriptStatus} / ${item.analysisStatus} / ${item.writebackStatus}`}
+              />
+            </List.Item>
+          )}
+        />
+      );
+    }
+    if (scene.key === 'company-research') {
+      return (
+        <List
+          dataSource={researchSnapshots}
+          renderItem={(item) => (
+            <List.Item>
+              <List.Item.Meta
+                title={item.companyName}
+                description={`${item.sourceCount} 个来源 · ${item.updatedAt}`}
+              />
+            </List.Item>
+          )}
+        />
+      );
+    }
+    if (scene.key === 'visit-prepare') {
+      return (
+        <List
+          dataSource={visitBriefs}
+          renderItem={(item) => (
+            <List.Item>
+              <List.Item.Meta
+                title={item.customerName}
+                description={`${item.theme} · ${item.updatedAt}`}
+              />
+            </List.Item>
+          )}
+        />
+      );
+    }
+    return (
+      <List
+        dataSource={relatedTasks.length ? relatedTasks : sceneTasks}
+        renderItem={(item) => (
+          <List.Item>
+            <Space orientation="vertical" size={6} style={{ width: '100%' }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Text strong>{item.title}</Text>
+                <Tag
+                  color={
+                    item.status === '已完成'
+                      ? 'success'
+                      : item.status === '运行中'
+                        ? 'processing'
+                        : 'warning'
+                  }
+                >
+                  {item.status}
+                </Tag>
+              </Space>
+              <Progress percent={item.progress} size="small" showInfo={false} />
+              <Text type="secondary">{item.nextAction}</Text>
+            </Space>
+          </List.Item>
+        )}
+      />
     );
-  }
+  })();
 
   return (
-    <>
-      <Card className={styles.contextCard} title="当前租户上下文">
-        <Space direction="vertical" size={8}>
-          <Text strong>{tenantContext.tenantName}</Text>
-          <Text type="secondary">eid: {tenantContext.eid}</Text>
-          <Text type="secondary">appId: {tenantContext.appId}</Text>
-        </Space>
-      </Card>
-      <Card className={styles.contextCard} title="当前任务观察">
-        <List
-          dataSource={sceneTasks}
-          renderItem={(item) => (
-            <List.Item>
-              <List.Item.Meta title={item.title} description={`${item.status} · ${item.updatedAt}`} />
-            </List.Item>
-          )}
-        />
-      </Card>
-      <Card className={styles.contextCard} title="最近会话">
-        <List
-          dataSource={sceneContextData.sessions}
-          renderItem={(item) => (
-            <List.Item>
-              <List.Item.Meta title={item.label} description={item.lastMessage} />
-            </List.Item>
-          )}
-        />
-      </Card>
-    </>
+    <Drawer
+      title="调试区 / 上下文"
+      size={440}
+      open={open}
+      onClose={onClose}
+      destroyOnClose={false}
+    >
+      <Tabs
+        items={[
+          {
+            key: 'context',
+            label: '当前上下文',
+            children: (
+              <>
+                <Card className={styles.drawerCard} title="当前场景">
+                  <Space orientation="vertical" size={8}>
+                    <Text strong>{scene.title}</Text>
+                    <Text type="secondary">{scene.subtitle}</Text>
+                    <Paragraph style={{ marginBottom: 0 }}>{scene.description}</Paragraph>
+                  </Space>
+                </Card>
+                <Card className={styles.drawerCard} title="租户上下文">
+                  <Space orientation="vertical" size={8}>
+                    <Text strong>{tenantContext.tenantName}</Text>
+                    <Text type="secondary">eid: {tenantContext.eid}</Text>
+                    <Text type="secondary">appId: {tenantContext.appId}</Text>
+                  </Space>
+                </Card>
+                <Card className={styles.drawerCard} title="多源输入命中">
+                  <div className={styles.tagWrap}>
+                    {getSceneSourceTags(scene.key).map((item) => (
+                      <Tag key={item} color="blue">
+                        {item}
+                      </Tag>
+                    ))}
+                  </div>
+                </Card>
+              </>
+            ),
+          },
+          {
+            key: 'assets',
+            label: '任务 / 资产',
+            children: (
+              <>
+                <Card className={styles.drawerCard} title="相关任务">
+                  {relatedTasks.length ? (
+                    <List
+                      dataSource={relatedTasks}
+                      renderItem={(item) => (
+                        <List.Item>
+                          <List.Item.Meta
+                            title={
+                              <Space>
+                                <span>{item.title}</span>
+                                <Tag
+                                  color={
+                                    item.status === '已完成'
+                                      ? 'success'
+                                      : item.status === '运行中'
+                                        ? 'processing'
+                                        : 'warning'
+                                  }
+                                >
+                                  {item.status}
+                                </Tag>
+                              </Space>
+                            }
+                            description={`${item.traceId} · ${item.entityAnchor}`}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  ) : (
+                    <Text type="secondary">当前场景暂无独立任务，主要通过对话触发。</Text>
+                  )}
+                </Card>
+                <Card className={styles.drawerCard} title="相关资产">
+                  {assetContent}
+                </Card>
+              </>
+            ),
+          },
+          {
+            key: 'trace',
+            label: 'Trace / 引用',
+            children: (
+              <>
+                <Card className={styles.drawerCard} title="Trace 链路">
+                  <List
+                    dataSource={relatedTraces.length ? relatedTraces : traceLogs}
+                    renderItem={(item) => (
+                      <List.Item>
+                        <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                          <Space wrap>
+                            <Text strong>{item.traceId}</Text>
+                            <Tag
+                              color={item.status === '成功' ? 'success' : 'warning'}
+                            >
+                              {item.status}
+                            </Tag>
+                          </Space>
+                          <Text type="secondary">{item.taskId}</Text>
+                          <div className={styles.tagWrap}>
+                            {item.toolChain.map((tool) => (
+                              <Tag key={tool}>{tool}</Tag>
+                            ))}
+                          </div>
+                          <Text>{item.writebackResult}</Text>
+                        </Space>
+                      </List.Item>
+                    )}
+                  />
+                </Card>
+              </>
+            ),
+          },
+        ]}
+      />
+    </Drawer>
   );
 }
 
@@ -595,11 +717,38 @@ function AssistantWorkspace() {
   const { styles } = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
+  const [markdownClassName] = useMarkdownTheme();
+  const [messageApi, contextHolder] = message.useMessage();
+  const listRef = useRef<BubbleListRef>(null);
   const scene = getSceneByPath(location.pathname);
   const [inputValue, setInputValue] = useState('');
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<GetProp<typeof Attachments, 'items'>>([]);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const homeConversation = useMemo(
+    () => ({
+      key: HOME_CONVERSATION_KEY,
+      label: '新对话',
+      route: '/chat',
+      group: '今天',
+      lastMessage: '从这里发起新的销售任务。',
+      updatedAt: '刚刚',
+      scene: 'chat',
+    }),
+    [],
+  );
+  const baseConversations = useMemo(
+    () => [homeConversation, ...defaultConversationItems],
+    [homeConversation],
+  );
+  const getConversationKeyByRoute = React.useCallback(
+    (route: string) =>
+      baseConversations.find((item) => item.route === route)?.key ?? HOME_CONVERSATION_KEY,
+    [baseConversations],
+  );
   const promptGroups = useMemo(() => buildPromptGroups(scene), [scene]);
+  const sceneEntryPrompts = useMemo(() => buildSceneEntryPrompts(), []);
+  const senderPrompts = useMemo(() => buildSenderPrompts(scene), [scene]);
 
   const {
     conversations,
@@ -608,16 +757,27 @@ function AssistantWorkspace() {
     addConversation,
     setConversations,
   } = useXConversations({
-    defaultConversations: defaultConversationItems,
-    defaultActiveConversationKey: defaultConversationItems[0].key,
+    defaultConversations: baseConversations,
+    defaultActiveConversationKey: getConversationKeyByRoute(location.pathname),
   });
 
   useEffect(() => {
-    const matched = conversations.find((item) => item.route === location.pathname);
-    if (matched && matched.key !== activeConversationKey) {
-      setActiveConversationKey(matched.key);
+    const expectedConversationKey = conversations.find(
+      (item) => item.route === location.pathname,
+    )?.key ?? getConversationKeyByRoute(location.pathname);
+
+    if (expectedConversationKey === activeConversationKey) {
+      return;
     }
-  }, [activeConversationKey, conversations, location.pathname, setActiveConversationKey]);
+
+    setActiveConversationKey(expectedConversationKey);
+  }, [
+    activeConversationKey,
+    conversations,
+    getConversationKeyByRoute,
+    location.pathname,
+    setActiveConversationKey,
+  ]);
 
   const { onRequest, messages, isRequesting, abort, onReload, setMessage } =
     useXChat<AssistantChatMessage>({
@@ -628,18 +788,49 @@ function AssistantWorkspace() {
         role: 'assistant',
         content: '<think>正在检索上下文、编排技能并准备返回内容。</think>',
       }),
-      requestFallback: () => ({
-        role: 'assistant',
-        content: '本次请求失败，请稍后重试或转到管理员后台排查 trace。',
-      }),
+      requestFallback: (_, { error, messageInfo }) => {
+        if (error.name === 'AbortError') {
+          return {
+            role: 'assistant',
+            content: messageInfo?.message?.content || '请求已中止。',
+          };
+        }
+
+        return {
+          role: 'assistant',
+          content: '本次请求失败，请稍后重试或转到管理员后台排查 trace。',
+        };
+      },
     });
 
-  const role = useMemo(() => buildRole(styles), [styles]);
+  const messageList = messages ?? [];
+  const safeScrollToBottom = React.useCallback(() => {
+    const bubbleList = listRef.current;
+    if (!bubbleList?.scrollBoxNativeElement) {
+      return;
+    }
+
+    bubbleList.scrollTo({ top: 'bottom' });
+  }, []);
+
+  useEffect(() => {
+    if (messageList.length) {
+      window.requestAnimationFrame(() => {
+        safeScrollToBottom();
+      });
+    }
+  }, [activeConversationKey, messageList.length, safeScrollToBottom]);
+
+  const role = useMemo(
+    () => buildRole(styles, markdownClassName),
+    [markdownClassName, styles],
+  );
 
   const onSubmit = (text: string) => {
     if (!text.trim()) {
       return;
     }
+
     onRequest({
       query: text,
       sceneKey: scene.key,
@@ -654,11 +845,33 @@ function AssistantWorkspace() {
     setInputValue('');
     setAttachedFiles([]);
     setAttachmentsOpen(false);
+    window.requestAnimationFrame(() => {
+      safeScrollToBottom();
+    });
+  };
+
+  const navigateToScene = (route: string) => {
+    setActiveConversationKey(getConversationKeyByRoute(route));
+    navigate(route);
+    setDebugOpen(false);
+  };
+
+  const submitPromptText = (value?: string) => {
+    if (typeof value !== 'string') {
+      return;
+    }
+
+    const normalized = value.trim();
+    if (!normalized) {
+      return;
+    }
+
+    onSubmit(normalized);
   };
 
   const senderHeader = (
     <Sender.Header
-      title="上传附件"
+      title="文件上传"
       open={attachmentsOpen}
       onOpenChange={setAttachmentsOpen}
       styles={{ content: { padding: 0 } }}
@@ -671,246 +884,273 @@ function AssistantWorkspace() {
           type === 'drop'
             ? { title: '把录音、纪要或材料拖到这里' }
             : {
-                icon: <PaperClipOutlined />,
-                title: '添加录音或材料',
-                description: '支持上传录音、纪要、研究材料和临时附件',
+                icon: <CloudUploadOutlined />,
+                title: '上传录音与材料',
+                description: '支持录音、纪要、研究资料和临时附件',
               }
         }
       />
     </Sender.Header>
   );
 
+  const renderWelcomePrompts = () => {
+    if (scene.key === 'chat') {
+      return (
+        <div className={styles.promptRow}>
+          <Prompts
+            items={promptGroups.hotTopics}
+            styles={promptGroupStyles}
+            onItemClick={(info) => {
+              submitPromptText(info.data.description as string);
+            }}
+            className={styles.promptCard}
+          />
+          <Prompts
+            items={sceneEntryPrompts}
+            styles={promptGroupStyles}
+            onItemClick={(info) => {
+              const route = (info.data as { route?: string }).route;
+              if (route) {
+                navigateToScene(route);
+              }
+            }}
+            className={styles.promptCard}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div className={styles.promptRow}>
+        <Prompts
+          items={promptGroups.hotTopics}
+          styles={promptGroupStyles}
+          onItemClick={(info) => {
+            submitPromptText(info.data.description as string);
+          }}
+          className={styles.promptCard}
+        />
+        <Prompts
+          items={promptGroups.guides}
+          styles={promptGroupStyles}
+          onItemClick={(info) => {
+            submitPromptText((info.data.description || info.data.label) as string);
+          }}
+          className={styles.promptCard}
+        />
+      </div>
+    );
+  };
+
+  const onCreateConversation = () => {
+    setInputValue('');
+    setAttachedFiles([]);
+    setAttachmentsOpen(false);
+    setDebugOpen(false);
+    setActiveConversationKey(HOME_CONVERSATION_KEY);
+    navigate('/chat');
+  };
+
+  const chatSide = (
+    <div className={styles.side}>
+      <div className={styles.logo}>
+        <span className={styles.logoMark}>
+          <RobotOutlined />
+        </span>
+        <div className={styles.logoText}>
+          <span>AI销售助手</span>
+        </div>
+      </div>
+      <Conversations
+        creation={{ onClick: onCreateConversation }}
+        items={conversations.map(({ key, label, ...other }) => ({
+          key,
+          label: key === activeConversationKey ? `[当前]${label}` : label,
+          ...other,
+        }))}
+        className={styles.conversations}
+        activeKey={activeConversationKey}
+        onActiveChange={(key) => {
+          const matched = conversations.find((item) => item.key === key);
+          if (!matched) {
+            return;
+          }
+          setActiveConversationKey(key);
+          if (matched?.route) {
+            navigate(matched.route);
+          }
+        }}
+        groupable
+        styles={{ item: { padding: '0 8px' } }}
+        menu={(conversation) => {
+          if (conversation.key === HOME_CONVERSATION_KEY) {
+            return undefined;
+          }
+
+          return {
+            items: [
+              {
+                label: '重命名',
+                key: 'rename',
+                icon: <EditOutlined />,
+                onClick: () => {
+                  messageApi.info('重命名将在后续迭代补齐。');
+                },
+              },
+              {
+                label: '删除',
+                key: 'delete',
+                icon: <DeleteOutlined />,
+                danger: true,
+                onClick: () => {
+                  const nextList = conversations.filter((item) => item.key !== conversation.key);
+                  setConversations(nextList);
+                  if (conversation.key === activeConversationKey) {
+                    const fallback = nextList[0] ?? homeConversation;
+                    setActiveConversationKey(fallback.key);
+                    navigate(fallback.route);
+                  }
+                },
+              },
+            ],
+          };
+        }}
+      />
+
+      <div className={styles.sideFooter}>
+        <Space size={10}>
+          <Avatar size={24} style={{ backgroundColor: '#1677ff' }}>
+            {tenantContext.owner.slice(0, 1)}
+          </Avatar>
+          <Space orientation="vertical" size={0} className={styles.sideFooterInfo}>
+            <Text strong ellipsis>
+              {tenantContext.owner}
+            </Text>
+            <Text type="secondary" ellipsis>
+              {tenantContext.tenantName}
+            </Text>
+          </Space>
+        </Space>
+        <Button
+          type="text"
+          icon={<QuestionCircleOutlined />}
+          onClick={() => messageApi.info('帮助中心原型将在后续迭代补齐。')}
+        />
+      </div>
+    </div>
+  );
+
+  const welcomeExtra = (
+    <Space>
+      <Button
+        icon={<ShareAltOutlined />}
+        onClick={() => messageApi.info('分享功能原型暂未开放。')}
+      />
+      <Button icon={<EllipsisOutlined />} onClick={() => setDebugOpen(true)} />
+    </Space>
+  );
+
+  const chatList = (
+    <div className={styles.chatList}>
+      {messageList.length ? (
+        <Bubble.List
+          ref={listRef}
+          className={styles.bubbleList}
+          role={role}
+          styles={{ root: { maxWidth: 940 } }}
+          items={messageList.map((item) => ({
+            ...item.message,
+            key: item.id,
+            status: item.status,
+            loading: item.status === 'loading',
+            extraInfo: item.extraInfo,
+          }))}
+        />
+      ) : (
+        <Flex
+          vertical
+          gap={16}
+          align="center"
+          className={styles.placeholder}
+          style={{ maxWidth: 840 }}
+        >
+          <Welcome
+            className={styles.welcome}
+            variant="borderless"
+            icon="https://mdn.alipayobjects.com/huamei_iwk9zp/afts/img/A*s5sNRo5LjfQAAAAAAAAAAAAADgCCAQ/fmt.webp"
+            title={scene.title}
+            description={scene.description}
+            extra={welcomeExtra}
+          />
+          {renderWelcomePrompts()}
+        </Flex>
+      )}
+    </div>
+  );
+
+  const chatSender = (
+    <Flex vertical gap={12} align="center" className={styles.senderPanel}>
+      {!attachmentsOpen ? (
+        <Prompts
+          items={senderPrompts}
+          onItemClick={(info) => {
+            submitPromptText(info.data.description as string);
+          }}
+          styles={{ item: { padding: '6px 12px' } }}
+          className={styles.senderPrompt}
+        />
+      ) : null}
+      <Sender
+        value={inputValue}
+        header={senderHeader}
+        onSubmit={() => {
+          onSubmit(inputValue);
+        }}
+        onChange={setInputValue}
+        onCancel={() => {
+          abort();
+        }}
+        prefix={
+          <Button
+            type="text"
+            icon={<PaperClipOutlined style={{ fontSize: 18 }} />}
+            onClick={() => setAttachmentsOpen(!attachmentsOpen)}
+          />
+        }
+        loading={isRequesting}
+        className={styles.sender}
+        allowSpeech
+        placeholder={scene.defaultInput}
+      />
+    </Flex>
+  );
+
   return (
     <XProvider>
       <ChatContext.Provider value={{ onReload, setMessage }}>
+        {contextHolder}
         <div className={styles.layout}>
-          <aside className={styles.rail}>
-            <div className={styles.brand}>
-              <div className={styles.brandTitle}>
-                <span className={styles.brandMark}>YZ</span>
-                <div>
-                  <Title level={5} style={{ margin: 0 }}>
-                    AI 销售助手
-                  </Title>
-                  <Text type="secondary">用户 AI 端</Text>
-                </div>
-              </div>
+          {chatSide}
+          <div className={styles.chat}>
+            <div className={styles.chatToolbar}>
+              {scene.key !== 'chat' ? <Tag color="blue">{scene.title}</Tag> : null}
               <Button
-                shape="circle"
                 type="text"
-                icon={<PlusOutlined />}
-                onClick={() => {
-                  const key = dayjs().valueOf().toString();
-                  addConversation({
-                    key,
-                    label: `新对话 ${conversations.length + 1}`,
-                    group: '今天',
-                    route: scene.route,
-                    scene: scene.key,
-                    lastMessage: scene.defaultInput,
-                    updatedAt: '刚刚',
-                  });
-                  setActiveConversationKey(key);
-                }}
-              />
+                icon={<BugOutlined />}
+                onClick={() => setDebugOpen(true)}
+              >
+                调试区
+              </Button>
             </div>
-
-            <Alert
-              type="info"
-              showIcon
-              message="真实工作流"
-              description="会话会触发任务、资产和回写，不是单纯问答。"
-            />
-
-            <Conversations
-              className={styles.conversations}
-              items={conversations.map((item) => ({
-                key: item.key,
-                label:
-                  item.key === activeConversationKey ? `[当前] ${item.label}` : item.label,
-                group: item.group,
-              }))}
-              activeKey={activeConversationKey}
-              onActiveChange={(key) => {
-                const matched = conversations.find((item) => item.key === key);
-                setActiveConversationKey(key);
-                if (matched?.route) {
-                  navigate(matched.route);
-                }
-              }}
-              groupable
-              menu={(conversation) => ({
-                items: [
-                  {
-                    label: '重命名',
-                    key: 'rename',
-                    icon: <EditOutlined />,
-                  },
-                  {
-                    label: '删除',
-                    key: 'delete',
-                    danger: true,
-                    onClick: () => {
-                      const nextList = conversations.filter((item) => item.key !== conversation.key);
-                      setConversations(nextList);
-                      if (conversation.key === activeConversationKey && nextList[0]?.route) {
-                        setActiveConversationKey(nextList[0].key);
-                        navigate(nextList[0].route);
-                      }
-                    },
-                  },
-                ],
-              })}
-            />
-
-            <div className={styles.railFooter}>
-              <Space size={10}>
-                <Avatar style={{ backgroundColor: '#1677ff' }}>
-                  {tenantContext.owner.slice(0, 1)}
-                </Avatar>
-                <Space direction="vertical" size={0}>
-                  <Text strong>{tenantContext.owner}</Text>
-                  <Text type="secondary">{tenantContext.tenantName}</Text>
-                </Space>
-              </Space>
-              <Button type="text" icon={<QuestionCircleOutlined />} />
-            </div>
-          </aside>
-
-          <main className={styles.main}>
-            <div className={styles.header}>
-              <div className={styles.sceneNav}>
-                {sceneOrder.map((item) => (
-                  <NavLink key={item.key} to={item.route} className={styles.sceneLink}>
-                    {item.title}
-                  </NavLink>
-                ))}
-              </div>
-              <Space>
-                <Tag color="blue">{scene.subtitle}</Tag>
-                <Tag>{tenantContext.eid}</Tag>
-              </Space>
-            </div>
-
-            <div className={styles.sceneSummary}>
-              <Title level={3} style={{ marginBottom: 6 }}>
-                {scene.headline}
-              </Title>
-              <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                {scene.description}
-              </Paragraph>
-            </div>
-
-            <div className={styles.content}>
-              <section className={styles.chatPane}>
-                <div className={styles.messageViewport}>
-                  {messages.length ? (
-                    <Bubble.List
-                      className={styles.bubbleList}
-                      role={role}
-                      items={messages.map((item) => ({
-                        ...item.message,
-                        key: item.id,
-                        status: item.status,
-                        loading: item.status === 'loading',
-                        extraInfo: item.extraInfo,
-                      }))}
-                    />
-                  ) : (
-                    <div className={styles.emptyState}>
-                      <Welcome
-                        variant="borderless"
-                        icon="https://mdn.alipayobjects.com/huamei_iwk9zp/afts/img/A*s5sNRo5LjfQAAAAAAAAAAAAADgCCAQ/fmt.webp"
-                        title={scene.title}
-                        description={scene.description}
-                        extra={
-                          <Space>
-                            <Button icon={<ShareAltOutlined />} />
-                            <Button icon={<QuestionCircleOutlined />} />
-                          </Space>
-                        }
-                      />
-
-                      <div className={styles.promptGrid}>
-                        <Prompts
-                          className={styles.promptCard}
-                          items={promptGroups.hotTopics}
-                          onItemClick={(info) => onSubmit(info.data.description as string)}
-                        />
-                        <Prompts
-                          className={styles.promptCard}
-                          items={promptGroups.guides}
-                          onItemClick={(info) => onSubmit(info.data.description as string)}
-                        />
-                      </div>
-
-                      <Card style={{ marginTop: 18, borderRadius: 20 }}>
-                        <Title level={5}>当前场景能力卡</Title>
-                        <List
-                          dataSource={scene.taskCards}
-                          renderItem={(item) => (
-                            <List.Item>
-                              <List.Item.Meta
-                                title={
-                                  <Space>
-                                    <span>{item.title}</span>
-                                    <Tag color="blue">{item.status}</Tag>
-                                  </Space>
-                                }
-                                description={item.description}
-                              />
-                              <Text strong>{item.metric}</Text>
-                            </List.Item>
-                          )}
-                        />
-                      </Card>
-                    </div>
-                  )}
-                </div>
-
-                <div className={styles.senderWrap}>
-                  {!attachmentsOpen ? (
-                    <Prompts
-                      className={styles.senderPrompts}
-                      items={senderIcons}
-                      onItemClick={(info) => onSubmit(info.data.description as string)}
-                      styles={{ item: { padding: '6px 12px' } }}
-                    />
-                  ) : null}
-                  <Sender
-                    className={styles.sender}
-                    value={inputValue}
-                    header={senderHeader}
-                    onChange={setInputValue}
-                    onSubmit={() => onSubmit(inputValue)}
-                    onCancel={abort}
-                    loading={isRequesting}
-                    allowSpeech
-                    placeholder={scene.defaultInput}
-                    prefix={
-                      <Button
-                        type="text"
-                        icon={<PaperClipOutlined style={{ fontSize: 18 }} />}
-                        onClick={() => setAttachmentsOpen((open) => !open)}
-                      />
-                    }
-                  />
-                </div>
-              </section>
-
-              <aside className={styles.context}>
-                <Card className={styles.contextCard} title="当前上下文">
-                  <Space direction="vertical" size={8}>
-                    <Text strong>{scene.title}</Text>
-                    <Text type="secondary">{scene.subtitle}</Text>
-                    <Tag color="processing">Main Agent 已绑定当前场景</Tag>
-                  </Space>
-                </Card>
-                <SceneContextPanel sceneKey={scene.key} />
-              </aside>
-            </div>
-          </main>
+            {chatList}
+            {chatSender}
+          </div>
         </div>
+        <SceneDebugDrawer
+          open={debugOpen}
+          onClose={() => setDebugOpen(false)}
+          scene={scene}
+        />
       </ChatContext.Provider>
     </XProvider>
   );

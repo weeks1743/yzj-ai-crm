@@ -17,7 +17,7 @@ export default defineConfig({
   initialState: {},
   layout: {
     locale: false,
-    title: 'YZJ AI CRM Admin',
+    title: 'AI销售助手管理侧',
     siderWidth: 236,
     splitMenus: false,
   },

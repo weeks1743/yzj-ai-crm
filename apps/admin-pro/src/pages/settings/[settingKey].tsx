@@ -15,10 +15,10 @@ import type { TraceLog } from '@shared';
 import { settingPages, traceLogs } from '@shared';
 
 const observabilityColumns: ProColumns<TraceLog>[] = [
-  { title: 'traceId', dataIndex: 'traceId', copyable: true, width: 180 },
-  { title: 'taskId', dataIndex: 'taskId', copyable: true, width: 140 },
-  { title: 'eid', dataIndex: 'eid', width: 170 },
-  { title: 'appId', dataIndex: 'appId', width: 170 },
+  { title: '追踪ID', dataIndex: 'traceId', copyable: true, width: 180 },
+  { title: '任务ID', dataIndex: 'taskId', copyable: true, width: 140 },
+  { title: '租户ID', dataIndex: 'eid', width: 170 },
+  { title: '应用ID', dataIndex: 'appId', width: 170 },
   { title: '场景', dataIndex: 'scene', width: 170 },
   {
     title: '状态',
@@ -29,7 +29,7 @@ const observabilityColumns: ProColumns<TraceLog>[] = [
     ),
   },
   {
-    title: 'Tool 调用链',
+    title: '工具调用链',
     dataIndex: 'toolChain',
     render: (_, record) => record.toolChain.join(' -> '),
   },
@@ -152,7 +152,7 @@ const SettingsPage = () => {
         <ProTable<TraceLog>
           style={{ marginTop: 24 }}
           rowKey="traceId"
-          headerTitle="Trace / Task / Tool 调用链"
+          headerTitle="追踪 / 任务 / 工具调用链"
           search={false}
           toolBarRender={false}
           pagination={false}

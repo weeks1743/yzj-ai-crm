@@ -22,7 +22,7 @@ type RowData = ToolRegistryItem | SkillCatalogItem | WritebackPolicy;
 
 const pageMap = {
   'tool-registry': {
-    title: 'Tool Registry',
+    title: '工具注册表',
     summary: '动态技能中心，展示对象注册表、templateId / codeId、生成状态、字段权限、确认策略和技能版本。',
     metrics: [
       { label: '对象技能', value: `${toolRegistryRows.length}`, helper: '已注册对象' },
@@ -44,7 +44,7 @@ const pageMap = {
     summary: '与研究、转写等外部能力对接的技能目录。',
     metrics: [
       { label: '外部技能', value: `${externalSkillRows.length}`, helper: '运行中 / 告警中' },
-      { label: '降级策略', value: '已配置', helper: 'Provider 失败可回退' },
+      { label: '降级策略', value: '已配置', helper: '能力提供方失败可回退' },
     ],
     rows: externalSkillRows as RowData[],
   },
@@ -167,7 +167,7 @@ const SkillsPage = () => {
       />
 
       <Drawer
-        width={700}
+        size="large"
         open={Boolean(current)}
         onClose={() => setCurrent(undefined)}
         title={pageKey === 'writeback-policies' ? '策略详情' : '技能详情'}
@@ -175,7 +175,7 @@ const SkillsPage = () => {
         {current ? (
           <>
             {'templateId' in current ? (
-              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={16} style={{ width: '100%' }}>
                 <Alert
                   type="success"
                   showIcon

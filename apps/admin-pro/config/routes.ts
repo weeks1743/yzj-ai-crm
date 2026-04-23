@@ -4,7 +4,7 @@ export default [
     redirect: '/dashboard/analysis',
   },
   {
-    name: 'Dashboard',
+    name: '运营看板',
     path: '/dashboard',
     icon: 'dashboard',
     routes: [
@@ -100,7 +100,7 @@ export default [
     icon: 'tool',
     routes: [
       {
-        name: 'Tool Registry',
+        name: '工具注册表',
         path: '/skills/tool-registry',
         icon: 'api',
         component: './skills/[skillPage]',

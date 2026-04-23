@@ -6,6 +6,7 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './styles.css';
 import '@ant-design/x-markdown/themes/light.css';
+import '@ant-design/x-markdown/themes/dark.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

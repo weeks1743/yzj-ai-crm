@@ -81,7 +81,21 @@ class AssistantProvider extends AbstractChatProvider<
   }
 
   transformMessage(info: any): AssistantChatMessage {
-    const chunk = info?.chunk as AssistantResponseOutput;
+    const chunk =
+      (info?.chunk as AssistantResponseOutput | undefined) ??
+      (Array.isArray(info?.chunks)
+        ? (info.chunks[info.chunks.length - 1] as AssistantResponseOutput | undefined)
+        : undefined);
+
+    if (!chunk?.data) {
+      return (
+        info?.originMessage ?? {
+          role: 'assistant',
+          content: '本次响应为空，请稍后重试。',
+        }
+      );
+    }
+
     return {
       role: 'assistant',
       content: chunk.data.content,

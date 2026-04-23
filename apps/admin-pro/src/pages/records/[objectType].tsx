@@ -46,6 +46,16 @@ function getHealthColor(health: RecordEntity['health']) {
   return 'error';
 }
 
+function getHealthLabel(health: RecordEntity['health']) {
+  if (health === 'healthy') {
+    return '稳定';
+  }
+  if (health === 'attention') {
+    return '关注';
+  }
+  return '风险';
+}
+
 const ObjectRecordsPage = () => {
   const location = useLocation();
   const pageKey = location.pathname.split('/').pop() ?? '';
@@ -119,7 +129,7 @@ const ObjectRecordsPage = () => {
           risk: { text: '风险' },
         },
         render: (_, record) => (
-          <Tag color={getHealthColor(record.health)}>{record.health}</Tag>
+          <Tag color={getHealthColor(record.health)}>{getHealthLabel(record.health)}</Tag>
         ),
       },
       { title: '更新时间', dataIndex: 'updatedAt', width: 170, sorter: (a, b) => a.updatedAt.localeCompare(b.updatedAt) },
@@ -148,7 +158,7 @@ const ObjectRecordsPage = () => {
         type="info"
         showIcon
         message="对象元数据提醒"
-        description={`当前对象由轻云模板 ${config.meta.templateId} 与 codeId ${config.meta.codeId} 驱动。后台展示的是“可治理的对象页”，不是写死 schema 的传统 CRM 列表。`}
+        description={`当前对象由轻云模板 ${config.meta.templateId} 与 codeId ${config.meta.codeId} 驱动。后台展示的是“可治理的对象页”，不是写死数据结构的传统 CRM 列表。`}
       />
 
       <ProCard gutter={[16, 16]} wrap style={{ marginTop: 16 }}>
@@ -194,13 +204,13 @@ const ObjectRecordsPage = () => {
       </ProCard>
 
       <Drawer
-        width={720}
+        size="large"
         open={Boolean(currentRecord)}
         onClose={() => setCurrentRecord(undefined)}
         title={currentRecord?.name}
       >
         {currentRecord ? (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
             <Alert
               type="warning"
               showIcon
@@ -247,7 +257,7 @@ const ObjectRecordsPage = () => {
                               ? 'blue'
                               : 'orange',
                         children: (
-                          <Space direction="vertical" size={0}>
+                          <Space orientation="vertical" size={0}>
                             <Text strong>{item.title}</Text>
                             <Text type="secondary">
                               {item.time} · {item.actor}
@@ -265,7 +275,7 @@ const ObjectRecordsPage = () => {
                   key: 'meta',
                   label: '字段与权限',
                   children: (
-                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                       <div>
                         <Text strong>可写字段</Text>
                         <div style={{ marginTop: 8 }}>

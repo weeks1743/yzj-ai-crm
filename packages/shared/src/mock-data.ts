@@ -65,7 +65,7 @@ export const tenantContext: TenantContext = {
   appId: 'app_ai_crm_prod_01',
   tenantName: '云之家华东样板租户',
   suiteName: 'AI销售助手双系统',
-  owner: '刘雪晴',
+  owner: '张晨路',
   region: '华东 2',
   accessStatus: '接入正常',
   orgSyncStatus: '最近一次全量成功',

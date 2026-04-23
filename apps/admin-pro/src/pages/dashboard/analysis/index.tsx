@@ -29,8 +29,8 @@ type TrendRow = {
 type TraceRow = (typeof traceLogs)[number];
 
 const traceColumns: ProColumns<TraceRow>[] = [
-  { title: 'traceId', dataIndex: 'traceId', width: 180, copyable: true },
-  { title: 'taskId', dataIndex: 'taskId', width: 140, copyable: true },
+  { title: '追踪ID', dataIndex: 'traceId', width: 180, copyable: true },
+  { title: '任务ID', dataIndex: 'taskId', width: 140, copyable: true },
   { title: '场景', dataIndex: 'scene', width: 160 },
   {
     title: '状态',
@@ -41,7 +41,7 @@ const traceColumns: ProColumns<TraceRow>[] = [
     ),
   },
   {
-    title: 'Tool 调用链',
+    title: '工具调用链',
     dataIndex: 'toolChain',
     render: (_, record) => (
       <Space wrap>
@@ -87,7 +87,7 @@ const AnalysisPage = () => {
                 title: item.label,
                 value: item.value,
                 description: (
-                  <Space direction="vertical" size={4}>
+                  <Space orientation="vertical" size={4}>
                     <Text type="secondary">{item.helper}</Text>
                     <Text>
                       {item.trend.startsWith('-') ? (
@@ -186,7 +186,7 @@ const AnalysisPage = () => {
               dataSource={systemHealth}
               renderItem={(item) => (
                 <List.Item>
-                  <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                  <Space orientation="vertical" style={{ width: '100%' }} size={6}>
                     <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                       <Text strong>{item.name}</Text>
                       <Tag color={renderStatusColor(item.status)} bordered={false}>
@@ -209,7 +209,7 @@ const AnalysisPage = () => {
         </Col>
         <Col xs={24} xl={8}>
           <ProCard title="管理员观察结论" extra="面向正式运营">
-            <Space direction="vertical" size={14}>
+            <Space orientation="vertical" size={14}>
               <Paragraph style={{ marginBottom: 0 }}>
                 当前后台最值得关注的是录音转写链路的区域波动，虽然整体完成率仍在可用区间，但华北节点已开始影响异步分析完成时长。
               </Paragraph>
@@ -224,7 +224,7 @@ const AnalysisPage = () => {
         </Col>
       </Row>
 
-      <ProCard title="最新 Trace 与写回结果" style={{ marginTop: 16 }}>
+      <ProCard title="最新追踪与写回结果" style={{ marginTop: 16 }}>
         <ProTable<TraceRow>
           rowKey="traceId"
           search={false}

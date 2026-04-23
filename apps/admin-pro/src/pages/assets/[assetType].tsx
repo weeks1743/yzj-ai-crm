@@ -116,13 +116,13 @@ const AssetsPage = () => {
       />
 
       <Drawer
-        width={720}
+        size="large"
         open={Boolean(currentItem)}
         onClose={() => setCurrentItem(undefined)}
         title={currentItem?.title}
       >
         {currentItem ? (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
             <ProDescriptions<AssetItem> column={2} dataSource={currentItem}>
               <ProDescriptions.Item label="状态" dataIndex="status">
                 <Tag color={statusColor(currentItem.status)}>{currentItem.status}</Tag>
@@ -154,7 +154,7 @@ const AssetsPage = () => {
                         ? 'blue'
                         : 'orange',
                   children: (
-                    <Space direction="vertical" size={0}>
+                    <Space orientation="vertical" size={0}>
                       <Text strong>{item.title}</Text>
                       <Text type="secondary">
                         {item.time} · {item.actor}
