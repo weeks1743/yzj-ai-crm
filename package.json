@@ -1,11 +1,17 @@
 {
   "name": "yzj-ai-crm",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "pnpm --filter @yzj-ai-crm/prototype dev",
-    "build": "pnpm --filter @yzj-ai-crm/prototype build",
-    "preview": "pnpm --filter @yzj-ai-crm/prototype preview"
+    "dev": "pnpm -r --parallel --filter @yzj-ai-crm/admin-pro --filter @yzj-ai-crm/assistant-web dev",
+    "dev:admin": "pnpm --filter @yzj-ai-crm/admin-pro dev",
+    "dev:assistant": "pnpm --filter @yzj-ai-crm/assistant-web dev",
+    "build": "pnpm --filter @yzj-ai-crm/admin-pro build && pnpm --filter @yzj-ai-crm/assistant-web build",
+    "build:admin": "pnpm --filter @yzj-ai-crm/admin-pro build",
+    "build:assistant": "pnpm --filter @yzj-ai-crm/assistant-web build",
+    "preview": "pnpm run preview:assistant",
+    "preview:admin": "pnpm --filter @yzj-ai-crm/admin-pro preview",
+    "preview:assistant": "pnpm --filter @yzj-ai-crm/assistant-web preview"
   }
 }

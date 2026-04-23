@@ -7,3 +7,10 @@ coverage
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+3rd
+apps/*/dist
+apps/*/node_modules
+apps/admin-pro/src/.umi
+apps/admin-pro/src/.umi-production
+apps/admin-pro/.umi
+apps/admin-pro/.umi-production
