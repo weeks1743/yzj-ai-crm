@@ -6,6 +6,8 @@ dist
 coverage
 *.log
 *.tsbuildinfo
+__pycache__
+*.pyc
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
@@ -13,6 +15,7 @@ coverage
 .local
 .tmp
 .tmp-*
+tmp
 vite.config.js
 vite.config.d.ts
 3rd
