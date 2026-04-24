@@ -1,0 +1,63 @@
+{
+  "previewApi": {
+    "method": "POST",
+    "path": "/api/shadow/objects/followup/preview/upsert",
+    "payloadExample": {
+      "mode": "create",
+      "operatorOpenId": "{operatorOpenId}",
+      "params": {
+        "customer_name": "{customer_name}"
+      }
+    }
+  },
+  "lightCloudPreview": {
+    "url": "https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "eid": "21024647",
+      "formCodeId": "0a618c5d806545b997f60e8461b3f504",
+      "oid": "{operatorOpenId}",
+      "data": [
+        {
+          "widgetValue": {
+            "Te_4": "{customer_name}"
+          }
+        }
+      ]
+    }
+  },
+  "liveApi": {
+    "method": "POST",
+    "path": "/api/shadow/objects/followup/execute/upsert",
+    "payloadExample": {
+      "mode": "create",
+      "operatorOpenId": "{operatorOpenId}",
+      "params": {
+        "customer_name": "{customer_name}"
+      }
+    }
+  },
+  "lightCloudLive": {
+    "url": "https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "eid": "21024647",
+      "formCodeId": "0a618c5d806545b997f60e8461b3f504",
+      "oid": "{operatorOpenId}",
+      "data": [
+        {
+          "widgetValue": {
+            "Te_4": "{customer_name}"
+          }
+        }
+      ]
+    }
+  },
+  "phase": "live_write_enabled"
+}

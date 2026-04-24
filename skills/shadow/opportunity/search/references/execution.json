@@ -1,0 +1,101 @@
+{
+  "previewApi": {
+    "method": "POST",
+    "path": "/api/shadow/objects/opportunity/preview/search",
+    "payloadExample": {
+      "operatorOpenId": "{operatorOpenId}",
+      "filters": [
+        {
+          "field": "linked_contact_form_inst_id",
+          "value": "{linked_contact_form_inst_id__S_NAME}"
+        },
+        {
+          "field": "Te_11",
+          "value": "{Te_11}",
+          "operator": "contain"
+        }
+      ],
+      "pageNumber": 1,
+      "pageSize": 20
+    }
+  },
+  "lightCloudPreview": {
+    "url": "https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "eid": "21024647",
+      "oid": "{operatorOpenId}",
+      "formCodeId": "b1869173654e49fbac0b1fc6ad37e761",
+      "pageNumber": 1,
+      "pageSize": 20,
+      "searchItems": [
+        {
+          "codeId": "Bd_2",
+          "parentCodeId": null,
+          "type": "basicDataWidget",
+          "value": "{linked_contact_form_inst_id__S_NAME}"
+        },
+        {
+          "codeId": "Te_11",
+          "parentCodeId": null,
+          "type": "textWidget",
+          "operator": "contain",
+          "value": "{Te_11}"
+        }
+      ]
+    }
+  },
+  "liveApi": {
+    "method": "POST",
+    "path": "/api/shadow/objects/opportunity/execute/search",
+    "payloadExample": {
+      "operatorOpenId": "{operatorOpenId}",
+      "filters": [
+        {
+          "field": "linked_contact_form_inst_id",
+          "value": "{linked_contact_form_inst_id__S_NAME}"
+        },
+        {
+          "field": "Te_11",
+          "value": "{Te_11}",
+          "operator": "contain"
+        }
+      ],
+      "pageNumber": 1,
+      "pageSize": 20
+    }
+  },
+  "lightCloudLive": {
+    "url": "https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "eid": "21024647",
+      "oid": "{operatorOpenId}",
+      "formCodeId": "b1869173654e49fbac0b1fc6ad37e761",
+      "pageNumber": 1,
+      "pageSize": 20,
+      "searchItems": [
+        {
+          "codeId": "Bd_2",
+          "parentCodeId": null,
+          "type": "basicDataWidget",
+          "value": "{linked_contact_form_inst_id__S_NAME}"
+        },
+        {
+          "codeId": "Te_11",
+          "parentCodeId": null,
+          "type": "textWidget",
+          "operator": "contain",
+          "value": "{Te_11}"
+        }
+      ]
+    }
+  },
+  "phase": "live_read_enabled"
+}

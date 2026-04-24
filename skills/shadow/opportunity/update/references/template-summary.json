@@ -1,0 +1,472 @@
+{
+  "objectKey": "opportunity",
+  "objectLabel": "商机",
+  "formCodeId": "b1869173654e49fbac0b1fc6ad37e761",
+  "formDefId": null,
+  "sourceVersion": "2026-04-24T06:51:23.818Z",
+  "schemaHash": "9ced7ef94b18fb9c048b536899bb649e43148a50d0c2c2afd34d0be3d25120d6",
+  "fieldCount": 35,
+  "normalizedFields": [
+    {
+      "fieldCode": "Te_11",
+      "label": "关键决定因素有哪些（what）",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_10",
+      "label": "关键决策人是谁（who）",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Bd_2",
+      "label": "联系人姓名",
+      "widgetType": "basicDataWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "linked_contact_form_inst_id",
+      "relationBinding": {
+        "kind": "basic_data",
+        "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
+        "modelName": "联系人",
+        "displayCol": "_S_NAME"
+      }
+    },
+    {
+      "fieldCode": "Bd_1",
+      "label": "客户编号",
+      "widgetType": "basicDataWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "linked_customer_form_inst_id",
+      "relationBinding": {
+        "kind": "basic_data",
+        "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+        "modelName": "客户",
+        "displayCol": "_S_ENCODE"
+      }
+    },
+    {
+      "fieldCode": "_S_SERIAL",
+      "label": "商机编号",
+      "widgetType": "serialNumWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_DATE",
+      "label": "申请日期",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_1",
+      "label": "项目简介",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_0",
+      "label": "备注",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "At_0",
+      "label": "附件",
+      "widgetType": "attachmentWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_17",
+      "label": "客户名称",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "customer_name"
+    },
+    {
+      "fieldCode": "Te_16",
+      "label": "机会名称",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "customer_name"
+    },
+    {
+      "fieldCode": "_S_TITLE",
+      "label": "标题",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ra_6",
+      "label": "可能性（%）",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "10",
+          "key": "AaBaCcDd",
+          "value": "10"
+        },
+        {
+          "title": "20",
+          "key": "EeFfGgHh",
+          "value": "20"
+        },
+        {
+          "title": "30",
+          "key": "IiJjKkLl",
+          "value": "30"
+        },
+        {
+          "title": "40",
+          "key": "ZWUDCXO6",
+          "value": "40"
+        },
+        {
+          "title": "50",
+          "key": "I3B5kTWD",
+          "value": "50"
+        },
+        {
+          "title": "60",
+          "key": "X2Xy0Bdt",
+          "value": "60"
+        },
+        {
+          "title": "70",
+          "key": "MHXOYkNZ",
+          "value": "70"
+        },
+        {
+          "title": "80",
+          "key": "3FYydCJT",
+          "value": "80"
+        },
+        {
+          "title": "90",
+          "key": "4h4HY3ja",
+          "value": "90"
+        },
+        {
+          "title": "100",
+          "key": "D5Q4nm5f",
+          "value": "100"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Te_5",
+      "label": "竞争对手提供的方案（what）",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ra_5",
+      "label": "销售阶段",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "初期沟通",
+          "key": "AaBaCcDd",
+          "value": "初期沟通"
+        },
+        {
+          "title": "需求分析",
+          "key": "EeFfGgHh",
+          "value": "需求分析"
+        },
+        {
+          "title": "方案报价",
+          "key": "IiJjKkLl",
+          "value": "方案报价"
+        },
+        {
+          "title": "商务谈判",
+          "key": "ES8XNGnc",
+          "value": "商务谈判"
+        },
+        {
+          "title": "成功结案",
+          "key": "QFMIjUHQ",
+          "value": "成功结案"
+        },
+        {
+          "title": "失败结案",
+          "key": "v4uYZML7",
+          "value": "失败结案"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Te_1",
+      "label": "项目所在地",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_0",
+      "label": "竞争对手",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ra_0",
+      "label": "商机类型",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "普通商机",
+          "key": "AaBaCcDd",
+          "value": "普通商机"
+        },
+        {
+          "title": "重要商机",
+          "key": "EeFfGgHh",
+          "value": "重要商机"
+        },
+        {
+          "title": "特殊商机",
+          "key": "IiJjKkLl",
+          "value": "特殊商机"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Ra_1",
+      "label": "商机来源",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "电话来访",
+          "key": "AaBaCcDd",
+          "value": "电话来访"
+        },
+        {
+          "title": "独立开发",
+          "key": "EeFfGgHh",
+          "value": "独立开发"
+        },
+        {
+          "title": "他人介绍",
+          "key": "IiJjKkLl",
+          "value": "他人介绍"
+        },
+        {
+          "title": "线上推广",
+          "key": "VMaHNzZG",
+          "value": "线上推广"
+        },
+        {
+          "title": "线下市场活动",
+          "key": "Y4EVsyeb",
+          "value": "线下市场活动"
+        },
+        {
+          "title": "其他",
+          "key": "D4kTEe0D",
+          "value": "其他"
+        }
+      ]
+    },
+    {
+      "fieldCode": "_S_APPLY",
+      "label": "提交人",
+      "widgetType": "personSelectWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_9",
+      "label": "资金预算是多少（plan）",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_8",
+      "label": "决策流程是怎样的（what）",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Da_0",
+      "label": "预计成交时间",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_7",
+      "label": "客户需求或痛点（why）",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_6",
+      "label": "是否已经立项（plan）",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_0",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ps_0",
+      "label": "销售负责人",
+      "widgetType": "personSelectWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "owner_open_id"
+    },
+    {
+      "fieldCode": "De_1",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_2",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_3",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_5",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_6",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Nu_1",
+      "label": "商机预算（元）",
+      "widgetType": "numberWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_DEPT",
+      "label": "所属部门",
+      "widgetType": "departmentSelectWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Nu_0",
+      "label": "预计合同金额",
+      "widgetType": "numberWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    }
+  ]
+}

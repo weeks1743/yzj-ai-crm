@@ -1,0 +1,17 @@
+{
+  "skillName": "shadow.opportunity_get",
+  "skillKey": "opportunity_get",
+  "operation": "get",
+  "description": "按 formInstId 获取商机单据详情。",
+  "whenToUse": "当用户已经明确指定某条商机记录时使用。",
+  "notWhenToUse": "当用户只提供模糊条件，需要先搜索商机时不要使用。",
+  "requiredParams": [
+    "form_inst_id"
+  ],
+  "optionalParams": [],
+  "confirmationPolicy": "no_confirmation_required",
+  "outputCardType": "opportunity-get-preview",
+  "sourceObject": "opportunity",
+  "sourceFormCodeId": "b1869173654e49fbac0b1fc6ad37e761",
+  "sourceVersion": "2026-04-24T06:51:23.818Z"
+}

@@ -19,12 +19,20 @@ test('loadAppConfig loads required env values and defaults', () => {
       YZJ_LIGHTCLOUD_APP_SECRET: 'lightcloud-app-secret',
       YZJ_LIGHTCLOUD_SECRET: 'lightcloud-secret',
       YZJ_SHADOW_CUSTOMER_FORM_CODE_ID: 'customer-form-code-id',
+      YZJ_SHADOW_CONTACT_FORM_CODE_ID: 'contact-form-code-id',
+      YZJ_SHADOW_OPPORTUNITY_FORM_CODE_ID: 'opportunity-form-code-id',
+      YZJ_SHADOW_FOLLOWUP_FORM_CODE_ID: 'followup-form-code-id',
     },
   });
 
   assert.equal(config.yzj.eid, '21024647');
   assert.equal(config.yzj.appId, '501037729');
   assert.equal(config.shadow.objects.customer.formCodeId, 'customer-form-code-id');
+  assert.equal(config.shadow.objects.contact.formCodeId, 'contact-form-code-id');
+  assert.equal(config.shadow.objects.opportunity.formCodeId, 'opportunity-form-code-id');
+  assert.equal(config.shadow.objects.followup.formCodeId, 'followup-form-code-id');
+  assert.equal(config.shadow.objects.opportunity.enabled, true);
+  assert.equal(config.shadow.objects.followup.enabled, true);
   assert.equal(config.yzj.approval.fileSecret, 'approval-file-secret');
   assert.equal(config.shadow.dictionarySource, 'manual_json');
   assert.equal(config.server.port, 3001);

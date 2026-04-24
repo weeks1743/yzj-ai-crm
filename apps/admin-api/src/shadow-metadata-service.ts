@@ -335,6 +335,10 @@ function inferSemanticSlot(label: string, widgetType: string): ShadowSemanticSlo
     return 'linked_contact_form_inst_id';
   }
 
+  if (/商机/.test(label) && widgetType === 'basicDataWidget') {
+    return 'linked_opportunity_form_inst_id';
+  }
+
   if (/地区|区域|省|市/.test(label) || normalized.includes('region')) {
     return 'region';
   }

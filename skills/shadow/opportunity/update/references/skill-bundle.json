@@ -1,0 +1,41 @@
+{
+  "skillName": "shadow.opportunity_update",
+  "skillKey": "opportunity_update",
+  "operation": "update",
+  "description": "基于商机模板标准化字段预演轻云商机更新请求。",
+  "whenToUse": "当用户要更新已有商机基础字段时使用。",
+  "notWhenToUse": "当用户没有明确 formInstId 或只是在做查询时不要使用。",
+  "requiredParams": [
+    "form_inst_id"
+  ],
+  "optionalParams": [
+    "Te_11",
+    "Te_10",
+    "linked_contact_form_inst_id",
+    "linked_customer_form_inst_id",
+    "Ta_1",
+    "Ta_0",
+    "At_0",
+    "customer_name",
+    "Ra_6",
+    "Te_5",
+    "Ra_5",
+    "Te_1",
+    "Te_0",
+    "Ra_0",
+    "Ra_1",
+    "Te_9",
+    "Te_8",
+    "Da_0",
+    "Te_7",
+    "Te_6",
+    "owner_open_id",
+    "Nu_1",
+    "Nu_0"
+  ],
+  "confirmationPolicy": "required_before_write",
+  "outputCardType": "opportunity-update-preview",
+  "sourceObject": "opportunity",
+  "sourceFormCodeId": "b1869173654e49fbac0b1fc6ad37e761",
+  "sourceVersion": "2026-04-24T06:51:23.818Z"
+}

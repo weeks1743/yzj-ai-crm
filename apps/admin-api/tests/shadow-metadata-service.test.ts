@@ -12,6 +12,8 @@ import { createInMemoryDatabase, createTestConfig } from './test-helpers.js';
 
 const CUSTOMER_FORM_CODE_ID = 'customer-form-001';
 const CONTACT_FORM_CODE_ID = 'contact-form-001';
+const OPPORTUNITY_FORM_CODE_ID = 'opportunity-form-001';
+const FOLLOWUP_FORM_CODE_ID = 'followup-form-001';
 const CUSTOMER_SEARCH_OID = '69e75eb5e4b0e65b61c014da';
 const CONTACT_SEARCH_OID = '66160cfde4b014e237ba75ca';
 const SEARCH_RANGE_START_TS = 1777046400000;
@@ -238,6 +240,134 @@ const CONTACT_WIDGET_MAP = {
   },
 } satisfies Record<string, unknown>;
 
+const OPPORTUNITY_WIDGET_MAP = {
+  _S_NAME: {
+    codeId: '_S_NAME',
+    title: '商机名称',
+    type: 'textWidget',
+    required: false,
+    readOnly: true,
+  },
+  _S_TITLE: {
+    codeId: '_S_TITLE',
+    title: '标题',
+    type: 'textWidget',
+    required: false,
+    readOnly: true,
+  },
+  Te_0: {
+    codeId: 'Te_0',
+    title: '商机名称',
+    type: 'textWidget',
+    required: true,
+  },
+  Ra_0: {
+    codeId: 'Ra_0',
+    title: '商机状态',
+    type: 'radioWidget',
+    required: false,
+    options: [
+      {
+        key: 'opportunity-active',
+        value: '跟进中',
+      },
+      {
+        key: 'opportunity-won',
+        value: '已成交',
+      },
+    ],
+  },
+  Da_0: {
+    codeId: 'Da_0',
+    title: '预计成交日期',
+    type: 'dateWidget',
+    required: false,
+  },
+  Bd_0: {
+    codeId: 'Bd_0',
+    title: '关联客户',
+    type: 'basicDataWidget',
+    required: false,
+    option: 'single',
+    extendFieldMap: {
+      displayCol: '_S_TITLE',
+      extendSettingDataMap: {
+        displayCol: '_S_TITLE',
+        linkForm: {
+          modelName: '客户',
+          modelCode: CUSTOMER_FORM_CODE_ID,
+        },
+      },
+    },
+    dataSource: {
+      modelName: '客户',
+      modelCode: CUSTOMER_FORM_CODE_ID,
+      partCode: CUSTOMER_FORM_CODE_ID,
+      partName: '客户',
+    },
+    columnData: [
+      { colEnName: '_S_ENCODE', widgetType: 'textWidget' },
+      { colEnName: '_S_TITLE', widgetType: 'textWidget' },
+      { colEnName: '_S_NAME', widgetType: 'textWidget' },
+    ],
+  },
+} satisfies Record<string, unknown>;
+
+const FOLLOWUP_WIDGET_MAP = {
+  _S_TITLE: {
+    codeId: '_S_TITLE',
+    title: '标题',
+    type: 'textWidget',
+    required: false,
+    readOnly: true,
+  },
+  Te_0: {
+    codeId: 'Te_0',
+    title: '跟进内容',
+    type: 'textAreaWidget',
+    required: true,
+  },
+  Da_0: {
+    codeId: 'Da_0',
+    title: '最后跟进日期',
+    type: 'dateWidget',
+    required: false,
+  },
+  Ps_0: {
+    codeId: 'Ps_0',
+    title: '跟进人',
+    type: 'personSelectWidget',
+    required: false,
+  },
+  Bd_0: {
+    codeId: 'Bd_0',
+    title: '关联商机',
+    type: 'basicDataWidget',
+    required: false,
+    option: 'single',
+    extendFieldMap: {
+      displayCol: '_S_TITLE',
+      extendSettingDataMap: {
+        displayCol: '_S_TITLE',
+        linkForm: {
+          modelName: '商机',
+          modelCode: OPPORTUNITY_FORM_CODE_ID,
+        },
+      },
+    },
+    dataSource: {
+      modelName: '商机',
+      modelCode: OPPORTUNITY_FORM_CODE_ID,
+      partCode: OPPORTUNITY_FORM_CODE_ID,
+      partName: '商机',
+    },
+    columnData: [
+      { colEnName: '_S_TITLE', widgetType: 'textWidget' },
+      { colEnName: '_S_NAME', widgetType: 'textWidget' },
+    ],
+  },
+} satisfies Record<string, unknown>;
+
 const CUSTOMER_FIELD_CONTENT = [
   {
     codeId: '_S_NAME',
@@ -400,10 +530,30 @@ class StubApprovalClient extends ApprovalClient {
       widgetMap?: Record<string, unknown>;
     };
   }> {
+    const templateByFormCodeId: Record<string, { formDefId: string; widgetMap: Record<string, unknown> }> = {
+      [CUSTOMER_FORM_CODE_ID]: {
+        formDefId: 'form-def-customer',
+        widgetMap: CUSTOMER_WIDGET_MAP,
+      },
+      [CONTACT_FORM_CODE_ID]: {
+        formDefId: 'form-def-contact',
+        widgetMap: CONTACT_WIDGET_MAP,
+      },
+      [OPPORTUNITY_FORM_CODE_ID]: {
+        formDefId: 'form-def-opportunity',
+        widgetMap: OPPORTUNITY_WIDGET_MAP,
+      },
+      [FOLLOWUP_FORM_CODE_ID]: {
+        formDefId: 'form-def-followup',
+        widgetMap: FOLLOWUP_WIDGET_MAP,
+      },
+    };
+    const template = templateByFormCodeId[params.formCodeId] ?? templateByFormCodeId[CUSTOMER_FORM_CODE_ID];
+
     return {
-      formDefId: params.formCodeId === CONTACT_FORM_CODE_ID ? 'form-def-contact' : 'form-def-customer',
+      formDefId: template.formDefId,
       formInfo: {
-        widgetMap: params.formCodeId === CONTACT_FORM_CODE_ID ? CONTACT_WIDGET_MAP : CUSTOMER_WIDGET_MAP,
+        widgetMap: template.widgetMap,
       },
     };
   }
@@ -582,6 +732,8 @@ function createService(
     skillOutputDir,
     customerFormCodeId: CUSTOMER_FORM_CODE_ID,
     contactFormCodeId: CONTACT_FORM_CODE_ID,
+    opportunityFormCodeId: OPPORTUNITY_FORM_CODE_ID,
+    followupFormCodeId: FOLLOWUP_FORM_CODE_ID,
   });
   const repository = new ShadowMetadataRepository(createInMemoryDatabase());
   const approvalClient = new StubApprovalClient();
@@ -1550,6 +1702,60 @@ test('ShadowMetadataService generates object-specific contact skill names instea
         },
       ],
     );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ShadowMetadataService refreshes opportunity and followup metadata into object-specific skill bundles', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-opportunity-followup-'));
+  const dictionaryPath = join(tempDir, 'shadow-dictionaries.json');
+  const skillOutputDir = join(tempDir, 'skills');
+  const service = createService(dictionaryPath, skillOutputDir);
+
+  try {
+    const opportunityDetail = await service.refreshObject('opportunity');
+    const followupDetail = await service.refreshObject('followup');
+
+    const opportunitySkills = service.listSkills('opportunity');
+    const followupSkills = service.listSkills('followup');
+    const opportunitySearchSkill = opportunitySkills.find(
+      (skill) => skill.skillName === 'shadow.opportunity_search',
+    );
+    const opportunityCreateSkill = opportunitySkills.find(
+      (skill) => skill.skillName === 'shadow.opportunity_create',
+    );
+    const followupSearchSkill = followupSkills.find(
+      (skill) => skill.skillName === 'shadow.followup_search',
+    );
+    const followupCreateSkill = followupSkills.find(
+      (skill) => skill.skillName === 'shadow.followup_create',
+    );
+
+    assert.equal(opportunityDetail.fields.length, 6);
+    assert.equal(followupDetail.fields.length, 5);
+    assert.equal(opportunitySkills.length, 5);
+    assert.equal(followupSkills.length, 5);
+    assert.ok(opportunityCreateSkill);
+    assert.ok(followupCreateSkill);
+    assert.ok(opportunitySearchSkill?.optionalParams.includes('linked_customer_form_inst_id'));
+    assert.ok(followupSearchSkill?.optionalParams.includes('linked_opportunity_form_inst_id'));
+    assert.ok(opportunityCreateSkill?.requiredParams.includes('customer_name'));
+    assert.ok(followupCreateSkill?.requiredParams.includes('Te_0'));
+    assert.match(opportunityCreateSkill?.skillPath ?? '', /\/skills\/opportunity\/create\/SKILL\.md$/);
+    assert.match(followupCreateSkill?.skillPath ?? '', /\/skills\/followup\/create\/SKILL\.md$/);
+    assert.equal(existsSync(opportunityCreateSkill?.skillPath ?? ''), true);
+    assert.equal(existsSync(followupCreateSkill?.skillPath ?? ''), true);
+    assert.match(
+      readFileSync(opportunityCreateSkill?.referencePaths.skillBundle ?? '', 'utf8'),
+      /"skillName": "shadow\.opportunity_create"/,
+    );
+    assert.match(
+      readFileSync(followupCreateSkill?.referencePaths.skillBundle ?? '', 'utf8'),
+      /"skillName": "shadow\.followup_create"/,
+    );
+    assert.match(readFileSync(opportunitySearchSkill?.skillPath ?? '', 'utf8'), /linked_customer_form_inst_id/);
+    assert.match(readFileSync(followupSearchSkill?.skillPath ?? '', 'utf8'), /linked_opportunity_form_inst_id/);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

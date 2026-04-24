@@ -24,7 +24,7 @@ interface WriteShadowSkillBundlesParams {
   skills: ShadowSkillContract[];
 }
 
-const SHADOW_SKILL_PHASE = '0.2.17';
+const SHADOW_SKILL_PHASE = '0.2.20';
 
 function toJsonFile(payload: unknown): string {
   return `${JSON.stringify(payload, null, 2)}\n`;

@@ -1,0 +1,17 @@
+{
+  "skillName": "shadow.followup_get",
+  "skillKey": "followup_get",
+  "operation": "get",
+  "description": "按 formInstId 获取商机跟进记录单据详情。",
+  "whenToUse": "当用户已经明确指定某条商机跟进记录记录时使用。",
+  "notWhenToUse": "当用户只提供模糊条件，需要先搜索商机跟进记录时不要使用。",
+  "requiredParams": [
+    "form_inst_id"
+  ],
+  "optionalParams": [],
+  "confirmationPolicy": "no_confirmation_required",
+  "outputCardType": "followup-get-preview",
+  "sourceObject": "followup",
+  "sourceFormCodeId": "0a618c5d806545b997f60e8461b3f504",
+  "sourceVersion": "2026-04-24T06:51:23.851Z"
+}

@@ -1,0 +1,315 @@
+{
+  "objectKey": "followup",
+  "objectLabel": "商机跟进记录",
+  "formCodeId": "0a618c5d806545b997f60e8461b3f504",
+  "formDefId": null,
+  "sourceVersion": "2026-04-24T06:51:23.851Z",
+  "schemaHash": "6ea01274538ebbae4a6204604f5d4c54be636e480edbad36bf4258371db407b6",
+  "fieldCount": 23,
+  "normalizedFields": [
+    {
+      "fieldCode": "Te_4",
+      "label": "商机名称",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "customer_name"
+    },
+    {
+      "fieldCode": "Ra_2",
+      "label": "联系人层级",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "高层",
+          "key": "AaBaCcDd",
+          "value": "高层"
+        },
+        {
+          "title": "中层",
+          "key": "EeFfGgHh",
+          "value": "中层"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Te_1",
+      "label": "联系人姓名",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_0",
+      "label": "客户名称",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "customer_name"
+    },
+    {
+      "fieldCode": "Ra_0",
+      "label": "客户状态",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "销售线索阶段",
+          "key": "AaBaCcDd",
+          "value": "销售线索阶段"
+        },
+        {
+          "title": "休眠线索",
+          "key": "EeFfGgHh",
+          "value": "休眠线索"
+        },
+        {
+          "title": "潜在客户",
+          "key": "IiJjKkLl",
+          "value": "潜在客户"
+        },
+        {
+          "title": "商机阶段客户",
+          "key": "7Aww9pLt",
+          "value": "商机阶段客户"
+        },
+        {
+          "title": "失败关闭",
+          "key": "XB3Z2TRH",
+          "value": "失败关闭"
+        },
+        {
+          "title": "已成交客户",
+          "key": "h5aeSNAe",
+          "value": "已成交客户"
+        },
+        {
+          "title": "流失客户",
+          "key": "cOhLEeBv",
+          "value": "流失客户"
+        }
+      ],
+      "semanticSlot": "customer_status"
+    },
+    {
+      "fieldCode": "Ra_1",
+      "label": "跟进方式",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "电话",
+          "key": "AaBaCcDd",
+          "value": "电话"
+        },
+        {
+          "title": "上门",
+          "key": "EeFfGgHh",
+          "value": "上门"
+        },
+        {
+          "title": "发资料",
+          "key": "IiJjKkLl",
+          "value": "发资料"
+        },
+        {
+          "title": "发报价",
+          "key": "qf0Z2BGm",
+          "value": "发报价"
+        },
+        {
+          "title": "发订单",
+          "key": "QVJqqSbz",
+          "value": "发订单"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Bd_4",
+      "label": "合同订单",
+      "widgetType": "basicDataWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "relationBinding": {
+        "kind": "basic_data",
+        "formCodeId": "eea919bb0e69418698ff457e74cc1c2b",
+        "modelName": "订单变更",
+        "displayCol": "_S_SERIAL"
+      }
+    },
+    {
+      "fieldCode": "Bd_3",
+      "label": "商机编码",
+      "widgetType": "basicDataWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "linked_opportunity_form_inst_id",
+      "relationBinding": {
+        "kind": "basic_data",
+        "formCodeId": "b1869173654e49fbac0b1fc6ad37e761",
+        "modelName": "商机",
+        "displayCol": "_S_SERIAL"
+      }
+    },
+    {
+      "fieldCode": "_S_APPLY",
+      "label": "提交人",
+      "widgetType": "personSelectWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Bd_0",
+      "label": "客户编号",
+      "widgetType": "basicDataWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "linked_customer_form_inst_id",
+      "relationBinding": {
+        "kind": "basic_data",
+        "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+        "modelName": "客户",
+        "displayCol": "_S_ENCODE"
+      }
+    },
+    {
+      "fieldCode": "Da_0",
+      "label": "跟进时间",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Da_1",
+      "label": "下次回访日期",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Lo_0",
+      "label": "地理位置",
+      "widgetType": "locationWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_0",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ps_0",
+      "label": "跟进负责人",
+      "widgetType": "personSelectWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "owner_open_id"
+    },
+    {
+      "fieldCode": "De_1",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_2",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_SERIAL",
+      "label": "跟进记录编号",
+      "widgetType": "serialNumWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_DATE",
+      "label": "申请日期",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_0",
+      "label": "跟进记录",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "At_0",
+      "label": "附件",
+      "widgetType": "attachmentWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_DEPT",
+      "label": "所属部门",
+      "widgetType": "departmentSelectWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_TITLE",
+      "label": "标题",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "skillName": "shadow.followup_update",
+  "skillKey": "followup_update",
+  "operation": "update",
+  "description": "基于商机跟进记录模板标准化字段预演轻云商机跟进记录更新请求。",
+  "whenToUse": "当用户要更新已有商机跟进记录基础字段时使用。",
+  "notWhenToUse": "当用户没有明确 formInstId 或只是在做查询时不要使用。",
+  "requiredParams": [
+    "form_inst_id"
+  ],
+  "optionalParams": [
+    "customer_name",
+    "Ra_2",
+    "Te_1",
+    "customer_status",
+    "Ra_1",
+    "Bd_4",
+    "linked_opportunity_form_inst_id",
+    "linked_customer_form_inst_id",
+    "Da_0",
+    "Da_1",
+    "owner_open_id",
+    "Ta_0",
+    "At_0"
+  ],
+  "confirmationPolicy": "required_before_write",
+  "outputCardType": "followup-update-preview",
+  "sourceObject": "followup",
+  "sourceFormCodeId": "0a618c5d806545b997f60e8461b3f504",
+  "sourceVersion": "2026-04-24T06:51:23.851Z"
+}

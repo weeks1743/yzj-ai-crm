@@ -37,12 +37,12 @@ const SHADOW_OBJECT_META: Record<ShadowObjectKey, { label: string; envKey: strin
   opportunity: {
     label: '商机',
     envKey: 'YZJ_SHADOW_OPPORTUNITY_FORM_CODE_ID',
-    enabled: false,
+    enabled: true,
   },
   followup: {
     label: '商机跟进记录',
     envKey: 'YZJ_SHADOW_FOLLOWUP_FORM_CODE_ID',
-    enabled: false,
+    enabled: true,
   },
 };
 
