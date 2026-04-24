@@ -33,35 +33,29 @@ export default [
     ],
   },
   {
-    name: '记录系统',
     path: '/records',
-    icon: 'database',
-    routes: [
-      {
-        name: '客户',
-        path: '/records/customers',
-        icon: 'team',
-        component: './records/[objectType]',
-      },
-      {
-        name: '联系人',
-        path: '/records/contacts',
-        icon: 'user',
-        component: './records/[objectType]',
-      },
-      {
-        name: '商机',
-        path: '/records/opportunities',
-        icon: 'wallet',
-        component: './records/[objectType]',
-      },
-      {
-        name: '商机跟进记录',
-        path: '/records/followups',
-        icon: 'profile',
-        component: './records/[objectType]',
-      },
-    ],
+    hideInMenu: true,
+    redirect: '/skills/record-skills',
+  },
+  {
+    path: '/records/customers',
+    hideInMenu: true,
+    component: './records/[objectType]',
+  },
+  {
+    path: '/records/contacts',
+    hideInMenu: true,
+    component: './records/[objectType]',
+  },
+  {
+    path: '/records/opportunities',
+    hideInMenu: true,
+    component: './records/[objectType]',
+  },
+  {
+    path: '/records/followups',
+    hideInMenu: true,
+    component: './records/[objectType]',
   },
   {
     name: 'AI 资产',
@@ -100,16 +94,26 @@ export default [
     icon: 'tool',
     routes: [
       {
-        name: '工具注册表',
-        path: '/skills/tool-registry',
+        name: '记录系统对象',
+        path: '/skills/record-skills',
         icon: 'api',
-        component: './skills/[skillPage]',
+        component: './skills/record-skills/index',
       },
       {
-        name: '场景技能',
-        path: '/skills/scene-skills',
+        path: '/skills/record-skills/:objectKey',
+        hideInMenu: true,
+        component: './skills/record-skills/[objectKey]',
+      },
+      {
+        name: '场景组装准备',
+        path: '/skills/scene-assembly',
         icon: 'deploymentUnit',
-        component: './skills/[skillPage]',
+        component: './skills/scene-assembly/index',
+      },
+      {
+        path: '/skills/scene-assembly/:sceneKey',
+        hideInMenu: true,
+        component: './skills/scene-assembly/[sceneKey]',
       },
       {
         name: '外部技能',

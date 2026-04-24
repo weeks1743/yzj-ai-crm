@@ -15,9 +15,15 @@ export default defineConfig({
   fastRefresh: true,
   model: {},
   initialState: {},
+  proxy: {
+    '/api': {
+      target: `http://127.0.0.1:${process.env.ADMIN_API_PORT || '3001'}`,
+      changeOrigin: true,
+    },
+  },
   layout: {
     locale: false,
-    title: 'AI销售助手管理侧',
+    title: 'AI销售助手',
     siderWidth: 236,
     splitMenus: false,
   },

@@ -3,21 +3,21 @@ import type {
   AssistantScene,
   AudioImportTask,
   ConversationSession,
+  ExternalSkillCatalogItem,
   PageMetric,
   RankingItem,
   RecordPageConfig,
   ResearchSnapshot,
+  SceneAssemblyDraft,
   SceneTask,
   SettingPageConfig,
   SystemAlert,
   SystemHealthItem,
   TenantContext,
-  ToolRegistryItem,
   TraceLog,
   TrendPoint,
   VisitBrief,
   WritebackPolicy,
-  SkillCatalogItem,
 } from './types';
 
 const metric = (
@@ -47,7 +47,7 @@ const timeline = [
   {
     time: '2026-04-23 09:24',
     title: '触发技能编排',
-    description: '根据租户策略触发记录系统技能和场景技能组合。',
+    description: '根据租户策略触发 shadow.* 对象能力和场景技能组合。',
     actor: 'Scene Orchestrator',
     status: 'processing' as const,
   },
@@ -76,7 +76,7 @@ export const tenantContext: TenantContext = {
 
 export const dashboardMetrics: PageMetric[] = [
   metric('tenant', '租户接入状态', '12 / 12', '已接入租户', '+2 本周', 'healthy'),
-  metric('tool', '动态技能就绪率', '96.4%', '对象技能就绪率', '+1.8%', 'healthy'),
+  metric('tool', '动态技能就绪率', '96.4%', '对象能力就绪率', '+1.8%', 'healthy'),
   metric('writeback', '主数据写回成功率', '98.2%', '最近 7 日', '+0.6%', 'healthy'),
   metric('audio', '录音导入完成率', '91.3%', '异步链路完成度', '-1.1%', 'attention'),
   metric('research', '研究快照复用率', '63.8%', '用于拜访材料', '+8.5%', 'healthy'),
@@ -168,25 +168,12 @@ export const recordPages: Record<string, RecordPageConfig> = {
     key: 'customers',
     title: '客户',
     summary: '正式后台列表页，体现影子系统主数据对象与字段元数据，而不是静态写死 schema 的玩具 CRM。',
-    searchPlaceholder: '搜索客户名称 / 行业 / 模板编号',
+    searchPlaceholder: '搜索客户名称 / 行业 / 客户编号',
     metrics: [
       metric('count', '对象总量', '1,284', '影子系统客户对象', '+36', 'healthy'),
       metric('sync', '模板同步成功率', '99.1%', '轻云字段元数据同步', '+0.3%', 'healthy'),
       metric('writeback', '确认写回通过率', '94.8%', '最近 7 日客户写回', '+1.5%', 'healthy'),
     ],
-    meta: {
-      key: 'customer',
-      label: '客户',
-      templateId: 'tmpl_customer_01',
-      codeId: 'yzj_customer',
-      skillVersion: '0.1.0',
-      fieldCount: 38,
-      generationStatus: '已生成',
-      confirmationPolicy: '关键字段二次确认',
-      writebackRate: '98.6%',
-      writableFields: ['客户名称', '客户等级', '所属行业', '省份', '负责人', '最近拜访时间'],
-      readonlyFields: ['templateId', 'codeId', 'eid', 'appId', '创建人'],
-    },
     records: [
       {
         id: 'cust-001',
@@ -260,19 +247,6 @@ export const recordPages: Record<string, RecordPageConfig> = {
       metric('relation', '关系边覆盖率', '88.9%', '影响人与决策链', '+4.2%', 'healthy'),
       metric('confirm', '敏感字段确认率', '97.4%', '手机号 / 邮箱确认', '+0.7%', 'healthy'),
     ],
-    meta: {
-      key: 'contact',
-      label: '联系人',
-      templateId: 'tmpl_contact_01',
-      codeId: 'yzj_contact',
-      skillVersion: '0.1.0',
-      fieldCount: 31,
-      generationStatus: '已生成',
-      confirmationPolicy: '手机号与邮箱强确认',
-      writebackRate: '97.9%',
-      writableFields: ['姓名', '职位', '手机号', '邮箱', '关系标签', '影响力等级'],
-      readonlyFields: ['templateId', 'codeId', 'eid', 'appId'],
-    },
     records: [
       {
         id: 'cont-001',
@@ -328,19 +302,6 @@ export const recordPages: Record<string, RecordPageConfig> = {
       metric('stage', '阶段识别准确率', '92.1%', '由录音与跟进归纳', '+2.1%', 'healthy'),
       metric('risk', '风险商机占比', '13.4%', '需经理复核', '-1.8%', 'attention'),
     ],
-    meta: {
-      key: 'opportunity',
-      label: '商机',
-      templateId: 'tmpl_oppty_01',
-      codeId: 'yzj_opportunity',
-      skillVersion: '0.1.0',
-      fieldCount: 44,
-      generationStatus: '已生成',
-      confirmationPolicy: '金额与阶段强确认',
-      writebackRate: '96.3%',
-      writableFields: ['商机名称', '阶段', '预计金额', '预计关闭时间', '负责人', '风险等级'],
-      readonlyFields: ['templateId', 'codeId', 'eid', 'appId', '创建来源'],
-    },
     records: [
       {
         id: 'opp-001',
@@ -396,19 +357,6 @@ export const recordPages: Record<string, RecordPageConfig> = {
       metric('audio', '录音入库占比', '54.6%', '来源于录音导入', '+6.3%', 'healthy'),
       metric('confirm', '回写待确认', '37', '高风险写回需确认', '-5', 'attention'),
     ],
-    meta: {
-      key: 'followup',
-      label: '商机跟进记录',
-      templateId: 'tmpl_followup_01',
-      codeId: 'yzj_followup',
-      skillVersion: '0.1.0',
-      fieldCount: 52,
-      generationStatus: '已生成',
-      confirmationPolicy: '摘要、结论、下一步动作确认',
-      writebackRate: '95.4%',
-      writableFields: ['拜访摘要', '关键结论', '风险提示', '下一步动作', '录音资产关联'],
-      readonlyFields: ['templateId', 'codeId', 'eid', 'appId', 'traceId'],
-    },
     records: [
       {
         id: 'follow-001',
@@ -603,64 +551,144 @@ export const assetPages: Record<string, AssetPageConfig> = {
   },
 };
 
-export const toolRegistryRows: ToolRegistryItem[] = [
+export const sceneAssemblyDrafts: SceneAssemblyDraft[] = [
   {
-    id: 'tool-001',
-    objectKey: 'customer',
-    label: '客户对象技能',
-    templateId: 'tmpl_customer_01',
-    codeId: 'yzj_customer',
-    generationStatus: '已生成',
-    writableFields: ['客户名称', '客户等级', '所属行业', '省份', '负责人'],
-    readonlyFields: ['eid', 'appId', 'templateId'],
-    confirmationPolicy: '关键字段二次确认',
-    version: '0.1.0',
-    updatedAt: '2026-04-23 08:12',
-  },
-  {
-    id: 'tool-002',
-    objectKey: 'followup',
-    label: '商机跟进记录技能',
-    templateId: 'tmpl_followup_01',
-    codeId: 'yzj_followup',
-    generationStatus: '已生成',
-    writableFields: ['拜访摘要', '关键结论', '风险提示', '下一步动作'],
-    readonlyFields: ['traceId', 'taskId', 'eid', 'appId'],
-    confirmationPolicy: '摘要与结论确认',
-    version: '0.1.0',
-    updatedAt: '2026-04-23 09:05',
-  },
-];
-
-export const sceneSkillRows: SkillCatalogItem[] = [
-  {
-    id: 'scene-001',
+    key: 'scene.audio_import',
     label: '录音导入与拜访分析',
-    type: '场景技能',
-    trigger: '上传录音 / 口述导入',
-    route: '/chat/audio-import',
-    dependencies: ['客户技能', '商机技能', '跟进记录技能', '转写服务'],
-    status: '运行中',
-    owner: '场景编排组',
-    sla: 'P95 < 15 分钟',
+    businessGoal: '补齐客户与商机上下文，创建跟进记录，并在写回后异步执行录音分析。',
+    entityAnchor: '客户 / 商机 / 跟进记录',
+    summary: '该场景是典型的编排型能力，需要显式消费对象能力和外部转写能力。',
+    recordSkillDependencies: [
+      {
+        skillName: 'shadow.customer_search',
+        objectKey: 'customer',
+        operation: 'search',
+      },
+      {
+        skillName: 'shadow.customer_create',
+        objectKey: 'customer',
+        operation: 'create',
+      },
+      {
+        skillName: 'shadow.opportunity_search',
+        objectKey: 'opportunity',
+        operation: 'search',
+      },
+      {
+        skillName: 'shadow.opportunity_create',
+        objectKey: 'opportunity',
+        operation: 'create',
+      },
+      {
+        skillName: 'shadow.followup_create',
+        objectKey: 'followup',
+        operation: 'create',
+      },
+    ],
+    externalSkillDependencies: [
+      {
+        skillCode: 'ext.audio_transcribe',
+        label: '录音转写',
+      },
+    ],
+    boundaries: {
+      scene: [
+        '识别当前录音导入属于哪条上下文分支，并推进整体任务状态。',
+        '负责在 customer / opportunity / followup 三类结构化动作之间组织先后顺序。',
+      ],
+      shadow: [
+        '客户、商机、跟进记录的查询与创建必须由对应 shadow.* 技能执行。',
+        '结构化主数据写回确认边界继承 shadow.* 对象能力自身的确认策略。',
+      ],
+      external: [
+        '录音转写与后续语音分析由 ext.* 能力提供，不直接越权写轻云主数据。',
+      ],
+      writeback: [
+        '只有在结构化记录创建完成后，才允许进入异步分析和资产沉淀。',
+      ],
+    },
   },
   {
-    id: 'scene-002',
+    key: 'scene.visit_prepare',
     label: '准备拜访材料',
-    type: '场景技能',
-    trigger: '自然语言请求 / 快捷入口',
-    route: '/chat/visit-prepare',
-    dependencies: ['研究快照', '录音分析资产', '主数据对象'],
-    status: '运行中',
-    owner: '场景编排组',
-    sla: 'P95 < 8 秒',
+    businessGoal: '聚合客户、联系人、商机、跟进记录与研究资产，生成拜访前简报。',
+    entityAnchor: '客户',
+    summary: '该场景是多源消费型能力，需要先确定可用的记录系统读取技能，再叠加外部研究与导出能力。',
+    recordSkillDependencies: [
+      {
+        skillName: 'shadow.customer_search',
+        objectKey: 'customer',
+        operation: 'search',
+      },
+      {
+        skillName: 'shadow.customer_get',
+        objectKey: 'customer',
+        operation: 'get',
+      },
+      {
+        skillName: 'shadow.contact_search',
+        objectKey: 'contact',
+        operation: 'search',
+      },
+      {
+        skillName: 'shadow.contact_get',
+        objectKey: 'contact',
+        operation: 'get',
+      },
+      {
+        skillName: 'shadow.opportunity_search',
+        objectKey: 'opportunity',
+        operation: 'search',
+      },
+      {
+        skillName: 'shadow.opportunity_get',
+        objectKey: 'opportunity',
+        operation: 'get',
+      },
+      {
+        skillName: 'shadow.followup_search',
+        objectKey: 'followup',
+        operation: 'search',
+      },
+      {
+        skillName: 'shadow.followup_get',
+        objectKey: 'followup',
+        operation: 'get',
+      },
+    ],
+    externalSkillDependencies: [
+      {
+        skillCode: 'ext.company_research_pm',
+        label: '公司分析',
+      },
+      {
+        skillCode: 'ext.presentation_generate',
+        label: 'PPT 生成',
+      },
+    ],
+    boundaries: {
+      scene: [
+        '负责识别当前客户锚点，并决定本次需要拼装哪些主数据与资产输入。',
+        '负责组合摘要、问题清单、风险与行动建议，不直接替代具体对象查询。',
+      ],
+      shadow: [
+        '客户、联系人、商机、跟进记录的结构化读取必须由 shadow.* 技能提供。',
+      ],
+      external: [
+        '公司研究、导出类能力通过 ext.* 引入，不直接承担 CRM 主数据读取职责。',
+      ],
+      writeback: [
+        '该场景默认消费已确认数据；如需反向写回，应继承下游 shadow.* 技能确认策略。',
+      ],
+    },
   },
 ];
 
-export const externalSkillRows: SkillCatalogItem[] = [
+export const externalSkillRows: ExternalSkillCatalogItem[] = [
   {
     id: 'ext-001',
     label: '公司分析',
+    skillCode: 'ext.company_research_pm',
     type: '外部技能',
     trigger: '公司名称 / 客户研究',
     route: '/chat/company-research',
@@ -668,10 +696,12 @@ export const externalSkillRows: SkillCatalogItem[] = [
     status: '运行中',
     owner: '研究能力组',
     sla: 'P95 < 10 秒',
+    summary: '提供公司研究与快照沉淀能力，供准备拜访材料等场景复用。',
   },
   {
     id: 'ext-002',
     label: '录音转写',
+    skillCode: 'ext.audio_transcribe',
     type: '外部技能',
     trigger: '音频文件导入',
     route: '/chat/audio-import',
@@ -679,6 +709,20 @@ export const externalSkillRows: SkillCatalogItem[] = [
     status: '告警中',
     owner: '语音能力组',
     sla: 'P95 < 5 分钟',
+    summary: '为录音导入场景提供转写能力，当前存在稳定性风险。',
+  },
+  {
+    id: 'ext-003',
+    label: 'PPT 生成',
+    skillCode: 'ext.presentation_generate',
+    type: '外部技能',
+    trigger: '导出拜访材料',
+    route: '/chat/visit-prepare',
+    dependencies: ['文档渲染 Provider', '对象存储'],
+    status: '运行中',
+    owner: '导出能力组',
+    sla: 'P95 < 20 秒',
+    summary: '作为准备拜访材料的扩展导出能力预留，不作为 v1 标准输出。',
   },
 ];
 
@@ -1151,11 +1195,11 @@ export const assistantScenes: Record<string, AssistantScene> = {
     title: 'AI 销售工作台',
     subtitle: '自然语言驱动主入口',
     headline: '让销售从对话开始，而不是从表格开始。',
-    description: '在这里直接发起客户录入、查询、录音导入、公司分析和拜访准备，系统会自动调度场景技能、记录系统技能与外部技能。',
+    description: '在这里直接发起客户录入、查询、录音导入、公司分析和拜访准备，系统会自动调度场景技能、shadow.* 对象能力与外部技能。',
     defaultInput: '帮我查看星海精工最近的商机和跟进情况。',
     prompts: [
-      { key: 'p1', label: '录入客户 / 联系人 / 商机 / 跟进', description: '命中记录系统技能并进入确认写回。' },
-      { key: 'p2', label: '查询客户 / 商机 / 跟进', description: '返回结构化结果并可跳转记录系统。' },
+      { key: 'p1', label: '录入客户 / 联系人 / 商机 / 跟进', description: '命中 shadow.* 对象能力并进入确认写回。' },
+      { key: 'p2', label: '查询客户 / 商机 / 跟进', description: '返回结构化结果并可跳转对象治理页。' },
       { key: 'p3', label: '导入录音并生成跟进记录', description: '先补齐上下文，再异步分析录音。' },
       { key: 'p4', label: '分析公司', description: '按外部研究能力生成快照。' },
       { key: 'p5', label: '准备拜访材料', description: '组合主数据、研究、录音和 AI 记忆输出。' },

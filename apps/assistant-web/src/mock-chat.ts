@@ -297,7 +297,7 @@ function buildHomeResponse(input: AssistantRequestInput) {
   return {
     content: `<think>
 1. 我先把你的自然语言意图归到“查询 / 录入 / 场景技能”三类之一。
-2. 如果命中结构化对象，我会优先调记录系统技能；如果命中场景，就切到场景技能编排。
+2. 如果命中结构化对象，我会优先调 shadow.* 对象能力；如果命中场景，就切到场景技能编排。
 3. 关键字段最终仍然要经过确认与审计后再写回。
 </think>
 
@@ -310,7 +310,7 @@ function buildHomeResponse(input: AssistantRequestInput) {
 ${buildTable(
   ['模块', '命中对象', '当前状态', '推荐动作'],
   [
-    ['客户', customer.name, customer.status, '打开客户对象页核对标签'],
+    ['客户', customer.name, customer.status, '打开客户对象治理页核对标签'],
     ['商机', opportunity.name, opportunity.status, '转到拜访材料或录音导入'],
     ['任务', sceneTasks[0].title, sceneTasks[0].status, '跟踪 traceId'],
   ],
@@ -332,7 +332,7 @@ ${buildTable(
       feedback: 'default' as const,
       sceneKey: input.sceneKey,
       headline: assistantScenes.chat.headline,
-      references: ['客户对象页', '商机对象页', '任务中心'],
+      references: ['客户对象治理页', '商机对象治理页', '任务中心'],
     },
   };
 }

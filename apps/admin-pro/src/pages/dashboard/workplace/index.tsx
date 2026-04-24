@@ -52,10 +52,10 @@ const WorkplacePage = () => {
       subTitle="面向管理员的正式运营工作台"
       extra={[
         <Button key="records" type="primary">
-          <Link to="/records/followups">查看待确认跟进记录</Link>
+          <Link to="/skills/record-skills/followup">进入跟进记录对象治理</Link>
         </Button>,
         <Button key="skills">
-          <Link to="/skills/tool-registry">打开工具注册表</Link>
+          <Link to="/skills/record-skills">打开对象治理总览</Link>
         </Button>,
       ]}
     >
@@ -102,7 +102,11 @@ const WorkplacePage = () => {
         <ProCard title="快捷入口" colSpan="40%">
           <List
             dataSource={[
-              { title: '客户对象页', path: '/records/customers', desc: '排查对象字段与写回状态。' },
+              {
+                title: '客户对象治理',
+                path: '/skills/record-skills/customer',
+                desc: '查看客户对象的技能、字段快照与刷新状态。',
+              },
               { title: '录音分析资产', path: '/assets/audio-analysis', desc: '查看转写和异步分析结果。' },
               { title: '可观测性', path: '/settings/observability', desc: '按追踪ID / 任务ID 排查问题。' },
               { title: '安全与运营', path: '/settings/security', desc: '查看跨租户拦截和脱敏规则。' },
