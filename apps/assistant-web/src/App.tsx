@@ -60,12 +60,14 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import {
   assistantScenes,
   audioImportTasks,
+  brandTitle,
   researchSnapshots,
   sceneTasks,
   tenantContext,
   traceLogs,
   visitBriefs,
 } from '@shared';
+import { applyDocumentBranding } from '@shared/dom-branding';
 import {
   type AssistantChatMessage,
   defaultConversationItems,
@@ -74,6 +76,7 @@ import {
 } from './mock-chat';
 import { buildPromptGroups, getSceneByPath, sceneOrder } from './scene-meta';
 import { useMarkdownTheme } from './use-markdown-theme';
+import brandLogo from '@shared/assets/logo.png';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -133,19 +136,27 @@ const useStyles = createStyles(({ token, css }) => ({
     justify-content: start;
     padding: 0 24px;
     box-sizing: border-box;
-    gap: 10px;
-    margin: 24px 0 18px;
+    gap: 12px;
+    margin: 28px 0 20px;
   `,
   logoMark: css`
-    width: 24px;
-    height: 24px;
-    border-radius: 8px;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
-    color: #fff;
-    background: linear-gradient(135deg, ${token.colorPrimary}, ${token.colorInfo});
+    flex-shrink: 0;
+    overflow: hidden;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+
+    img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      border-radius: inherit;
+    }
   `,
   logoText: css`
     display: flex;
@@ -153,10 +164,11 @@ const useStyles = createStyles(({ token, css }) => ({
     justify-content: center;
 
     span {
-      font-weight: 600;
-      color: ${token.colorText};
-      font-size: 16px;
-      line-height: 1.2;
+      color: rgba(0, 0, 0, 0.88);
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.15;
+      letter-spacing: 0.01em;
     }
   `,
   conversations: css`
@@ -356,7 +368,7 @@ function getSceneSourceTags(sceneKey: string) {
   if (sceneKey === 'tasks') {
     return ['traceId', 'taskId', '资产结果', '写回状态'];
   }
-  return ['对话上下文', '记录系统技能', '场景技能', '外部技能'];
+  return ['对话上下文', 'shadow.* 对象能力', '场景技能', '外部技能'];
 }
 
 function MessageFooter({
@@ -750,6 +762,10 @@ function AssistantWorkspace() {
   const sceneEntryPrompts = useMemo(() => buildSceneEntryPrompts(), []);
   const senderPrompts = useMemo(() => buildSenderPrompts(scene), [scene]);
 
+  useEffect(() => {
+    applyDocumentBranding(brandTitle, brandLogo);
+  }, [location.pathname]);
+
   const {
     conversations,
     activeConversationKey,
@@ -955,14 +971,14 @@ function AssistantWorkspace() {
     <div className={styles.side}>
       <div className={styles.logo}>
         <span className={styles.logoMark}>
-          <RobotOutlined />
+          <img src={brandLogo} alt={brandTitle} />
         </span>
         <div className={styles.logoText}>
-          <span>AI销售助手</span>
+          <span>{brandTitle}</span>
         </div>
       </div>
       <Conversations
-        creation={{ onClick: onCreateConversation }}
+        creation={{ onClick: onCreateConversation, label: '新对话' }}
         items={conversations.map(({ key, label, ...other }) => ({
           key,
           label: key === activeConversationKey ? `[当前]${label}` : label,

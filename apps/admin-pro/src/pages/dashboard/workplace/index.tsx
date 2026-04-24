@@ -52,10 +52,10 @@ const WorkplacePage = () => {
       subTitle="面向管理员的正式运营工作台"
       extra={[
         <Button key="records" type="primary">
-          <Link to="/skills/record-skills/followup">进入跟进记录对象治理</Link>
+          <Link to="/skills/record-skills/followup">进入跟进记录技能详情</Link>
         </Button>,
         <Button key="skills">
-          <Link to="/skills/record-skills">打开对象治理总览</Link>
+          <Link to="/skills/record-skills">打开记录系统技能</Link>
         </Button>,
       ]}
     >
@@ -103,9 +103,9 @@ const WorkplacePage = () => {
           <List
             dataSource={[
               {
-                title: '客户对象治理',
+                title: '客户技能详情',
                 path: '/skills/record-skills/customer',
-                desc: '查看客户对象的技能、字段快照与刷新状态。',
+                desc: '查看客户技能、字段快照与刷新状态。',
               },
               { title: '录音分析资产', path: '/assets/audio-analysis', desc: '查看转写和异步分析结果。' },
               { title: '可观测性', path: '/settings/observability', desc: '按追踪ID / 任务ID 排查问题。' },

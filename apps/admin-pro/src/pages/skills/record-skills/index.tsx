@@ -70,7 +70,11 @@ const columns: ProColumns<RecordSkillRow>[] = [
     dataIndex: 'label',
     width: 180,
     render: (_, record) => (
-      <Link to={`/skills/record-skills/${record.objectKey}`} prefetch>
+      <Link
+        to={`/skills/record-skills/${record.objectKey}`}
+        state={{ fromRecordSkills: true }}
+        prefetch
+      >
         {shadowObjectLabels[record.objectKey]}
       </Link>
     ),
@@ -96,7 +100,7 @@ const columns: ProColumns<RecordSkillRow>[] = [
     ),
   },
   {
-    title: 'formCodeId',
+    title: '模板编码',
     dataIndex: 'formCodeId',
     width: 260,
     render: (_, record) => renderCompactText(record.formCodeId, { width: 240, copyable: true }),
@@ -147,8 +151,13 @@ const columns: ProColumns<RecordSkillRow>[] = [
     valueType: 'option',
     width: 120,
     render: (_, record) => [
-      <Link key="detail" to={`/skills/record-skills/${record.objectKey}`} prefetch>
-        查看详情
+      <Link
+        key="detail"
+        to={`/skills/record-skills/${record.objectKey}`}
+        state={{ fromRecordSkills: true }}
+        prefetch
+      >
+        查看技能详情
       </Link>,
     ],
   },
@@ -189,7 +198,7 @@ const RecordSkillsPage = () => {
         if (!alive) {
           return;
         }
-        setErrorMessage(error instanceof Error ? error.message : '记录系统对象页加载失败');
+        setErrorMessage(error instanceof Error ? error.message : '记录系统技能页加载失败');
       } finally {
         if (alive) {
           setLoading(false);
@@ -216,7 +225,7 @@ const RecordSkillsPage = () => {
       {
         label: '真实对象数',
         value: `${totalObjects}`,
-        helper: '当前后端全部 shadow 对象',
+        helper: '当前纳入技能治理的全部对象',
       },
       {
         label: '激活对象数',
@@ -226,20 +235,20 @@ const RecordSkillsPage = () => {
       {
         label: '已生成技能总数',
         value: `${totalSkills}`,
-        helper: '按真实技能合同汇总',
+        helper: '按当前已生成技能汇总',
       },
       {
         label: '刷新异常对象数',
         value: `${failedObjects}`,
-        helper: 'refresh 失败或存在 lastError',
+        helper: '存在刷新失败或异常提示',
       },
     ];
   }, [rows]);
 
   return (
     <PageContainer
-      title="记录系统对象"
-      subTitle="统一承接 shadow 对象的治理总览，展示对象状态、快照、字段与执行绑定。"
+      title="记录系统技能"
+      subTitle="统一查看各对象的技能状态、刷新情况和字段准备情况。"
       extra={[
         <Button key="reload" onClick={() => window.location.reload()}>
           重新加载
@@ -249,14 +258,14 @@ const RecordSkillsPage = () => {
       <Alert
         type="info"
         showIcon
-        message="真实联调口径"
-        description="这里不再展示旧的 templateId / codeId 原型表，而是以 formCodeId、对象快照、技能合同和执行绑定作为管理员治理主视图。"
+        message="管理视图说明"
+        description="这里聚焦对象接入状态、技能覆盖情况和刷新结果，方便管理员日常查看和排查。"
       />
 
       {errorMessage ? (
         <Result
           status="warning"
-          title="记录系统对象页加载失败"
+          title="记录系统技能页加载失败"
           subTitle={errorMessage}
           extra={
             <Button type="primary" onClick={() => window.location.reload()}>

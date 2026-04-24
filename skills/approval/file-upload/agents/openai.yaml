@@ -1,0 +1,6 @@
+interface:
+  display_name: "审批文件上传"
+  short_description: "上传本地文件并返回可直接写入轻云附件字段的对象"
+  default_prompt: "Use $approval.file_upload to upload a local file through Yunzhijia approval file service and return the LightCloud attachment payload."
+policy:
+  allow_implicit_invocation: false

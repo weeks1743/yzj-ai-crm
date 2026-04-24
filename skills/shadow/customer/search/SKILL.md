@@ -58,7 +58,7 @@ Use this bundle only for the `customer` object. It is generated from the current
 - Internal live API: `POST /api/shadow/objects/customer/execute/search`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.17`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.2.20`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

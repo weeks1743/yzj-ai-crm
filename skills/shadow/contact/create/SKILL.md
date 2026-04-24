@@ -53,7 +53,7 @@ Use this bundle only for the `contact` object. It is generated from the current 
 - Internal live API: `POST /api/shadow/objects/contact/execute/upsert`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.17`; live write is enabled and should only be used after explicit user confirmation.
+- This bundle is generated for phase `0.2.20`; live write is enabled and should only be used after explicit user confirmation.
 
 ## References
 

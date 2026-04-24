@@ -1,0 +1,53 @@
+{
+  "internalApi": {
+    "method": "POST",
+    "path": "/api/approval/files/upload",
+    "payloadExample": {
+      "filePath": "/absolute/path/to/file.pptx",
+      "bizKey": "cloudflow"
+    },
+    "responseShape": {
+      "filePath": "/absolute/path/to/file.pptx",
+      "bizKey": "cloudflow",
+      "accessTokenScope": "resGroupSecret",
+      "uploaded": {
+        "fileId": "69ea3d811285ac00016ede26",
+        "fileName": "测试上传附件.pptx",
+        "fileType": "doc",
+        "length": 3888931,
+        "isEncrypted": false
+      },
+      "attachmentValue": {
+        "fileName": "测试上传附件.pptx",
+        "fileId": "69ea3d811285ac00016ede26",
+        "fileSize": "3888931",
+        "fileType": "doc",
+        "fileExt": "pptx"
+      }
+    }
+  },
+  "upstream": {
+    "token": {
+      "method": "POST",
+      "url": "https://www.yunzhijia.com/gateway/oauth2/token/getAccessToken",
+      "scope": "resGroupSecret",
+      "body": {
+        "eid": "{eid}",
+        "secret": "{approvalFileSecret}",
+        "timestamp": "{timestamp}",
+        "scope": "resGroupSecret"
+      }
+    },
+    "upload": {
+      "method": "POST",
+      "url": "https://www.yunzhijia.com/docrest/doc/file/uploadfile",
+      "headers": {
+        "x-accessToken": "{accessToken}"
+      },
+      "multipartFields": {
+        "file": "@/absolute/path/to/file.pptx",
+        "bizkey": "cloudflow"
+      }
+    }
+  }
+}

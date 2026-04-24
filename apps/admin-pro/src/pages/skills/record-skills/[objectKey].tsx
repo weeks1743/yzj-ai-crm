@@ -5,7 +5,7 @@ import {
   ProTable,
   StatisticCard,
 } from '@ant-design/pro-components';
-import { useParams } from '@umijs/max';
+import { useLocation, useNavigate, useParams } from '@umijs/max';
 import { Alert, Button, Drawer, Result, Space, Tabs, Tag, Typography, message } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { ProColumns } from '@ant-design/pro-components';
@@ -32,6 +32,10 @@ import {
 } from '../shared';
 
 const { Paragraph, Text } = Typography;
+
+interface RecordSkillsLocationState {
+  fromRecordSkills?: boolean;
+}
 
 function isShadowObjectKey(value: string | undefined): value is ShadowObjectKey {
   if (!value) {
@@ -127,7 +131,7 @@ const fieldColumns: ProColumns<ShadowStandardizedFieldView>[] = [
     render: (_, record) =>
       record.relationBinding ? (
         <Space wrap>
-          <Tag color="blue">{record.relationBinding.formCodeId ?? '未知 formCodeId'}</Tag>
+          <Tag color="blue">{record.relationBinding.formCodeId ?? '关联模板未识别'}</Tag>
           <Tag>{record.relationBinding.modelName ?? '未知模型'}</Tag>
           <Tag>{record.relationBinding.displayCol ?? '未知展示列'}</Tag>
         </Space>
@@ -194,6 +198,8 @@ const referenceColumns: ProColumns<ShadowSkillView>[] = [
 
 const RecordSkillDetailPage = () => {
   const params = useParams<{ objectKey: string }>();
+  const navigate = useNavigate();
+  const location = useLocation() as { state?: RecordSkillsLocationState };
   const objectKey = isShadowObjectKey(params.objectKey) ? params.objectKey : undefined;
   const [objectDetail, setObjectDetail] = useState<ShadowObjectDetailView | null>(null);
   const [skills, setSkills] = useState<ShadowSkillView[]>([]);
@@ -241,6 +247,15 @@ const RecordSkillDetailPage = () => {
     return <Result status="404" title="对象详情不存在" />;
   }
 
+  const handleBack = () => {
+    if (location.state?.fromRecordSkills) {
+      navigate(-1);
+      return;
+    }
+
+    navigate('/skills/record-skills');
+  };
+
   const handleRefresh = async () => {
     setRefreshing(true);
 
@@ -257,9 +272,13 @@ const RecordSkillDetailPage = () => {
 
   return (
     <PageContainer
-      title={`${shadowObjectLabels[objectKey]}对象详情`}
-      subTitle="查看真实 shadow 对象的治理信息、技能合同、字段快照、字典绑定与引用资源。"
+      title={`${shadowObjectLabels[objectKey]}技能详情`}
+      subTitle="查看当前对象的技能、字段准备情况和字典状态。"
+      onBack={handleBack}
       extra={[
+        <Button key="back" onClick={handleBack}>
+          返回记录系统技能
+        </Button>,
         <Button key="refresh" type="primary" loading={refreshing} onClick={() => void handleRefresh()}>
           刷新模板快照
         </Button>,
@@ -268,11 +287,11 @@ const RecordSkillDetailPage = () => {
       <Alert
         type={errorMessage ? 'warning' : 'info'}
         showIcon
-        message="真实对象治理"
+        message="当前对象说明"
         description={
           errorMessage
             ? `对象详情加载失败：${errorMessage}`
-            : '此页直接消费 admin-api 的 shadow 对象详情、技能合同与字典绑定，不再展示旧的样板 templateId / codeId 文案。'
+            : '这里主要展示对象当前可用技能、字段准备情况和字典状态，帮助管理员判断是否可以投入使用。'
         }
       />
 
@@ -283,7 +302,7 @@ const RecordSkillDetailPage = () => {
           statistic={{
             title: '对象状态',
             value: objectDetail ? getActivationStatusLabel(objectDetail.activationStatus) : '-',
-            description: objectDetail?.formCodeId ?? 'formCodeId 暂无',
+            description: objectDetail?.formCodeId ? '已绑定业务模板' : '业务模板暂未配置',
           }}
         />
         <StatisticCard
@@ -316,12 +335,9 @@ const RecordSkillDetailPage = () => {
       </Space>
 
       <ProCard loading={loading} style={{ marginTop: 16 }}>
-          <ProDescriptions<ShadowObjectDetailView> column={2} dataSource={objectDetail ?? undefined}>
-          <ProDescriptions.Item label="formCodeId">
+        <ProDescriptions<ShadowObjectDetailView> column={2} dataSource={objectDetail ?? undefined}>
+          <ProDescriptions.Item label="模板编码">
             {renderCompactValue(objectDetail?.formCodeId, 360)}
-          </ProDescriptions.Item>
-          <ProDescriptions.Item label="formDefId">
-            {renderCompactValue(objectDetail?.formDefId, 240)}
           </ProDescriptions.Item>
           <ProDescriptions.Item label="接入状态">
             {objectDetail ? (
@@ -340,9 +356,6 @@ const RecordSkillDetailPage = () => {
             ) : (
               '-'
             )}
-          </ProDescriptions.Item>
-          <ProDescriptions.Item label="schemaHash">
-            {renderCompactValue(objectDetail?.schemaHash, 520)}
           </ProDescriptions.Item>
           <ProDescriptions.Item label="最近刷新">
             {objectDetail?.lastRefreshAt ?? '-'}
@@ -364,12 +377,12 @@ const RecordSkillDetailPage = () => {
         items={[
           {
             key: 'skills',
-            label: '对象能力',
+            label: '技能清单',
             children:
               skills.length === 0 ? (
                 <Result
                   status="info"
-                  title="当前对象尚未生成对象能力"
+                  title="当前对象尚未生成技能"
                   subTitle="可先检查对象是否已激活、是否完成模板刷新。"
                 />
               ) : (
@@ -382,7 +395,7 @@ const RecordSkillDetailPage = () => {
                       bordered
                       style={{ cursor: 'pointer', height: '100%' }}
                       onClick={() => setSelectedSkill(skill)}
-                      title={`${shadowOperationLabels[skill.operation]}能力`}
+                      title={`${shadowOperationLabels[skill.operation]}技能`}
                       extra={
                         <Space>
                           <Tag color="blue">{skill.skillName}</Tag>
@@ -417,7 +430,7 @@ const RecordSkillDetailPage = () => {
                           event.stopPropagation();
                           setSelectedSkill(skill);
                         }}>
-                          查看能力详情
+                          查看技能详情
                         </Button>
                       </Space>
                     </ProCard>
@@ -483,7 +496,7 @@ const RecordSkillDetailPage = () => {
 
       <Drawer
         width={860}
-        title={selectedSkill ? `${shadowOperationLabels[selectedSkill.operation]}能力详情` : '能力详情'}
+        title={selectedSkill ? `${shadowOperationLabels[selectedSkill.operation]}技能详情` : '技能详情'}
         open={Boolean(selectedSkill)}
         onClose={() => setSelectedSkill(null)}
       >

@@ -94,7 +94,7 @@ export default [
     icon: 'tool',
     routes: [
       {
-        name: '记录系统对象',
+        name: '记录系统技能',
         path: '/skills/record-skills',
         icon: 'api',
         component: './skills/record-skills/index',
