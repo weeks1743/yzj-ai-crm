@@ -201,9 +201,16 @@ export class LightCloudClient {
       response,
       '删除轻云单据失败',
     )) as YzjLightCloudBatchDeleteResponse;
+    const fallbackFormInstIds = Array.isArray(params.body.formInstIds)
+      ? params.body.formInstIds.filter(
+          (item): item is string => typeof item === 'string' && item.length > 0,
+        )
+      : [];
     const formInstIds = Array.isArray(payload.data)
       ? payload.data.filter((item): item is string => typeof item === 'string' && item.length > 0)
-      : null;
+      : payload.data == null && payload.success
+        ? fallbackFormInstIds
+        : null;
 
     if (!response.ok || !payload.success || !formInstIds) {
       throw new YzjApiError('删除轻云单据失败', {

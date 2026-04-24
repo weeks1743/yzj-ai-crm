@@ -251,3 +251,30 @@ test('LightCloudClient tolerates invalid numeric exception keys in batchSave res
     },
   );
 });
+
+test('LightCloudClient falls back to requested formInstIds when batchDelete succeeds with null data', async () => {
+  const client = new LightCloudClient({
+    baseUrl: 'https://stub.yzj.local',
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          success: true,
+          errorCode: 0,
+          data: null,
+        }),
+        { status: 200 },
+      ),
+  });
+
+  const deletedFormInstIds = await client.batchDelete({
+    accessToken: 'good-token',
+    body: {
+      eid: '21024647',
+      formCodeId: 'opportunity-form-001',
+      oid: 'oid-1',
+      formInstIds: ['form-inst-001'],
+    },
+  });
+
+  assert.deepEqual(deletedFormInstIds, ['form-inst-001']);
+});

@@ -6,7 +6,7 @@
       "mode": "create",
       "operatorOpenId": "{operatorOpenId}",
       "params": {
-        "customer_name": "{customer_name}"
+        "Te_4": "{Te_4}"
       }
     }
   },
@@ -23,7 +23,7 @@
       "data": [
         {
           "widgetValue": {
-            "Te_4": "{customer_name}"
+            "Te_4": "{Te_4}"
           }
         }
       ]
@@ -36,7 +36,7 @@
       "mode": "create",
       "operatorOpenId": "{operatorOpenId}",
       "params": {
-        "customer_name": "{customer_name}"
+        "Te_4": "{Te_4}"
       }
     }
   },
@@ -53,7 +53,7 @@
       "data": [
         {
           "widgetValue": {
-            "Te_4": "{customer_name}"
+            "Te_4": "{Te_4}"
           }
         }
       ]

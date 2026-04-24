@@ -10,11 +10,11 @@ Use this bundle only for the `contact` object. It is generated from the current 
 ## Snapshot
 
 - `formCodeId`: `a3ccc61c75c34cb28a7113a311418080`
-- `source_version`: `2026-04-23T16:35:58.394Z`
-- `schema_hash`: `89270c89212d60836c0e9a5c2cad66a1366c71dde9bcf8cbbd7337f3321594c9`
+- `source_version`: `2026-04-24T08:59:16.078Z`
+- `schema_hash`: `7c459d4595458c31a6fe4dde23fa1ceb35d42e579beacf26a69be9260fc9985e`
 - `field_count`: `29`
-- `resolved_public_option_fields`: `0`
-- `pending_public_option_fields`: `3`
+- `resolved_public_option_fields`: `3`
+- `pending_public_option_fields`: `0`
 
 ## Workflow
 
@@ -23,6 +23,30 @@ Use this bundle only for the `contact` object. It is generated from the current 
 3. For any `publicOptBoxWidget`, inspect `references/dictionaries.json` before accepting or mapping user input.
 4. Use the preview defined in `references/execution.json` first; after explicit confirmation, call the live API.
 5. Never invent fields, `dicId` values, or aliases that are absent from the referenced snapshot files.
+
+## Interaction Strategy
+
+### Recommended Flow
+- 先通过 search 或 get 确认待删除记录。
+- 汇总精确 `form_inst_ids` 与对象摘要，再请求用户做明确删除确认。
+- 确认后再调用 delete，不把模糊条件直接升级为删除请求。
+
+### Parameter Collection
+- 如果用户只给名称、关键词或模糊范围，不直接删，先回到 search 缩小范围。
+
+### Clarification Rules
+- 当 缺少 `form_inst_ids` 时：先走 search / get，拿到精确记录 id 后再继续 delete。
+- 当 候选记录多于一条 时：逐条展示候选，请用户明确选择要删除的记录集合。
+
+### Disambiguation Rules
+- delete 只接受精确记录 id，不接受按名称、编码或模糊条件自动扩展删除范围。
+
+### Target Resolution
+- `form_inst_ids` 必须来自用户显式提供，或来自上一跳 search / get 的确定结果。
+
+### Execution Guardrails
+- delete 是破坏性操作，必须先展示目标摘要，再等待明确确认。
+- 禁止静默补全、猜测或扩大删除列表。
 
 ## Input Rules
 
@@ -33,12 +57,7 @@ Use this bundle only for the `contact` object. It is generated from the current 
 
 - `form_inst_ids` is mandatory and must contain exact LightCloud `formInstId` values gathered from a prior search/get result. Do not guess, fuzzily derive, or silently expand this list.
 
-
-
-
-
-
-- `publicOptBoxWidget` fields without `referId` stay in template references for context only until a usable dictionary source is available. Do not invent enum payloads.
+- `province`, `city`, and `district` are backed by field-bound workbook dictionaries. Template `linkCodeId` metadata is preserved in references, but the current runtime still does not perform real province-city-district cascade filtering. Title-only mapping is allowed only when the title is unique; for repeated labels such as `城区`, pass a full `{title,dicId}` object.
 
 ## Public Option Rules
 
@@ -52,7 +71,7 @@ Use this bundle only for the `contact` object. It is generated from the current 
 - Internal live API: `POST /api/shadow/objects/contact/execute/delete`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchDelete?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchDelete?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.20`; live write is enabled and should only be used after explicit user confirmation.
+- This bundle is generated for phase `0.2.21`; live write is enabled and should only be used after explicit user confirmation.
 
 ## References
 

@@ -1,3 +1,4 @@
+import { dirname, resolve } from 'node:path';
 import { ApprovalFileClient } from './approval-file-client.js';
 import { ApprovalFileService } from './approval-file-service.js';
 import { ApprovalClient } from './approval-client.js';
@@ -46,9 +47,12 @@ const shadowMetadataService = new ShadowMetadataService({
     source: config.shadow.dictionarySource,
     jsonPath: config.shadow.dictionaryJsonPath,
     approvalClient,
+    fieldBoundWorkbookPath: resolve(
+      dirname(config.meta.envFilePath),
+      'yzj-api/省市区数据信息.xlsx',
+    ),
   }),
 });
-
 const server = createAdminApiServer({
   config,
   orgSyncService,

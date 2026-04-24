@@ -11,7 +11,37 @@
   "optionalParams": [],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "customer-delete-preview",
+  "interactionStrategy": {
+    "recommendedFlow": [
+      "先通过 search 或 get 确认待删除记录。",
+      "汇总精确 `form_inst_ids` 与对象摘要，再请求用户做明确删除确认。",
+      "确认后再调用 delete，不把模糊条件直接升级为删除请求。"
+    ],
+    "parameterCollectionPolicy": [
+      "如果用户只给名称、关键词或模糊范围，不直接删，先回到 search 缩小范围。"
+    ],
+    "clarificationTriggers": [
+      {
+        "when": "缺少 `form_inst_ids`",
+        "response": "先走 search / get，拿到精确记录 id 后再继续 delete。"
+      },
+      {
+        "when": "候选记录多于一条",
+        "response": "逐条展示候选，请用户明确选择要删除的记录集合。"
+      }
+    ],
+    "disambiguationRules": [
+      "delete 只接受精确记录 id，不接受按名称、编码或模糊条件自动扩展删除范围。"
+    ],
+    "targetResolutionPolicy": [
+      "`form_inst_ids` 必须来自用户显式提供，或来自上一跳 search / get 的确定结果。"
+    ],
+    "executionGuardrails": [
+      "delete 是破坏性操作，必须先展示目标摘要，再等待明确确认。",
+      "禁止静默补全、猜测或扩大删除列表。"
+    ]
+  },
   "sourceObject": "customer",
   "sourceFormCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
-  "sourceVersion": "2026-04-24T03:10:49.533Z"
+  "sourceVersion": "2026-04-24T08:38:15.214Z"
 }

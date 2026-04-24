@@ -10,8 +10,8 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 ## Snapshot
 
 - `formCodeId`: `b1869173654e49fbac0b1fc6ad37e761`
-- `source_version`: `2026-04-24T06:51:23.818Z`
-- `schema_hash`: `9ced7ef94b18fb9c048b536899bb649e43148a50d0c2c2afd34d0be3d25120d6`
+- `source_version`: `2026-04-24T08:59:16.425Z`
+- `schema_hash`: `b756c899b70ec303bda1afb5be00c376c22341eb62bf05be0b67d6a7c2315e39`
 - `field_count`: `35`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -24,6 +24,29 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 4. Prefer the live API defined in `references/execution.json`; fall back to preview only when you need a dry-run.
 5. Never invent fields, `dicId` values, or aliases that are absent from the referenced snapshot files.
 
+## Interaction Strategy
+
+### Recommended Flow
+- 仅在目标记录已经唯一确定时使用本技能。
+- 优先消费用户显式提供的 `form_inst_id` 或上一跳 search 的结果。
+- 如果用户仍是模糊描述，先退回对应对象的 search 技能完成目标定位。
+
+### Parameter Collection
+- get 阶段只补目标识别信息，不补问与当前详情读取无关的可写字段。
+
+### Clarification Rules
+- 当 缺少 `form_inst_id` 时：改走对应对象的 search，或请用户从候选结果中指定唯一记录。
+- 当 用户给的是名称/编码，但还没有唯一定位 时：先做 search 缩小范围，再携带准确 `formInstId` 调用 get。
+
+### Disambiguation Rules
+- 不要根据名称、编码或自然语言描述直接猜测详情目标。
+
+### Target Resolution
+- 唯一 `form_inst_id` 是 get 的硬前置条件。
+
+### Execution Guardrails
+- get 是只读动作；若下一步要修改数据，应保留本次返回的 `formInstId` 再切到 update。
+
 ## Input Rules
 
 - Required params: form_inst_id
@@ -32,15 +55,8 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 - This is a read / preview skill and does not require write confirmation.
 - `form_inst_id` is mandatory. Do not guess it from customer names or fuzzy search results.
 
-
-
-
 - Relation field `linked_contact_form_inst_id` maps to `Bd_2`; exact search uses `_S_NAME` as `_name_`, target `formCodeId` is `a3ccc61c75c34cb28a7113a311418080`.
 - Relation field `linked_customer_form_inst_id` maps to `Bd_1`; exact search uses `_S_ENCODE` as `_name_`, target `formCodeId` is `e2cfd2aef9bf4576a760aa1c6a557170`.
-
-
-
-
 
 ## Public Option Rules
 
@@ -54,7 +70,7 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 - Internal live API: `POST /api/shadow/objects/opportunity/execute/get`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/list?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/list?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.20`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.2.21`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

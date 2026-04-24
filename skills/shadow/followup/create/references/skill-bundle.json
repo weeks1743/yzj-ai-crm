@@ -7,10 +7,11 @@
   "notWhenToUse": "当用户只是查询商机跟进记录、分析商机跟进记录或未准备写入确认时不要使用。",
   "requiredParams": [],
   "optionalParams": [
-    "customer_name",
+    "Te_4",
     "Ra_2",
     "Te_1",
-    "customer_status",
+    "Te_0",
+    "Ra_0",
     "Ra_1",
     "Bd_4",
     "linked_opportunity_form_inst_id",
@@ -23,7 +24,49 @@
   ],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "followup-create-preview",
+  "interactionStrategy": {
+    "recommendedFlow": [
+      "先把用户意图映射成业务语义参数，而不是要求其按模板字段码录单。",
+      "优先吸收当前对话里已经给出的值，再只追问缺失必填或高价值字段。",
+      "关系、人员、公共选项和附件先完成解析与校验，再生成 preview。",
+      "向用户展示将要写入的关键字段摘要，得到明确确认后才执行 live write。"
+    ],
+    "parameterCollectionPolicy": [
+      "追问时使用业务标签，例如 商机跟进记录关键字段，不要直接暴露 `codeId`。",
+      "允许用户分多轮补充信息，不要一次性索要全部可选字段。",
+      "用户只给自然语言描述时，先保留原意图，再补齐必填和引用信息。",
+      "当用户只说“关联松井客户/挂到某联系人”这类口语化关系时，先 search 关联对象拿到精确记录，再回填。",
+      "人员字段默认收 `open_id`；若用户只给姓名且存在歧义，需要继续确认到具体人员。",
+      "附件字段先走上传技能或上传接口，拿到文件对象后再写入当前 skill。"
+    ],
+    "clarificationTriggers": [
+      {
+        "when": "缺少必填字段",
+        "response": "只追问当前创建必须补齐的字段，优先使用业务标签而不是参数名或字段码。"
+      },
+      {
+        "when": "关联对象、人员或公共选项值无法唯一解析",
+        "response": "返回候选或要求补充精确标识，不要自动猜测写入值。"
+      },
+      {
+        "when": "用户要求写入当前未支持的字段",
+        "response": "明确指出该字段当前未被影子技能支持，并建议留空或改走专门技能。"
+      }
+    ],
+    "disambiguationRules": [
+      "关系字段如果命中多个记录，必须让用户选定唯一候选，不允许静默挑一个。"
+    ],
+    "targetResolutionPolicy": [
+      "create 不需要当前对象 `formInstId`，但所有关联对象都必须在写前解析成精确 id 或关系对象。"
+    ],
+    "executionGuardrails": [
+      "先 preview，再确认，再 live write。",
+      "不要为了凑齐 payload 发明默认值、`dicId`、关联记录或人员标识。",
+      "用户未提及的可选字段默认保持不写入，而不是自动补全。",
+      "当前模板中的未支持字段（如 地理位置(Lo_0, locationWidget) 当前未纳入影子技能写入支持）必须留空或走专门技能，不能近似写入。"
+    ]
+  },
   "sourceObject": "followup",
   "sourceFormCodeId": "0a618c5d806545b997f60e8461b3f504",
-  "sourceVersion": "2026-04-24T06:51:23.851Z"
+  "sourceVersion": "2026-04-24T08:59:16.696Z"
 }

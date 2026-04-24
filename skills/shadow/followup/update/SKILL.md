@@ -10,8 +10,8 @@ Use this bundle only for the `followup` object. It is generated from the current
 ## Snapshot
 
 - `formCodeId`: `0a618c5d806545b997f60e8461b3f504`
-- `source_version`: `2026-04-24T06:51:23.851Z`
-- `schema_hash`: `6ea01274538ebbae4a6204604f5d4c54be636e480edbad36bf4258371db407b6`
+- `source_version`: `2026-04-24T08:59:16.696Z`
+- `schema_hash`: `d55c4662f9ef053014f3e657f68f8028775db7ab1e4052fa09ec1aae0731f05a`
 - `field_count`: `23`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -24,13 +24,45 @@ Use this bundle only for the `followup` object. It is generated from the current
 4. Use the preview defined in `references/execution.json` first; after explicit confirmation, call the live API.
 5. Never invent fields, `dicId` values, or aliases that are absent from the referenced snapshot files.
 
+## Interaction Strategy
+
+### Recommended Flow
+- 先解析用户要改哪一条记录，以及要改哪些字段。
+- 如果缺少 `form_inst_id`，先用名称、编码、关联线索或日期条件 search，拿到唯一目标后再更新。
+- 只收集用户明确想改的字段；未提及字段保持原值不动。
+- 变更值归一化后先生成 preview，得到明确确认后再执行 live write。
+
+### Parameter Collection
+- 追问时优先使用业务标签和变更目标，不要求用户先给字段码。
+- 如果用户像“把松井客户类型改成 VIP 客户”这样表达，先提取目标线索与变更意图，再通过 search 解析目标记录。
+- 如果已经有上一跳 search / get 结果，优先复用其中的 `formInstId`。
+- 当更新关系字段时，优先把用户口语化描述解析成关联对象，再回填精确关系值。
+- 附件更新仍应先完成上传，再把上传结果对象作为变更值写入。
+
+### Clarification Rules
+- 当 目标记录尚未唯一解析 时：先返回候选并要求用户选择唯一记录，再进入 update。
+- 当 没有提取到任何有效变更字段 时：请用户明确说明希望修改哪些字段和值，而不是直接发起空更新。
+- 当 新值是歧义的人员、关联对象或公共选项 时：要求补充精确标识、候选选择或完整 `{title,dicId}`，不要自动猜测。
+
+### Disambiguation Rules
+- 关系字段若命中多个候选，必须停下来澄清，不允许直接覆盖已有关联。
+- 人员字段同名或无法唯一识别时，只接受精确 `open_id` 或唯一候选。
+
+### Target Resolution
+- update 的硬前置是唯一目标；可以通过 search 获得 `formInstId`，但不能直接按模糊名称更新。
+
+### Execution Guardrails
+- 只发送 `form_inst_id` 加本次变更字段，不清空未提及字段。
+- 先 preview，再确认，再 live write。
+- 当前模板中的未支持字段（如 地理位置(Lo_0, locationWidget) 当前未纳入影子技能写入支持）必须拒绝写入，不能用近似结构替代。
+- 如果当前上下文能拿到旧值，应在确认摘要中显式展示旧值 / 新值，避免误覆盖关键字段。
+
 ## Input Rules
 
 - Required params: form_inst_id
-- Optional params: customer_name, Ra_2, Te_1, customer_status, Ra_1, Bd_4, linked_opportunity_form_inst_id, linked_customer_form_inst_id, Da_0, Da_1, owner_open_id, Ta_0, At_0
+- Optional params: Te_4, Ra_2, Te_1, Te_0, Ra_0, Ra_1, Bd_4, linked_opportunity_form_inst_id, linked_customer_form_inst_id, Da_0, Da_1, owner_open_id, Ta_0, At_0
 - Confirmation policy: `required_before_write`
 - This write skill now exposes a live write API. Use preview first, then call live write only after explicit user confirmation.
-
 
 - Person fields should use Yunzhijia personnel `open_id` values. Single-select person params may be passed as a plain `open_id` string and will be normalized to the LightCloud string-array format.
 - Attachment fields accept either a single uploaded file object or an array. Upload local files first with `$approval.file_upload`, then pass `{fileId,fileName,fileSize,fileType,fileExt}` objects exactly as returned by the file-upload skill or internal upload API.
@@ -38,10 +70,6 @@ Use this bundle only for the `followup` object. It is generated from the current
 - Relation field `Bd_4` maps to `Bd_4`; exact search uses `_S_SERIAL` as `_name_`, target `formCodeId` is `eea919bb0e69418698ff457e74cc1c2b`.
 - Relation field `linked_opportunity_form_inst_id` maps to `Bd_3`; exact search uses `_S_SERIAL` as `_name_`, target `formCodeId` is `b1869173654e49fbac0b1fc6ad37e761`.
 - Relation field `linked_customer_form_inst_id` maps to `Bd_0`; exact search uses `_S_ENCODE` as `_name_`, target `formCodeId` is `e2cfd2aef9bf4576a760aa1c6a557170`.
-
-
-
-
 
 ## Public Option Rules
 
@@ -55,7 +83,7 @@ Use this bundle only for the `followup` object. It is generated from the current
 - Internal live API: `POST /api/shadow/objects/followup/execute/upsert`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.20`; live write is enabled and should only be used after explicit user confirmation.
+- This bundle is generated for phase `0.2.21`; live write is enabled and should only be used after explicit user confirmation.
 
 ## References
 

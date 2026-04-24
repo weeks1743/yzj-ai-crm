@@ -10,8 +10,8 @@ Use this bundle only for the `followup` object. It is generated from the current
 ## Snapshot
 
 - `formCodeId`: `0a618c5d806545b997f60e8461b3f504`
-- `source_version`: `2026-04-24T06:51:23.851Z`
-- `schema_hash`: `6ea01274538ebbae4a6204604f5d4c54be636e480edbad36bf4258371db407b6`
+- `source_version`: `2026-04-24T08:59:16.696Z`
+- `schema_hash`: `d55c4662f9ef053014f3e657f68f8028775db7ab1e4052fa09ec1aae0731f05a`
 - `field_count`: `23`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -24,6 +24,29 @@ Use this bundle only for the `followup` object. It is generated from the current
 4. Prefer the live API defined in `references/execution.json`; fall back to preview only when you need a dry-run.
 5. Never invent fields, `dicId` values, or aliases that are absent from the referenced snapshot files.
 
+## Interaction Strategy
+
+### Recommended Flow
+- 仅在目标记录已经唯一确定时使用本技能。
+- 优先消费用户显式提供的 `form_inst_id` 或上一跳 search 的结果。
+- 如果用户仍是模糊描述，先退回对应对象的 search 技能完成目标定位。
+
+### Parameter Collection
+- get 阶段只补目标识别信息，不补问与当前详情读取无关的可写字段。
+
+### Clarification Rules
+- 当 缺少 `form_inst_id` 时：改走对应对象的 search，或请用户从候选结果中指定唯一记录。
+- 当 用户给的是名称/编码，但还没有唯一定位 时：先做 search 缩小范围，再携带准确 `formInstId` 调用 get。
+
+### Disambiguation Rules
+- 不要根据名称、编码或自然语言描述直接猜测详情目标。
+
+### Target Resolution
+- 唯一 `form_inst_id` 是 get 的硬前置条件。
+
+### Execution Guardrails
+- get 是只读动作；若下一步要修改数据，应保留本次返回的 `formInstId` 再切到 update。
+
 ## Input Rules
 
 - Required params: form_inst_id
@@ -32,16 +55,9 @@ Use this bundle only for the `followup` object. It is generated from the current
 - This is a read / preview skill and does not require write confirmation.
 - `form_inst_id` is mandatory. Do not guess it from customer names or fuzzy search results.
 
-
-
-
 - Relation field `Bd_4` maps to `Bd_4`; exact search uses `_S_SERIAL` as `_name_`, target `formCodeId` is `eea919bb0e69418698ff457e74cc1c2b`.
 - Relation field `linked_opportunity_form_inst_id` maps to `Bd_3`; exact search uses `_S_SERIAL` as `_name_`, target `formCodeId` is `b1869173654e49fbac0b1fc6ad37e761`.
 - Relation field `linked_customer_form_inst_id` maps to `Bd_0`; exact search uses `_S_ENCODE` as `_name_`, target `formCodeId` is `e2cfd2aef9bf4576a760aa1c6a557170`.
-
-
-
-
 
 ## Public Option Rules
 
@@ -55,7 +71,7 @@ Use this bundle only for the `followup` object. It is generated from the current
 - Internal live API: `POST /api/shadow/objects/followup/execute/get`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/list?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/list?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.20`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.2.21`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

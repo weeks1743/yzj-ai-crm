@@ -3,8 +3,8 @@
   "objectLabel": "商机",
   "formCodeId": "b1869173654e49fbac0b1fc6ad37e761",
   "formDefId": null,
-  "sourceVersion": "2026-04-24T06:51:23.818Z",
-  "schemaHash": "9ced7ef94b18fb9c048b536899bb649e43148a50d0c2c2afd34d0be3d25120d6",
+  "sourceVersion": "2026-04-24T08:59:16.425Z",
+  "schemaHash": "b756c899b70ec303bda1afb5be00c376c22341eb62bf05be0b67d6a7c2315e39",
   "fieldCount": 35,
   "normalizedFields": [
     {
@@ -109,8 +109,7 @@
       "required": false,
       "readOnly": false,
       "multi": false,
-      "options": [],
-      "semanticSlot": "customer_name"
+      "options": []
     },
     {
       "fieldCode": "Te_16",
@@ -119,8 +118,7 @@
       "required": false,
       "readOnly": false,
       "multi": false,
-      "options": [],
-      "semanticSlot": "customer_name"
+      "options": []
     },
     {
       "fieldCode": "_S_TITLE",

@@ -10,11 +10,11 @@ Use this bundle only for the `contact` object. It is generated from the current 
 ## Snapshot
 
 - `formCodeId`: `a3ccc61c75c34cb28a7113a311418080`
-- `source_version`: `2026-04-23T16:35:58.394Z`
-- `schema_hash`: `89270c89212d60836c0e9a5c2cad66a1366c71dde9bcf8cbbd7337f3321594c9`
+- `source_version`: `2026-04-24T08:59:16.078Z`
+- `schema_hash`: `7c459d4595458c31a6fe4dde23fa1ceb35d42e579beacf26a69be9260fc9985e`
 - `field_count`: `29`
-- `resolved_public_option_fields`: `0`
-- `pending_public_option_fields`: `3`
+- `resolved_public_option_fields`: `3`
+- `pending_public_option_fields`: `0`
 
 ## Workflow
 
@@ -24,6 +24,29 @@ Use this bundle only for the `contact` object. It is generated from the current 
 4. Prefer the live API defined in `references/execution.json`; fall back to preview only when you need a dry-run.
 5. Never invent fields, `dicId` values, or aliases that are absent from the referenced snapshot files.
 
+## Interaction Strategy
+
+### Recommended Flow
+- 仅在目标记录已经唯一确定时使用本技能。
+- 优先消费用户显式提供的 `form_inst_id` 或上一跳 search 的结果。
+- 如果用户仍是模糊描述，先退回对应对象的 search 技能完成目标定位。
+
+### Parameter Collection
+- get 阶段只补目标识别信息，不补问与当前详情读取无关的可写字段。
+
+### Clarification Rules
+- 当 缺少 `form_inst_id` 时：改走对应对象的 search，或请用户从候选结果中指定唯一记录。
+- 当 用户给的是名称/编码，但还没有唯一定位 时：先做 search 缩小范围，再携带准确 `formInstId` 调用 get。
+
+### Disambiguation Rules
+- 不要根据名称、编码或自然语言描述直接猜测详情目标。
+
+### Target Resolution
+- 唯一 `form_inst_id` 是 get 的硬前置条件。
+
+### Execution Guardrails
+- get 是只读动作；若下一步要修改数据，应保留本次返回的 `formInstId` 再切到 update。
+
 ## Input Rules
 
 - Required params: form_inst_id
@@ -32,14 +55,9 @@ Use this bundle only for the `contact` object. It is generated from the current 
 - This is a read / preview skill and does not require write confirmation.
 - `form_inst_id` is mandatory. Do not guess it from customer names or fuzzy search results.
 
-
-
-
 - Relation field `linked_customer_form_inst_id` maps to `Bd_0`; exact search uses `_S_NAME` as `_name_`, target `formCodeId` is `e2cfd2aef9bf4576a760aa1c6a557170`.
 
-
-
-- `publicOptBoxWidget` fields without `referId` stay in template references for context only until a usable dictionary source is available. Do not invent enum payloads.
+- `province`, `city`, and `district` are backed by field-bound workbook dictionaries. Template `linkCodeId` metadata is preserved in references, but the current runtime still does not perform real province-city-district cascade filtering. Title-only mapping is allowed only when the title is unique; for repeated labels such as `城区`, pass a full `{title,dicId}` object.
 
 ## Public Option Rules
 
@@ -53,7 +71,7 @@ Use this bundle only for the `contact` object. It is generated from the current 
 - Internal live API: `POST /api/shadow/objects/contact/execute/get`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/list?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/list?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.20`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.2.21`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

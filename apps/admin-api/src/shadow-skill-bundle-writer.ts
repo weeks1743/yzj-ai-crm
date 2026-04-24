@@ -24,7 +24,7 @@ interface WriteShadowSkillBundlesParams {
   skills: ShadowSkillContract[];
 }
 
-const SHADOW_SKILL_PHASE = '0.2.20';
+const SHADOW_SKILL_PHASE = '0.2.21';
 
 function toJsonFile(payload: unknown): string {
   return `${JSON.stringify(payload, null, 2)}\n`;
@@ -51,6 +51,16 @@ function toTitleCase(operation: ShadowSkillContract['operation']): string {
 
 function formatCodeList(values: string[]): string {
   return values.length > 0 ? values.map((value) => `\`${value}\``).join(', ') : '(none)';
+}
+
+function renderBulletLines(values: string[]): string[] {
+  return values.map((value) => `- ${value}`);
+}
+
+function renderClarificationRuleLines(
+  rules: ShadowSkillContract['interactionStrategy']['clarificationTriggers'],
+): string[] {
+  return rules.map((rule) => `- 当 ${rule.when} 时：${rule.response}`);
 }
 
 function getSearchCoverageSummary(
@@ -110,6 +120,7 @@ function getSearchCoverageSummary(
       field.widgetType === 'detailedWidget' ||
       field.widgetType === 'arithmeticWidget' ||
       field.widgetType === 'imageWidget' ||
+      field.widgetType === 'locationWidget' ||
       field.widgetType === 'relatedWidget' ||
       field.widgetType === 'kingGridWidget'
     ) {
@@ -239,6 +250,11 @@ function renderSkillMarkdown(params: {
     skill.operation === 'search' && skill.sourceObject === 'customer'
       ? '- Customer search preview examples use the minimal linked-contact display value `CON-20260424-001` and date-range timestamps such as `[1777046400000,1777132799999]`.'
       : null;
+  const fieldBoundDictionaryNote = fields.some((field) =>
+    ['province', 'city', 'district'].includes(field.semanticSlot ?? ''),
+  )
+    ? '- `province`, `city`, and `district` are backed by field-bound workbook dictionaries. Template `linkCodeId` metadata is preserved in references, but the current runtime still does not perform real province-city-district cascade filtering. Title-only mapping is allowed only when the title is unique; for repeated labels such as `城区`, pass a full `{title,dicId}` object.'
+    : null;
   const ignoredFieldNote = fields.some(
     (field) =>
       field.widgetType === 'publicOptBoxWidget' && !field.referId,
@@ -250,7 +266,7 @@ function renderSkillMarkdown(params: {
       ? getSearchCoverageSummary(skill, fields)
       : null;
 
-  return [
+  const lines = [
     '---',
     `name: ${skill.skillName}`,
     `description: ${getOperationShortDescription(objectLabel, skill.operation)}，并引用当前模板快照与公共选项资源。`,
@@ -281,6 +297,26 @@ function renderSkillMarkdown(params: {
       : '4. Build or call the preview defined in `references/execution.json`.',
     '5. Never invent fields, `dicId` values, or aliases that are absent from the referenced snapshot files.',
     '',
+    '## Interaction Strategy',
+    '',
+    '### Recommended Flow',
+    ...renderBulletLines(skill.interactionStrategy.recommendedFlow),
+    '',
+    '### Parameter Collection',
+    ...renderBulletLines(skill.interactionStrategy.parameterCollectionPolicy),
+    '',
+    '### Clarification Rules',
+    ...renderClarificationRuleLines(skill.interactionStrategy.clarificationTriggers),
+    '',
+    '### Disambiguation Rules',
+    ...renderBulletLines(skill.interactionStrategy.disambiguationRules),
+    '',
+    '### Target Resolution',
+    ...renderBulletLines(skill.interactionStrategy.targetResolutionPolicy),
+    '',
+    '### Execution Guardrails',
+    ...renderBulletLines(skill.interactionStrategy.executionGuardrails),
+    '',
     '## Input Rules',
     '',
     `- Required params: ${requiredParams}`,
@@ -296,6 +332,7 @@ function renderSkillMarkdown(params: {
     searchFieldNote ?? '',
     operatorVisibilityNote ?? '',
     customerSearchExampleNote ?? '',
+    fieldBoundDictionaryNote ?? '',
     ignoredFieldNote ?? '',
     '',
     searchCoverage ? '## Search Coverage' : null,
@@ -349,9 +386,18 @@ function renderSkillMarkdown(params: {
     '- `references/dictionaries.json`',
     '- `references/execution.json`',
     '',
-  ]
-    .filter((line) => line !== null && line !== undefined)
-    .join('\n');
+  ].filter((line): line is string => line !== null && line !== undefined);
+
+  const normalizedLines: string[] = [];
+  for (const line of lines) {
+    if (line === '' && normalizedLines[normalizedLines.length - 1] === '') {
+      continue;
+    }
+
+    normalizedLines.push(line);
+  }
+
+  return normalizedLines.join('\n');
 }
 
 export class ShadowSkillBundleWriter {
@@ -405,6 +451,7 @@ export class ShadowSkillBundleWriter {
           optionalParams: enrichedSkill.optionalParams,
           confirmationPolicy: enrichedSkill.confirmationPolicy,
           outputCardType: enrichedSkill.outputCardType,
+          interactionStrategy: enrichedSkill.interactionStrategy,
           sourceObject: enrichedSkill.sourceObject,
           sourceFormCodeId: enrichedSkill.sourceFormCodeId,
           sourceVersion: enrichedSkill.sourceVersion,

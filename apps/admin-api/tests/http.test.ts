@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { YzjEmployee } from '../src/contracts.js';
+import * as XLSX from 'xlsx';
 import { ApprovalFileClient } from '../src/approval-file-client.js';
 import { ApprovalFileService } from '../src/approval-file-service.js';
 import { ApprovalClient } from '../src/approval-client.js';
@@ -23,10 +24,36 @@ const CUSTOMER_FORM_CODE_ID = 'customer-form-001';
 const CONTACT_FORM_CODE_ID = 'contact-form-001';
 const OPPORTUNITY_FORM_CODE_ID = 'opportunity-form-001';
 const FOLLOWUP_FORM_CODE_ID = 'followup-form-001';
+const ORDER_CHANGE_FORM_CODE_ID = 'order-change-form-001';
+const CUSTOMER_FORM_INST_ID = 'form-inst-001';
+const CONTACT_FORM_INST_ID = 'contact-inst-001';
+const OPPORTUNITY_FORM_INST_ID = 'opportunity-inst-001';
+const FOLLOWUP_FORM_INST_ID = 'followup-inst-001';
+const ORDER_CHANGE_FORM_INST_ID = 'change-inst-001';
 const CUSTOMER_SEARCH_OID = '69e75eb5e4b0e65b61c014da';
 const CONTACT_SEARCH_OID = '66160cfde4b014e237ba75ca';
 const SEARCH_RANGE_START_TS = 1777046400000;
 const SEARCH_RANGE_END_TS = 1777132799999;
+
+function writeFieldBoundWorkbook(workbookPath: string) {
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet([
+    { dicId: 'meta', title: 'meta', parentId: '0', code: '', sort: 0, type: 2 },
+    { dicId: 'd005', title: '省', parentId: '0', code: 'province', sort: 1, type: 1 },
+    { dicId: 'd006', title: '市', parentId: '0', code: 'city', sort: 2, type: 1 },
+    { dicId: 'd007', title: '区', parentId: '0', code: 'district', sort: 3, type: 1 },
+    { dicId: 'd-province-js', title: '江苏', parentId: 'd005', code: '320000', sort: 4, type: 0 },
+    { dicId: 'd-province-zj', title: '浙江', parentId: 'd005', code: '330000', sort: 1, type: 0 },
+    { dicId: 'd-city-nt', title: '南通市', parentId: 'd006', code: '320600', sort: 4, type: 0 },
+    { dicId: 'd-city-hz', title: '杭州', parentId: 'd006', code: '330100', sort: 1, type: 0 },
+    { dicId: 'd-district-ct-a', title: '城区', parentId: 'd007', code: '320601', sort: 10, type: 0 },
+    { dicId: 'd-district-ct-b', title: '城区', parentId: 'd007', code: '310112', sort: 11, type: 0 },
+    { dicId: 'd-district-hm', title: '海门市', parentId: 'd007', code: '320684', sort: 12, type: 0 },
+    { dicId: 'd-district-bj', title: '滨江', parentId: 'd007', code: '330108', sort: 1, type: 0 },
+  ]);
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+  XLSX.writeFile(workbook, workbookPath);
+}
 
 const CUSTOMER_WIDGET_MAP = {
   _S_NAME: {
@@ -129,12 +156,14 @@ const CUSTOMER_WIDGET_MAP = {
     codeId: 'Pw_0',
     title: '省',
     type: 'publicOptBoxWidget',
+    linkCodeId: 'Pw_1',
     required: false,
   },
   Pw_1: {
     codeId: 'Pw_1',
     title: '市',
     type: 'publicOptBoxWidget',
+    linkCodeId: 'Pw_2',
     required: false,
   },
   Pw_2: {
@@ -286,6 +315,12 @@ const OPPORTUNITY_WIDGET_MAP = {
     type: 'dateWidget',
     required: false,
   },
+  Ps_0: {
+    codeId: 'Ps_0',
+    title: '负责人',
+    type: 'personSelectWidget',
+    required: false,
+  },
   Bd_0: {
     codeId: 'Bd_0',
     title: '关联客户',
@@ -313,6 +348,40 @@ const OPPORTUNITY_WIDGET_MAP = {
       { colEnName: '_S_TITLE', widgetType: 'textWidget' },
       { colEnName: '_S_NAME', widgetType: 'textWidget' },
     ],
+  },
+  Bd_1: {
+    codeId: 'Bd_1',
+    title: '关联联系人',
+    type: 'basicDataWidget',
+    required: false,
+    option: 'single',
+    extendFieldMap: {
+      displayCol: '_S_SERIAL',
+      extendSettingDataMap: {
+        displayCol: '_S_SERIAL',
+        linkForm: {
+          modelName: '联系人',
+          modelCode: CONTACT_FORM_CODE_ID,
+        },
+      },
+    },
+    dataSource: {
+      modelName: '联系人',
+      modelCode: CONTACT_FORM_CODE_ID,
+      partCode: CONTACT_FORM_CODE_ID,
+      partName: '联系人',
+    },
+    columnData: [
+      { colEnName: '_S_SERIAL', widgetType: 'serialNumWidget' },
+      { colEnName: '_S_TITLE', widgetType: 'textWidget' },
+      { colEnName: '_S_NAME', widgetType: 'textWidget' },
+    ],
+  },
+  At_0: {
+    codeId: 'At_0',
+    title: '附件',
+    type: 'attachmentWidget',
+    required: false,
   },
 } satisfies Record<string, unknown>;
 
@@ -342,8 +411,52 @@ const FOLLOWUP_WIDGET_MAP = {
     type: 'personSelectWidget',
     required: false,
   },
+  Ra_0: {
+    codeId: 'Ra_0',
+    title: '跟进方式',
+    type: 'radioWidget',
+    required: false,
+    options: [
+      {
+        key: 'followup-phone',
+        value: '电话',
+      },
+      {
+        key: 'followup-visit',
+        value: '拜访',
+      },
+    ],
+  },
   Bd_0: {
     codeId: 'Bd_0',
+    title: '关联客户',
+    type: 'basicDataWidget',
+    required: false,
+    option: 'single',
+    extendFieldMap: {
+      displayCol: '_S_TITLE',
+      extendSettingDataMap: {
+        displayCol: '_S_TITLE',
+        linkForm: {
+          modelName: '客户',
+          modelCode: CUSTOMER_FORM_CODE_ID,
+        },
+      },
+    },
+    dataSource: {
+      modelName: '客户',
+      modelCode: CUSTOMER_FORM_CODE_ID,
+      partCode: CUSTOMER_FORM_CODE_ID,
+      partName: '客户',
+    },
+    columnData: [
+      { colEnName: '_S_ENCODE', widgetType: 'textWidget' },
+      { colEnName: '_S_TITLE', widgetType: 'textWidget' },
+      { colEnName: '_S_NAME', widgetType: 'textWidget' },
+    ],
+  },
+  Bd_3: {
+    codeId: 'Bd_3',
     title: '关联商机',
     type: 'basicDataWidget',
     required: false,
@@ -368,6 +481,45 @@ const FOLLOWUP_WIDGET_MAP = {
       { colEnName: '_S_TITLE', widgetType: 'textWidget' },
       { colEnName: '_S_NAME', widgetType: 'textWidget' },
     ],
+  },
+  Bd_4: {
+    codeId: 'Bd_4',
+    title: '关联订单变更',
+    type: 'basicDataWidget',
+    required: false,
+    option: 'single',
+    extendFieldMap: {
+      displayCol: '_S_SERIAL',
+      extendSettingDataMap: {
+        displayCol: '_S_SERIAL',
+        linkForm: {
+          modelName: '订单变更',
+          modelCode: ORDER_CHANGE_FORM_CODE_ID,
+        },
+      },
+    },
+    dataSource: {
+      modelName: '订单变更',
+      modelCode: ORDER_CHANGE_FORM_CODE_ID,
+      partCode: ORDER_CHANGE_FORM_CODE_ID,
+      partName: '订单变更',
+    },
+    columnData: [
+      { colEnName: '_S_SERIAL', widgetType: 'serialNumWidget' },
+      { colEnName: '_S_TITLE', widgetType: 'textWidget' },
+    ],
+  },
+  At_0: {
+    codeId: 'At_0',
+    title: '附件',
+    type: 'attachmentWidget',
+    required: false,
+  },
+  Lo_0: {
+    codeId: 'Lo_0',
+    title: '跟进定位',
+    type: 'locationWidget',
+    required: false,
   },
 } satisfies Record<string, unknown>;
 
@@ -518,6 +670,264 @@ const CONTACT_FIELD_CONTENT = [
   },
 ];
 
+const OPPORTUNITY_FIELD_CONTENT = [
+  {
+    codeId: '_S_NAME',
+    title: '商机名称',
+    type: 'textWidget',
+    value: '华东制造样板商机',
+    rawValue: '华东制造样板商机',
+    parentCodeId: null,
+  },
+  {
+    codeId: '_S_TITLE',
+    title: '标题',
+    type: 'textWidget',
+    value: '华东制造样板商机',
+    rawValue: '华东制造样板商机',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Te_0',
+    title: '商机名称',
+    type: 'textWidget',
+    value: '华东制造样板商机',
+    rawValue: '华东制造样板商机',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Ra_0',
+    title: '商机状态',
+    type: 'radioWidget',
+    value: '跟进中',
+    rawValue: 'opportunity-active',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Da_0',
+    title: '预计成交日期',
+    type: 'dateWidget',
+    value: '2026-05-01',
+    rawValue: Date.parse('2026-05-01'),
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Ps_0',
+    title: '负责人',
+    type: 'personSelectWidget',
+    value: ['open-sales-1'],
+    rawValue: ['open-sales-1'],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_0',
+    title: '关联客户',
+    type: 'basicDataWidget',
+    value: '华东制造样板客户',
+    rawValue: [
+      {
+        id: CUSTOMER_FORM_INST_ID,
+        formCodeId: CUSTOMER_FORM_CODE_ID,
+        formDefId: 'form-def-customer',
+        flowInstId: '',
+        showName: '华东制造样板客户',
+        _S_TITLE: '华东制造样板客户',
+        _S_NAME: '华东制造样板客户',
+        _name_: '华东制造样板客户',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_1',
+    title: '关联联系人',
+    type: 'basicDataWidget',
+    value: 'CON-001',
+    rawValue: [
+      {
+        id: CONTACT_FORM_INST_ID,
+        formCodeId: CONTACT_FORM_CODE_ID,
+        formDefId: 'form-def-contact',
+        flowInstId: '',
+        showName: '张三',
+        _S_TITLE: '张三',
+        _S_NAME: '张三',
+        _name_: '张三',
+        _S_SERIAL: 'CON-001',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'At_0',
+    title: '附件',
+    type: 'attachmentWidget',
+    value: [
+      {
+        fileId: 'file-opportunity-001',
+        fileName: 'opportunity.pdf',
+        fileSize: '256',
+        fileType: 'doc',
+        fileExt: 'pdf',
+      },
+    ],
+    rawValue: [
+      {
+        fileId: 'file-opportunity-001',
+        fileName: 'opportunity.pdf',
+        fileSize: '256',
+        fileType: 'doc',
+        fileExt: 'pdf',
+      },
+    ],
+    parentCodeId: null,
+  },
+];
+
+const FOLLOWUP_FIELD_CONTENT = [
+  {
+    codeId: '_S_TITLE',
+    title: '标题',
+    type: 'textWidget',
+    value: '样板跟进记录',
+    rawValue: '样板跟进记录',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Te_0',
+    title: '跟进内容',
+    type: 'textAreaWidget',
+    value: '已完成电话回访',
+    rawValue: '已完成电话回访',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Da_0',
+    title: '最后跟进日期',
+    type: 'dateWidget',
+    value: '2026-04-24',
+    rawValue: Date.parse('2026-04-24'),
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Ps_0',
+    title: '跟进人',
+    type: 'personSelectWidget',
+    value: ['open-followup-1'],
+    rawValue: ['open-followup-1'],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Ra_0',
+    title: '跟进方式',
+    type: 'radioWidget',
+    value: '电话',
+    rawValue: 'followup-phone',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_0',
+    title: '关联客户',
+    type: 'basicDataWidget',
+    value: '华东制造样板客户',
+    rawValue: [
+      {
+        id: CUSTOMER_FORM_INST_ID,
+        formCodeId: CUSTOMER_FORM_CODE_ID,
+        formDefId: 'form-def-customer',
+        flowInstId: '',
+        showName: '华东制造样板客户',
+        _S_TITLE: '华东制造样板客户',
+        _S_NAME: '华东制造样板客户',
+        _name_: '华东制造样板客户',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_3',
+    title: '关联商机',
+    type: 'basicDataWidget',
+    value: '华东制造样板商机',
+    rawValue: [
+      {
+        id: OPPORTUNITY_FORM_INST_ID,
+        formCodeId: OPPORTUNITY_FORM_CODE_ID,
+        formDefId: 'form-def-opportunity',
+        flowInstId: '',
+        showName: '华东制造样板商机',
+        _S_TITLE: '华东制造样板商机',
+        _S_NAME: '华东制造样板商机',
+        _name_: '华东制造样板商机',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_4',
+    title: '关联订单变更',
+    type: 'basicDataWidget',
+    value: 'OC-001',
+    rawValue: [
+      {
+        id: ORDER_CHANGE_FORM_INST_ID,
+        formCodeId: ORDER_CHANGE_FORM_CODE_ID,
+        formDefId: 'form-def-order-change',
+        flowInstId: '',
+        showName: '订单变更OC-001',
+        _S_TITLE: '订单变更OC-001',
+        _S_NAME: '订单变更OC-001',
+        _name_: '订单变更OC-001',
+        _S_SERIAL: 'OC-001',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'At_0',
+    title: '附件',
+    type: 'attachmentWidget',
+    value: [
+      {
+        fileId: 'file-followup-001',
+        fileName: 'followup.pptx',
+        fileSize: '1024',
+        fileType: 'doc',
+        fileExt: 'pptx',
+      },
+    ],
+    rawValue: [
+      {
+        fileId: 'file-followup-001',
+        fileName: 'followup.pptx',
+        fileSize: '1024',
+        fileType: 'doc',
+        fileExt: 'pptx',
+      },
+    ],
+    parentCodeId: null,
+  },
+];
+
+const ORDER_CHANGE_FIELD_CONTENT = [
+  {
+    codeId: '_S_TITLE',
+    title: '标题',
+    type: 'textWidget',
+    value: '订单变更OC-001',
+    rawValue: '订单变更OC-001',
+    parentCodeId: null,
+  },
+  {
+    codeId: '_S_SERIAL',
+    title: '订单变更编号',
+    type: 'serialNumWidget',
+    value: 'OC-001',
+    rawValue: 'OC-001',
+    parentCodeId: null,
+  },
+];
+
 class StubYzjClient extends YzjClient {
   constructor(private readonly pages: YzjEmployee[][]) {
     super({ baseUrl: 'https://stub.yzj.local' });
@@ -591,27 +1001,42 @@ class StubLightCloudClient extends LightCloudClient {
     return 'lightcloud-token';
   }
 
-  override async searchList(): Promise<{
+  override async searchList(params: {
+    accessToken: string;
+    body: Record<string, unknown>;
+  }): Promise<{
     pageNumber: number;
     totalPages: number;
     pageSize: number;
     totalElements: number;
     content: Array<{ id: string; important: Record<string, unknown>; fieldContent: unknown[] }>;
   }> {
+    const formCodeId = typeof params.body.formCodeId === 'string' ? params.body.formCodeId : CUSTOMER_FORM_CODE_ID;
+    const record =
+      formCodeId === OPPORTUNITY_FORM_CODE_ID
+        ? {
+            id: OPPORTUNITY_FORM_INST_ID,
+            important: { 标题: '华东制造样板商机' },
+            fieldContent: OPPORTUNITY_FIELD_CONTENT,
+          }
+        : formCodeId === FOLLOWUP_FORM_CODE_ID
+          ? {
+              id: FOLLOWUP_FORM_INST_ID,
+              important: { 标题: '样板跟进记录' },
+              fieldContent: FOLLOWUP_FIELD_CONTENT,
+            }
+          : {
+              id: CUSTOMER_FORM_INST_ID,
+              important: { 标题: '华东制造样板客户' },
+              fieldContent: CUSTOMER_FIELD_CONTENT,
+            };
+
     return {
       pageNumber: 1,
       totalPages: 1,
       pageSize: 20,
       totalElements: 1,
-      content: [
-        {
-          id: 'form-inst-001',
-          important: {
-            标题: '华东制造样板客户',
-          },
-          fieldContent: CUSTOMER_FIELD_CONTENT,
-        },
-      ],
+      content: [record],
     };
   }
 
@@ -635,13 +1060,13 @@ class StubLightCloudClient extends LightCloudClient {
       : [];
 
     if (params.body.formCodeId === CONTACT_FORM_CODE_ID) {
-      if (!requestedIds.includes('contact-inst-001')) {
+      if (!requestedIds.includes(CONTACT_FORM_INST_ID)) {
         return [];
       }
 
       return [
         {
-          id: 'contact-inst-001',
+          id: CONTACT_FORM_INST_ID,
           formDefId: 'form-def-contact',
           title: '张三',
           formCodeId: CONTACT_FORM_CODE_ID,
@@ -654,13 +1079,73 @@ class StubLightCloudClient extends LightCloudClient {
       ];
     }
 
-    if (!requestedIds.includes('form-inst-001')) {
+    if (params.body.formCodeId === OPPORTUNITY_FORM_CODE_ID) {
+      if (!requestedIds.includes(OPPORTUNITY_FORM_INST_ID)) {
+        return [];
+      }
+
+      return [
+        {
+          id: OPPORTUNITY_FORM_INST_ID,
+          formDefId: 'form-def-opportunity',
+          title: '华东制造样板商机',
+          formCodeId: OPPORTUNITY_FORM_CODE_ID,
+          flowInstId: '',
+          important: {
+            标题: '华东制造样板商机',
+          },
+          fieldContent: OPPORTUNITY_FIELD_CONTENT,
+        },
+      ];
+    }
+
+    if (params.body.formCodeId === FOLLOWUP_FORM_CODE_ID) {
+      if (!requestedIds.includes(FOLLOWUP_FORM_INST_ID)) {
+        return [];
+      }
+
+      return [
+        {
+          id: FOLLOWUP_FORM_INST_ID,
+          formDefId: 'form-def-followup',
+          title: '样板跟进记录',
+          formCodeId: FOLLOWUP_FORM_CODE_ID,
+          flowInstId: '',
+          important: {
+            标题: '样板跟进记录',
+          },
+          fieldContent: FOLLOWUP_FIELD_CONTENT,
+        },
+      ];
+    }
+
+    if (params.body.formCodeId === ORDER_CHANGE_FORM_CODE_ID) {
+      if (!requestedIds.includes(ORDER_CHANGE_FORM_INST_ID)) {
+        return [];
+      }
+
+      return [
+        {
+          id: ORDER_CHANGE_FORM_INST_ID,
+          formDefId: 'form-def-order-change',
+          title: '订单变更OC-001',
+          formCodeId: ORDER_CHANGE_FORM_CODE_ID,
+          flowInstId: '',
+          important: {
+            标题: '订单变更OC-001',
+          },
+          fieldContent: ORDER_CHANGE_FIELD_CONTENT,
+        },
+      ];
+    }
+
+    if (!requestedIds.includes(CUSTOMER_FORM_INST_ID)) {
       return [];
     }
 
     return [
       {
-        id: 'form-inst-001',
+        id: CUSTOMER_FORM_INST_ID,
         formDefId: 'form-def-customer',
         title: '华东制造样板客户',
         formCodeId: CUSTOMER_FORM_CODE_ID,
@@ -673,8 +1158,30 @@ class StubLightCloudClient extends LightCloudClient {
     ];
   }
 
-  override async batchSave(): Promise<string[]> {
-    return ['form-inst-001'];
+  override async batchSave(params: {
+    accessToken: string;
+    body: Record<string, unknown>;
+  }): Promise<string[]> {
+    const firstItem =
+      Array.isArray(params.body.data) && params.body.data[0] && typeof params.body.data[0] === 'object'
+        ? (params.body.data[0] as Record<string, unknown>)
+        : null;
+    const existingFormInstId =
+      firstItem && typeof firstItem.formInstId === 'string' ? firstItem.formInstId : null;
+
+    if (existingFormInstId) {
+      return [existingFormInstId];
+    }
+
+    if (params.body.formCodeId === OPPORTUNITY_FORM_CODE_ID) {
+      return [OPPORTUNITY_FORM_INST_ID];
+    }
+
+    if (params.body.formCodeId === FOLLOWUP_FORM_CODE_ID) {
+      return [FOLLOWUP_FORM_INST_ID];
+    }
+
+    return [CUSTOMER_FORM_INST_ID];
   }
 
   override async batchDelete(params: {
@@ -743,6 +1250,8 @@ class StubApprovalFileService extends ApprovalFileService {
 
 async function createTestServer() {
   const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-http-'));
+  const fieldBoundWorkbookPath = join(tempDir, 'province-city-district.xlsx');
+  writeFieldBoundWorkbook(fieldBoundWorkbookPath);
   const config = createTestConfig({
     skillOutputDir: join(tempDir, 'skills'),
     customerFormCodeId: CUSTOMER_FORM_CODE_ID,
@@ -778,6 +1287,7 @@ async function createTestServer() {
       source: config.shadow.dictionarySource,
       jsonPath: config.shadow.dictionaryJsonPath,
       approvalClient,
+      fieldBoundWorkbookPath,
     }),
     now: () => new Date('2026-04-23T09:00:00.000Z'),
   });
@@ -868,6 +1378,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       fields: Array<{
         fieldCode: string;
         semanticSlot?: string;
+        linkCodeId?: string;
         enumBinding?: { resolutionStatus: string };
         relationBinding?: { formCodeId: string | null };
       }>;
@@ -883,8 +1394,10 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     );
     assert.equal(
       refreshPayload.fields.find((field) => field.fieldCode === 'Pw_0')?.semanticSlot,
-      undefined,
+      'province',
     );
+    assert.equal(refreshPayload.fields.find((field) => field.fieldCode === 'Pw_0')?.linkCodeId, 'Pw_1');
+    assert.equal(refreshPayload.fields.find((field) => field.fieldCode === 'Pw_1')?.linkCodeId, 'Pw_2');
     assert.equal(
       refreshPayload.fields.find((field) => field.fieldCode === 'Bd_1')?.semanticSlot,
       'linked_contact_form_inst_id',
@@ -910,6 +1423,9 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     assert.ok(updateSkill?.optionalParams.includes('customer_type'));
     assert.equal(updateSkill?.optionalParams.includes('At_0'), true);
     assert.equal(updateSkill?.optionalParams.includes('linked_contact_form_inst_id'), true);
+    assert.equal(updateSkill?.optionalParams.includes('province'), true);
+    assert.equal(updateSkill?.optionalParams.includes('city'), true);
+    assert.equal(updateSkill?.optionalParams.includes('district'), true);
     assert.equal(updateSkill?.optionalParams.includes('Pw_0'), false);
     assert.ok(deleteSkill);
     const searchSkill = skillsPayload.find((skill) => skill.skillName === 'shadow.customer_search');
@@ -981,6 +1497,11 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
         .find((skill) => skill.skillName === 'shadow.followup_search')
         ?.optionalParams.includes('linked_opportunity_form_inst_id'),
     );
+    assert.ok(
+      followupSkillsPayload
+        .find((skill) => skill.skillName === 'shadow.followup_search')
+        ?.optionalParams.includes('Bd_4'),
+    );
 
     const uploadResponse = await fetch(`${runtime.baseUrl}/api/approval/files/upload`, {
       method: 'POST',
@@ -1004,7 +1525,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        formInstId: 'form-inst-001',
+        formInstId: CUSTOMER_FORM_INST_ID,
       }),
     });
     const getPreviewPayload = (await getPreviewResponse.json()) as {
@@ -1014,7 +1535,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     };
     assert.equal(getPreviewPayload.operation, 'get');
     assert.equal(getPreviewPayload.readyToSend, true);
-    assert.deepEqual(getPreviewPayload.requestBody.formInstIds, ['form-inst-001']);
+    assert.deepEqual(getPreviewPayload.requestBody.formInstIds, [CUSTOMER_FORM_INST_ID]);
 
     const previewSearchResponse = await fetch(`${runtime.baseUrl}/api/shadow/objects/customer/preview/search`, {
       method: 'POST',
@@ -1026,12 +1547,12 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
         filters: [
           {
             field: 'linked_contact_form_inst_id',
-            value: 'contact-inst-001',
+            value: CONTACT_FORM_INST_ID,
             operator: 'eq',
           },
           {
-            field: 'Pw_0',
-            value: [{ title: '浙江', dicId: 'd-zj' }],
+            field: 'province',
+            value: '浙江',
             operator: 'eq',
           },
           {
@@ -1050,16 +1571,36 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       requestBody: { searchItems: Array<{ codeId: string; value: unknown; operator?: string }> };
     };
     assert.equal(previewSearchPayload.readyToSend, true);
-    assert.equal(previewSearchPayload.requestBody.searchItems.length, 2);
-    assert.equal(previewSearchPayload.requestBody.searchItems[0]?.codeId, 'Bd_1');
-    assert.equal(previewSearchPayload.requestBody.searchItems[0]?.operator, 'contains');
-    assert.deepEqual(previewSearchPayload.requestBody.searchItems[0]?.value, [
+    assert.equal(previewSearchPayload.requestBody.searchItems.length, 3);
+    const linkedContactSearchItem = previewSearchPayload.requestBody.searchItems.find(
+      (item) => item.codeId === 'Bd_1',
+    );
+    const serviceRepSearchItem = previewSearchPayload.requestBody.searchItems.find(
+      (item) => item.codeId === 'Ps_1',
+    );
+    const provinceSearchItem = previewSearchPayload.requestBody.searchItems.find(
+      (item) => item.codeId === 'Pw_0',
+    );
+    assert.equal(linkedContactSearchItem?.operator, 'contains');
+    assert.deepEqual(linkedContactSearchItem?.value, [
       {
-        _id_: 'contact-inst-001',
+        _id_: CONTACT_FORM_INST_ID,
         _name_: 'CON-001',
       },
     ]);
-    assert.deepEqual(previewSearchPayload.requestBody.searchItems[1]?.value, ['open-live-1']);
+    assert.deepEqual(serviceRepSearchItem?.value, ['open-live-1']);
+    assert.deepEqual(provinceSearchItem, {
+      codeId: 'Pw_0',
+      parentCodeId: null,
+      type: 'publicOptBoxWidget',
+      operator: 'eq',
+      value: [
+        {
+          title: '浙江',
+          dicId: 'd-province-zj',
+        },
+      ],
+    });
 
     const executeSearchResponse = await fetch(`${runtime.baseUrl}/api/shadow/objects/customer/execute/search`, {
       method: 'POST',
@@ -1071,7 +1612,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
         filters: [
           {
             field: 'linked_contact_form_inst_id',
-            value: 'contact-inst-001',
+            value: CONTACT_FORM_INST_ID,
             operator: 'eq',
           },
         ],
@@ -1084,7 +1625,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       requestBody: { searchItems: Array<{ codeId: string; operator?: string }> };
     };
     assert.equal(executeSearchPayload.mode, 'live');
-    assert.equal(executeSearchPayload.records[0]?.formInstId, 'form-inst-001');
+    assert.equal(executeSearchPayload.records[0]?.formInstId, CUSTOMER_FORM_INST_ID);
     assert.equal(executeSearchPayload.requestBody.searchItems[0]?.codeId, 'Bd_1');
     assert.equal(executeSearchPayload.requestBody.searchItems[0]?.operator, 'contains');
 
@@ -1141,7 +1682,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       },
       body: JSON.stringify({
         operatorOpenId: 'oid-live-1',
-        formInstId: 'form-inst-001',
+        formInstId: CUSTOMER_FORM_INST_ID,
       }),
     });
     assert.equal(executeGetResponse.status, 200);
@@ -1150,7 +1691,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       record: { formInstId: string; fieldMap: Record<string, { value: string }> };
     };
     assert.equal(executeGetPayload.mode, 'live');
-    assert.equal(executeGetPayload.record.formInstId, 'form-inst-001');
+    assert.equal(executeGetPayload.record.formInstId, CUSTOMER_FORM_INST_ID);
     assert.equal(executeGetPayload.record.fieldMap.Te_0?.value, '华东制造样板客户');
 
     const executeUpsertResponse = await fetch(`${runtime.baseUrl}/api/shadow/objects/customer/execute/upsert`, {
@@ -1161,7 +1702,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       body: JSON.stringify({
         mode: 'update',
         operatorOpenId: 'oid-live-1',
-        formInstId: 'form-inst-001',
+        formInstId: CUSTOMER_FORM_INST_ID,
         params: {
           customer_name: '华东制造更新客户',
           customer_type: 'VIP客户',
@@ -1178,8 +1719,8 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
               fileExt: 'pptx',
             },
           ],
-          linked_contact_form_inst_id: 'contact-inst-001',
-          Pw_0: [{ title: '浙江', dicId: 'd-zj' }],
+          linked_contact_form_inst_id: CONTACT_FORM_INST_ID,
+          province: '浙江',
         },
       }),
     });
@@ -1194,8 +1735,8 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     };
     assert.equal(executeUpsertPayload.mode, 'live');
     assert.equal(executeUpsertPayload.writeMode, 'update');
-    assert.deepEqual(executeUpsertPayload.formInstIds, ['form-inst-001']);
-    assert.equal(executeUpsertPayload.requestBody.data[0]?.formInstId, 'form-inst-001');
+    assert.deepEqual(executeUpsertPayload.formInstIds, [CUSTOMER_FORM_INST_ID]);
+    assert.equal(executeUpsertPayload.requestBody.data[0]?.formInstId, CUSTOMER_FORM_INST_ID);
     assert.equal(executeUpsertPayload.requestBody.data[0]?.widgetValue.Te_0, '华东制造更新客户');
     assert.equal(executeUpsertPayload.requestBody.data[0]?.widgetValue.Ra_3, 'EeFfGgHh');
     assert.equal(executeUpsertPayload.requestBody.data[0]?.widgetValue.Da_0, Date.parse('2026-04-23'));
@@ -1211,7 +1752,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     ]);
     assert.deepEqual(executeUpsertPayload.requestBody.data[0]?.widgetValue.Bd_1, [
       {
-        id: 'contact-inst-001',
+        id: CONTACT_FORM_INST_ID,
         formCodeId: CONTACT_FORM_CODE_ID,
         formDefId: 'form-def-contact',
         flowInstId: '',
@@ -1222,7 +1763,88 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
         _S_SERIAL: 'CON-001',
       },
     ]);
-    assert.equal('Pw_0' in executeUpsertPayload.requestBody.data[0]?.widgetValue, false);
+    assert.deepEqual(executeUpsertPayload.requestBody.data[0]?.widgetValue.Pw_0, [
+      {
+        title: '浙江',
+        dicId: 'd-province-zj',
+      },
+    ]);
+
+    const ambiguousDistrictPreviewResponse = await fetch(
+      `${runtime.baseUrl}/api/shadow/objects/customer/preview/upsert`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'update',
+          operatorOpenId: 'oid-live-1',
+          formInstId: CUSTOMER_FORM_INST_ID,
+          params: {
+            district: '城区',
+          },
+        }),
+      },
+    );
+    assert.equal(ambiguousDistrictPreviewResponse.status, 200);
+    const ambiguousDistrictPreviewPayload = (await ambiguousDistrictPreviewResponse.json()) as {
+      readyToSend: boolean;
+      validationErrors: string[];
+    };
+    assert.equal(ambiguousDistrictPreviewPayload.readyToSend, false);
+    assert.match(ambiguousDistrictPreviewPayload.validationErrors[0] ?? '', /多个候选/);
+
+    const explicitDistrictPreviewResponse = await fetch(
+      `${runtime.baseUrl}/api/shadow/objects/customer/preview/upsert`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'update',
+          operatorOpenId: 'oid-live-1',
+          formInstId: CUSTOMER_FORM_INST_ID,
+          params: {
+            province: '江苏',
+            city: '南通市',
+            district: {
+              title: '海门市',
+              dicId: 'd-district-hm',
+            },
+          },
+        }),
+      },
+    );
+    assert.equal(explicitDistrictPreviewResponse.status, 200);
+    const explicitDistrictPreviewPayload = (await explicitDistrictPreviewResponse.json()) as {
+      readyToSend: boolean;
+      validationErrors: string[];
+      requestBody: {
+        data: Array<{ widgetValue: Record<string, unknown> }>;
+      };
+    };
+    assert.equal(explicitDistrictPreviewPayload.readyToSend, true);
+    assert.deepEqual(explicitDistrictPreviewPayload.validationErrors, []);
+    assert.deepEqual(explicitDistrictPreviewPayload.requestBody.data[0]?.widgetValue.Pw_0, [
+      {
+        title: '江苏',
+        dicId: 'd-province-js',
+      },
+    ]);
+    assert.deepEqual(explicitDistrictPreviewPayload.requestBody.data[0]?.widgetValue.Pw_1, [
+      {
+        title: '南通市',
+        dicId: 'd-city-nt',
+      },
+    ]);
+    assert.deepEqual(explicitDistrictPreviewPayload.requestBody.data[0]?.widgetValue.Pw_2, [
+      {
+        title: '海门市',
+        dicId: 'd-district-hm',
+      },
+    ]);
 
     const previewDeleteResponse = await fetch(`${runtime.baseUrl}/api/shadow/objects/customer/preview/delete`, {
       method: 'POST',
@@ -1231,7 +1853,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       },
       body: JSON.stringify({
         operatorOpenId: 'oid-live-1',
-        formInstIds: ['form-inst-001', 'form-inst-002'],
+        formInstIds: [CUSTOMER_FORM_INST_ID, 'form-inst-002'],
       }),
     });
     assert.equal(previewDeleteResponse.status, 200);
@@ -1243,7 +1865,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     assert.equal(previewDeletePayload.operation, 'delete');
     assert.equal(previewDeletePayload.readyToSend, true);
     assert.equal(previewDeletePayload.requestBody.oid, 'oid-live-1');
-    assert.deepEqual(previewDeletePayload.requestBody.formInstIds, ['form-inst-001', 'form-inst-002']);
+    assert.deepEqual(previewDeletePayload.requestBody.formInstIds, [CUSTOMER_FORM_INST_ID, 'form-inst-002']);
 
     const executeDeleteResponse = await fetch(`${runtime.baseUrl}/api/shadow/objects/customer/execute/delete`, {
       method: 'POST',
@@ -1252,7 +1874,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       },
       body: JSON.stringify({
         operatorOpenId: 'oid-live-1',
-        formInstIds: ['form-inst-001'],
+        formInstIds: [CUSTOMER_FORM_INST_ID],
       }),
     });
     assert.equal(executeDeleteResponse.status, 200);
@@ -1264,8 +1886,8 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     };
     assert.equal(executeDeletePayload.mode, 'live');
     assert.equal(executeDeletePayload.operation, 'delete');
-    assert.deepEqual(executeDeletePayload.formInstIds, ['form-inst-001']);
-    assert.deepEqual(executeDeletePayload.requestBody.formInstIds, ['form-inst-001']);
+    assert.deepEqual(executeDeletePayload.formInstIds, [CUSTOMER_FORM_INST_ID]);
+    assert.deepEqual(executeDeletePayload.requestBody.formInstIds, [CUSTOMER_FORM_INST_ID]);
 
     const previewResponse = await fetch(`${runtime.baseUrl}/api/shadow/objects/customer/preview/upsert`, {
       method: 'POST',
@@ -1287,6 +1909,139 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     assert.equal(previewPayload.readyToSend, false);
     assert.deepEqual(previewPayload.missingRuntimeInputs, ['operatorOpenId']);
     assert.equal(previewPayload.requestBody.data[0].widgetValue.Te_0, '华东制造样板客户');
+  } finally {
+    runtime.server.close();
+    await once(runtime.server, 'close');
+    rmSync(runtime.tempDir, { recursive: true, force: true });
+  }
+});
+
+test('HTTP shadow preview rejects unsupported followup widgets and preserves external relation metadata', async () => {
+  const runtime = await createTestServer();
+
+  try {
+    const refreshResponse = await fetch(`${runtime.baseUrl}/api/shadow/objects/followup/refresh`, {
+      method: 'POST',
+    });
+    assert.equal(refreshResponse.status, 200);
+
+    const detailResponse = await fetch(`${runtime.baseUrl}/api/shadow/objects/followup`);
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = (await detailResponse.json()) as {
+      fields: Array<{
+        fieldCode: string;
+        relationBinding?: {
+          kind?: string | null;
+          formCodeId: string | null;
+          modelName: string | null;
+          displayCol: string | null;
+        };
+      }>;
+    };
+    assert.deepEqual(
+      detailPayload.fields.find((field) => field.fieldCode === 'Bd_4')?.relationBinding,
+      {
+        kind: 'basic_data',
+        formCodeId: ORDER_CHANGE_FORM_CODE_ID,
+        modelName: '订单变更',
+        displayCol: '_S_SERIAL',
+      },
+    );
+
+    const unsupportedPreviewResponse = await fetch(
+      `${runtime.baseUrl}/api/shadow/objects/followup/preview/upsert`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'update',
+          operatorOpenId: 'oid-followup-1',
+          formInstId: FOLLOWUP_FORM_INST_ID,
+          params: {
+            Lo_0: {
+              longitude: 121.5,
+              latitude: 31.2,
+            },
+          },
+        }),
+      },
+    );
+    assert.equal(unsupportedPreviewResponse.status, 200);
+    const unsupportedPreviewPayload = (await unsupportedPreviewResponse.json()) as {
+      readyToSend: boolean;
+      validationErrors: string[];
+    };
+    assert.equal(unsupportedPreviewPayload.readyToSend, false);
+    assert.match(unsupportedPreviewPayload.validationErrors[0] ?? '', /Lo_0/);
+    assert.match(unsupportedPreviewPayload.validationErrors[0] ?? '', /locationWidget/);
+
+    const supportedPreviewResponse = await fetch(
+      `${runtime.baseUrl}/api/shadow/objects/followup/preview/upsert`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'create',
+          operatorOpenId: 'oid-followup-2',
+          params: {
+            Te_0: '完成现场回访并记录问题',
+            linked_customer_form_inst_id: CUSTOMER_FORM_INST_ID,
+            linked_opportunity_form_inst_id: OPPORTUNITY_FORM_INST_ID,
+            Bd_4: ORDER_CHANGE_FORM_INST_ID,
+          },
+        }),
+      },
+    );
+    assert.equal(supportedPreviewResponse.status, 200);
+    const supportedPreviewPayload = (await supportedPreviewResponse.json()) as {
+      readyToSend: boolean;
+      requestBody: { data: Array<{ widgetValue: Record<string, unknown> }> };
+    };
+    assert.equal(supportedPreviewPayload.readyToSend, true);
+    assert.deepEqual(supportedPreviewPayload.requestBody.data[0]?.widgetValue.Bd_4, [
+      {
+        id: ORDER_CHANGE_FORM_INST_ID,
+        formCodeId: ORDER_CHANGE_FORM_CODE_ID,
+        formDefId: 'form-def-order-change',
+        flowInstId: '',
+        showName: '订单变更OC-001',
+        _S_TITLE: '订单变更OC-001',
+        _S_NAME: '订单变更OC-001',
+        _name_: '订单变更OC-001',
+        _S_SERIAL: 'OC-001',
+      },
+    ]);
+
+    const unsupportedSearchResponse = await fetch(
+      `${runtime.baseUrl}/api/shadow/objects/followup/preview/search`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          operatorOpenId: 'oid-followup-3',
+          filters: [
+            {
+              field: 'Lo_0',
+              value: '上海',
+            },
+          ],
+        }),
+      },
+    );
+    assert.equal(unsupportedSearchResponse.status, 200);
+    const unsupportedSearchPayload = (await unsupportedSearchResponse.json()) as {
+      readyToSend: boolean;
+      validationErrors: string[];
+    };
+    assert.equal(unsupportedSearchPayload.readyToSend, false);
+    assert.match(unsupportedSearchPayload.validationErrors[0] ?? '', /Lo_0/);
+    assert.match(unsupportedSearchPayload.validationErrors[0] ?? '', /查询支持/);
   } finally {
     runtime.server.close();
     await once(runtime.server, 'close');

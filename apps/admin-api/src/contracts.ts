@@ -1,18 +1,28 @@
 export type ShadowObjectKey = 'customer' | 'contact' | 'opportunity' | 'followup';
 export type ShadowDictionarySource = 'manual_json' | 'approval_api' | 'hybrid';
+export type ShadowResolvedDictionarySource =
+  | ShadowDictionarySource
+  | 'field_binding_workbook'
+  | 'unresolved';
 export type ShadowObjectActivationStatus = 'active' | 'pending' | 'not_configured';
 export type ShadowObjectRefreshStatus = 'not_started' | 'ready' | 'failed';
 export type ShadowDictionaryResolutionStatus = 'resolved' | 'pending' | 'failed';
 export type ShadowDictionaryAcceptedValueShape = 'array<{title,dicId}>';
+export type FieldBoundDictionaryKey = 'province' | 'city' | 'district';
 export type ShadowSemanticSlot =
   | 'customer_name'
+  | 'opportunity_name'
   | 'owner_open_id'
   | 'service_rep_open_id'
   | 'customer_status'
+  | 'opportunity_status'
   | 'customer_type'
   | 'industry'
   | 'last_followup_date'
   | 'region'
+  | 'province'
+  | 'city'
+  | 'district'
   | 'phone'
   | string;
 
@@ -300,7 +310,7 @@ export interface ShadowFieldOption {
 export interface ShadowFieldEnumBinding {
   kind: 'public_option';
   referId: string | null;
-  source: ShadowDictionarySource | 'unresolved';
+  source: ShadowResolvedDictionarySource;
   resolutionStatus: ShadowDictionaryResolutionStatus;
   acceptedValueShape: ShadowDictionaryAcceptedValueShape;
   resolvedEntryCount: number;
@@ -320,6 +330,7 @@ export interface ShadowStandardizedField {
   required: boolean;
   readOnly: boolean;
   multi: boolean;
+  linkCodeId?: string | null;
   options: ShadowFieldOption[];
   referId?: string;
   semanticSlot?: ShadowSemanticSlot;
@@ -354,6 +365,20 @@ export interface ShadowObjectSnapshotRecord {
   createdAt: string;
 }
 
+export interface ShadowSkillClarificationRule {
+  when: string;
+  response: string;
+}
+
+export interface ShadowSkillInteractionStrategy {
+  recommendedFlow: string[];
+  parameterCollectionPolicy: string[];
+  clarificationTriggers: ShadowSkillClarificationRule[];
+  disambiguationRules: string[];
+  targetResolutionPolicy: string[];
+  executionGuardrails: string[];
+}
+
 export interface ShadowSkillContract {
   skillName: string;
   skillKey: string;
@@ -365,6 +390,7 @@ export interface ShadowSkillContract {
   optionalParams: string[];
   confirmationPolicy: string;
   outputCardType: string;
+  interactionStrategy: ShadowSkillInteractionStrategy;
   sourceObject: ShadowObjectKey;
   sourceFormCodeId: string;
   sourceVersion: string;
@@ -420,7 +446,7 @@ export interface ShadowDictionaryEntryRecord {
   code: string | null;
   state: string | null;
   sort: number | null;
-  source: ShadowDictionarySource | 'unresolved';
+  source: ShadowResolvedDictionarySource;
   sourceVersion: string;
   aliases: string[];
 }
@@ -430,7 +456,7 @@ export interface ShadowDictionaryBindingRecord {
   fieldCode: string;
   label: string;
   referId: string | null;
-  source: ShadowDictionarySource | 'unresolved';
+  source: ShadowResolvedDictionarySource;
   resolutionStatus: ShadowDictionaryResolutionStatus;
   acceptedValueShape: ShadowDictionaryAcceptedValueShape;
   snapshotVersion: string;
@@ -480,7 +506,7 @@ export interface ShadowUnresolvedDictionary {
   fieldCode: string;
   label: string;
   referId: string | null;
-  source: ShadowDictionarySource | 'unresolved';
+  source: ShadowResolvedDictionarySource;
   resolutionStatus: ShadowDictionaryResolutionStatus;
   reason: string;
 }

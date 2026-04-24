@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type {
   AppConfig,
+  FieldBoundDictionaryKey,
   ShadowExecuteDeleteResponse,
   ShadowExecuteGetResponse,
   ShadowExecuteSearchResponse,
@@ -75,6 +76,11 @@ const ALWAYS_READONLY_WIDGET_TYPES = new Set([
 
 const SHANGHAI_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const FIELD_BOUND_PUBLIC_OPTION_FIELDS: Record<string, FieldBoundDictionaryKey> = {
+  Pw_0: 'province',
+  Pw_1: 'city',
+  Pw_2: 'district',
+};
 
 interface PreparedDictionaryBinding {
   fieldCode: string;
@@ -138,6 +144,14 @@ function parseReferId(widget: YzjApprovalWidget): string | undefined {
   return typeof extendFieldReferId === 'string' && extendFieldReferId.trim()
     ? extendFieldReferId.trim()
     : undefined;
+}
+
+function parseLinkCodeId(widget: YzjApprovalWidget): string | undefined {
+  if (typeof widget.linkCodeId === 'string' && widget.linkCodeId.trim()) {
+    return widget.linkCodeId.trim();
+  }
+
+  return undefined;
 }
 
 function parseDateOnlyParts(value: string): { year: number; month: number; day: number } | null {
@@ -296,11 +310,41 @@ function normalizeStaticOptions(widget: YzjApprovalWidget) {
   }));
 }
 
-function inferSemanticSlot(label: string, widgetType: string): ShadowSemanticSlot | undefined {
+function getFieldBoundDictionaryKey(widget: Pick<YzjApprovalWidget, 'codeId' | 'type'>): FieldBoundDictionaryKey | null {
+  if (widget.type !== 'publicOptBoxWidget') {
+    return null;
+  }
+
+  return FIELD_BOUND_PUBLIC_OPTION_FIELDS[widget.codeId] ?? null;
+}
+
+function inferSemanticSlot(
+  objectKey: ShadowObjectKey,
+  label: string,
+  widgetType: string,
+): ShadowSemanticSlot | undefined {
   const normalized = label.replace(/\s+/g, '').toLowerCase();
 
-  if (/客户名称|客户简称|名称/.test(label) && widgetType === 'textWidget') {
+  if (widgetType === 'publicOptBoxWidget') {
+    if (label === '省') {
+      return 'province';
+    }
+
+    if (label === '市') {
+      return 'city';
+    }
+
+    if (label === '区') {
+      return 'district';
+    }
+  }
+
+  if (objectKey === 'customer' && /客户名称|客户简称/.test(label) && widgetType === 'textWidget') {
     return 'customer_name';
+  }
+
+  if (objectKey === 'opportunity' && /商机名称/.test(label) && widgetType === 'textWidget') {
+    return 'opportunity_name';
   }
 
   if (/售后服务代表/.test(label) && widgetType === 'personSelectWidget') {
@@ -315,8 +359,12 @@ function inferSemanticSlot(label: string, widgetType: string): ShadowSemanticSlo
     return 'customer_type';
   }
 
-  if (/客户状态|状态/.test(label)) {
+  if (objectKey === 'customer' && /客户状态|状态/.test(label)) {
     return 'customer_status';
+  }
+
+  if (objectKey === 'opportunity' && /商机状态|状态/.test(label)) {
+    return 'opportunity_status';
   }
 
   if (/行业/.test(label)) {
@@ -373,11 +421,34 @@ function getSearchFieldParameterKey(
 }
 
 function isIgnoredSkillField(field: ShadowStandardizedField): boolean {
-  if (field.widgetType === 'publicOptBoxWidget' && !field.referId) {
+  if (
+    field.widgetType === 'publicOptBoxWidget' &&
+    !field.referId &&
+    field.enumBinding?.source !== 'field_binding_workbook'
+  ) {
     return true;
   }
 
   return false;
+}
+
+function isWriteSupportedField(field: ShadowStandardizedField): boolean {
+  return SUPPORTED_WRITABLE_WIDGET_TYPES.has(field.widgetType);
+}
+
+function isSearchSupportedField(field: ShadowStandardizedField): boolean {
+  return SUPPORTED_SEARCHABLE_WIDGET_TYPES.has(field.widgetType);
+}
+
+function describeUnsupportedField(field: ShadowStandardizedField, operation: 'write' | 'search'): string {
+  return `${field.label}(${field.fieldCode}, ${field.widgetType}) 当前未纳入影子技能${operation === 'write' ? '写入' : '查询'}支持`;
+}
+
+function describeRelationField(field: ShadowStandardizedField): string {
+  const relationBinding = field.relationBinding;
+  return `${field.label}(${field.fieldCode}, modelName=${relationBinding?.modelName ?? 'unknown'}, formCodeId=${
+    relationBinding?.formCodeId ?? 'unknown'
+  })`;
 }
 
 function isFieldEligibleForContract(field: ShadowStandardizedField): boolean {
@@ -430,6 +501,364 @@ function mapShadowObjectLabel(objectKey: ShadowObjectKey): string {
       return '商机';
     case 'followup':
       return '商机跟进记录';
+  }
+}
+
+function getParameterBusinessLabels(params: {
+  paramKeys: string[];
+  fields: ShadowStandardizedField[];
+  operation: 'write' | 'search';
+}): string[] {
+  const { paramKeys, fields, operation } = params;
+
+  return Array.from(new Set(paramKeys))
+    .filter((paramKey) => paramKey !== 'form_inst_id' && paramKey !== 'form_inst_ids')
+    .map((paramKey) => {
+      const matchedFields = fields.filter((field) => {
+        const resolvedParamKey =
+          operation === 'search'
+            ? getSearchFieldParameterKey(field, fields)
+            : getFieldParameterKey(field);
+        return resolvedParamKey === paramKey;
+      });
+      const labels = Array.from(
+        new Set(
+          matchedFields
+            .map((field) => field.label.trim())
+            .filter((label) => label.length > 0),
+        ),
+      );
+
+      return labels.length > 0 ? `${paramKey} (${labels.join('/')})` : paramKey;
+    });
+}
+
+function summarizeExamples(items: string[]): string {
+  if (items.length === 0) {
+    return '';
+  }
+
+  if (items.length <= 3) {
+    return items.join('、');
+  }
+
+  return `${items.slice(0, 3).join('、')} 等 ${items.length} 项`;
+}
+
+function collectUnsupportedFields(
+  fields: ShadowStandardizedField[],
+  operation: 'write' | 'search',
+): string[] {
+  return fields
+    .filter((field) => !isIgnoredSkillField(field))
+    .filter((field) => {
+      if (operation === 'write') {
+        return !field.readOnly && !isWriteSupportedField(field);
+      }
+
+      return !isSearchSupportedField(field);
+    })
+    .map((field) => describeUnsupportedField(field, operation));
+}
+
+function buildSkillInteractionStrategy(params: {
+  objectLabel: string;
+  operation: ShadowSkillContract['operation'];
+  fields: ShadowStandardizedField[];
+  requiredParams: string[];
+  optionalParams: string[];
+}): ShadowSkillContract['interactionStrategy'] {
+  const relationFieldCount = params.fields.filter(
+    (field) => field.widgetType === 'basicDataWidget' && field.relationBinding?.formCodeId,
+  ).length;
+  const hasPersonField = params.fields.some((field) => field.widgetType === 'personSelectWidget');
+  const hasAttachmentField = params.fields.some((field) => field.widgetType === 'attachmentWidget');
+  const hasPublicOptionField = params.fields.some(
+    (field) => field.widgetType === 'publicOptBoxWidget',
+  );
+  const requiredBusinessLabels = getParameterBusinessLabels({
+    paramKeys: params.requiredParams,
+    fields: params.fields,
+    operation: 'write',
+  });
+  const requiredBusinessLabelSummary =
+    summarizeExamples(requiredBusinessLabels) || `${params.objectLabel}关键字段`;
+  const unsupportedWriteSummary = summarizeExamples(
+    collectUnsupportedFields(params.fields, 'write'),
+  );
+  const unsupportedSearchSummary = summarizeExamples(
+    collectUnsupportedFields(params.fields, 'search'),
+  );
+
+  switch (params.operation) {
+    case 'search': {
+      const strategy: ShadowSkillContract['interactionStrategy'] = {
+        recommendedFlow: [
+          '先把用户口语化描述转成筛选条件，再决定是否继续进入详情读取或写操作。',
+          '优先使用最少但最有区分度的条件发起查询，结果仍不唯一时再逐步补条件。',
+          '如果用户下一步要查看详情、更新或删除，先从查询结果中拿到唯一 `formInstId`。',
+        ],
+        parameterCollectionPolicy: [
+          '优先使用业务标签、展示值和语义槽收集条件，不要反问用户原始 `codeId`。',
+          '如果当前条件过宽，只追问下一条最有区分度的筛选信息，不一次性索要全部字段。',
+        ],
+        clarificationTriggers: [
+          {
+            when: '没有提取到任何可用筛选条件',
+            response: '追问对象名、关键词、编码、日期或关联对象中的最小必要条件。',
+          },
+          {
+            when: '结果集为空且用户预期系统中应有数据',
+            response: '提示用户补充一个新的区分条件，并说明当前 `operatorOpenId` 视图可见性也可能影响结果。',
+          },
+          {
+            when: '结果有多个候选且用户要继续 get / update / delete',
+            response: '返回精简候选列表，请用户选定唯一记录后再继续后续技能。',
+          },
+        ],
+        disambiguationRules: [],
+        targetResolutionPolicy: [
+          '用户模糊提到某条记录时，优先走 search，而不是先要求 `formInstId`。',
+          '禁止根据名称、简称、上下文或猜测直接构造 `formInstId`、关联记录 id 或 `dicId`。',
+        ],
+        executionGuardrails: [
+          'search 保持只读；任何后续写入都必须经过独立 preview 与确认链路。',
+        ],
+      };
+
+      if (relationFieldCount > 0) {
+        strategy.parameterCollectionPolicy.push(
+          '关联字段在只有展示值时先走展示值查询；只有已经拿到关联记录 id / 对象时才走精确关系查询。',
+        );
+        strategy.disambiguationRules.push(
+          '关联字段若命中多个候选，不自动猜测，返回候选并要求用户选定。',
+        );
+      }
+
+      if (hasPublicOptionField) {
+        strategy.parameterCollectionPolicy.push(
+          '公共选项与省市区字段只有在标题唯一可解析时才允许 title-only；否则要求完整 `{title,dicId}`。',
+        );
+      }
+
+      if (unsupportedSearchSummary) {
+        strategy.executionGuardrails.push(
+          `当前未纳入查询支持的字段（如 ${unsupportedSearchSummary}）不能被近似拼装为查询条件。`,
+        );
+      }
+
+      return strategy;
+    }
+    case 'get':
+      return {
+        recommendedFlow: [
+          '仅在目标记录已经唯一确定时使用本技能。',
+          '优先消费用户显式提供的 `form_inst_id` 或上一跳 search 的结果。',
+          '如果用户仍是模糊描述，先退回对应对象的 search 技能完成目标定位。',
+        ],
+        parameterCollectionPolicy: [
+          'get 阶段只补目标识别信息，不补问与当前详情读取无关的可写字段。',
+        ],
+        clarificationTriggers: [
+          {
+            when: '缺少 `form_inst_id`',
+            response: '改走对应对象的 search，或请用户从候选结果中指定唯一记录。',
+          },
+          {
+            when: '用户给的是名称/编码，但还没有唯一定位',
+            response: '先做 search 缩小范围，再携带准确 `formInstId` 调用 get。',
+          },
+        ],
+        disambiguationRules: [
+          '不要根据名称、编码或自然语言描述直接猜测详情目标。',
+        ],
+        targetResolutionPolicy: [
+          '唯一 `form_inst_id` 是 get 的硬前置条件。',
+        ],
+        executionGuardrails: [
+          'get 是只读动作；若下一步要修改数据，应保留本次返回的 `formInstId` 再切到 update。',
+        ],
+      };
+    case 'create': {
+      const strategy: ShadowSkillContract['interactionStrategy'] = {
+        recommendedFlow: [
+          '先把用户意图映射成业务语义参数，而不是要求其按模板字段码录单。',
+          '优先吸收当前对话里已经给出的值，再只追问缺失必填或高价值字段。',
+          '关系、人员、公共选项和附件先完成解析与校验，再生成 preview。',
+          '向用户展示将要写入的关键字段摘要，得到明确确认后才执行 live write。',
+        ],
+        parameterCollectionPolicy: [
+          `追问时使用业务标签，例如 ${requiredBusinessLabelSummary}，不要直接暴露 \`codeId\`。`,
+          '允许用户分多轮补充信息，不要一次性索要全部可选字段。',
+          '用户只给自然语言描述时，先保留原意图，再补齐必填和引用信息。',
+        ],
+        clarificationTriggers: [
+          {
+            when: '缺少必填字段',
+            response: '只追问当前创建必须补齐的字段，优先使用业务标签而不是参数名或字段码。',
+          },
+          {
+            when: '关联对象、人员或公共选项值无法唯一解析',
+            response: '返回候选或要求补充精确标识，不要自动猜测写入值。',
+          },
+          {
+            when: '用户要求写入当前未支持的字段',
+            response: '明确指出该字段当前未被影子技能支持，并建议留空或改走专门技能。',
+          },
+        ],
+        disambiguationRules: [],
+        targetResolutionPolicy: [
+          'create 不需要当前对象 `formInstId`，但所有关联对象都必须在写前解析成精确 id 或关系对象。',
+        ],
+        executionGuardrails: [
+          '先 preview，再确认，再 live write。',
+          '不要为了凑齐 payload 发明默认值、`dicId`、关联记录或人员标识。',
+          '用户未提及的可选字段默认保持不写入，而不是自动补全。',
+        ],
+      };
+
+      if (relationFieldCount > 0) {
+        strategy.parameterCollectionPolicy.push(
+          '当用户只说“关联松井客户/挂到某联系人”这类口语化关系时，先 search 关联对象拿到精确记录，再回填。',
+        );
+        strategy.disambiguationRules.push(
+          '关系字段如果命中多个记录，必须让用户选定唯一候选，不允许静默挑一个。',
+        );
+      }
+
+      if (hasPersonField) {
+        strategy.parameterCollectionPolicy.push(
+          '人员字段默认收 `open_id`；若用户只给姓名且存在歧义，需要继续确认到具体人员。',
+        );
+      }
+
+      if (hasPublicOptionField) {
+        strategy.disambiguationRules.push(
+          '公共选项 / 省市区字段在标题重复时，只接受完整 `{title,dicId}`，不能 title-only 自动猜。',
+        );
+      }
+
+      if (hasAttachmentField) {
+        strategy.parameterCollectionPolicy.push(
+          '附件字段先走上传技能或上传接口，拿到文件对象后再写入当前 skill。',
+        );
+      }
+
+      if (unsupportedWriteSummary) {
+        strategy.executionGuardrails.push(
+          `当前模板中的未支持字段（如 ${unsupportedWriteSummary}）必须留空或走专门技能，不能近似写入。`,
+        );
+      }
+
+      return strategy;
+    }
+    case 'update': {
+      const strategy: ShadowSkillContract['interactionStrategy'] = {
+        recommendedFlow: [
+          '先解析用户要改哪一条记录，以及要改哪些字段。',
+          '如果缺少 `form_inst_id`，先用名称、编码、关联线索或日期条件 search，拿到唯一目标后再更新。',
+          '只收集用户明确想改的字段；未提及字段保持原值不动。',
+          '变更值归一化后先生成 preview，得到明确确认后再执行 live write。',
+        ],
+        parameterCollectionPolicy: [
+          '追问时优先使用业务标签和变更目标，不要求用户先给字段码。',
+          '如果用户像“把松井客户类型改成 VIP 客户”这样表达，先提取目标线索与变更意图，再通过 search 解析目标记录。',
+          '如果已经有上一跳 search / get 结果，优先复用其中的 `formInstId`。',
+        ],
+        clarificationTriggers: [
+          {
+            when: '目标记录尚未唯一解析',
+            response: '先返回候选并要求用户选择唯一记录，再进入 update。',
+          },
+          {
+            when: '没有提取到任何有效变更字段',
+            response: '请用户明确说明希望修改哪些字段和值，而不是直接发起空更新。',
+          },
+          {
+            when: '新值是歧义的人员、关联对象或公共选项',
+            response: '要求补充精确标识、候选选择或完整 `{title,dicId}`，不要自动猜测。',
+          },
+        ],
+        disambiguationRules: [],
+        targetResolutionPolicy: [
+          'update 的硬前置是唯一目标；可以通过 search 获得 `formInstId`，但不能直接按模糊名称更新。',
+        ],
+        executionGuardrails: [
+          '只发送 `form_inst_id` 加本次变更字段，不清空未提及字段。',
+          '先 preview，再确认，再 live write。',
+        ],
+      };
+
+      if (relationFieldCount > 0) {
+        strategy.parameterCollectionPolicy.push(
+          '当更新关系字段时，优先把用户口语化描述解析成关联对象，再回填精确关系值。',
+        );
+        strategy.disambiguationRules.push(
+          '关系字段若命中多个候选，必须停下来澄清，不允许直接覆盖已有关联。',
+        );
+      }
+
+      if (hasPersonField) {
+        strategy.disambiguationRules.push(
+          '人员字段同名或无法唯一识别时，只接受精确 `open_id` 或唯一候选。',
+        );
+      }
+
+      if (hasPublicOptionField) {
+        strategy.disambiguationRules.push(
+          '公共选项 / 省市区字段在标题重复时，只接受完整 `{title,dicId}`，不能 title-only 自动猜。',
+        );
+      }
+
+      if (hasAttachmentField) {
+        strategy.parameterCollectionPolicy.push(
+          '附件更新仍应先完成上传，再把上传结果对象作为变更值写入。',
+        );
+      }
+
+      if (unsupportedWriteSummary) {
+        strategy.executionGuardrails.push(
+          `当前模板中的未支持字段（如 ${unsupportedWriteSummary}）必须拒绝写入，不能用近似结构替代。`,
+        );
+      }
+
+      strategy.executionGuardrails.push(
+        '如果当前上下文能拿到旧值，应在确认摘要中显式展示旧值 / 新值，避免误覆盖关键字段。',
+      );
+
+      return strategy;
+    }
+    case 'delete':
+      return {
+        recommendedFlow: [
+          '先通过 search 或 get 确认待删除记录。',
+          '汇总精确 `form_inst_ids` 与对象摘要，再请求用户做明确删除确认。',
+          '确认后再调用 delete，不把模糊条件直接升级为删除请求。',
+        ],
+        parameterCollectionPolicy: [
+          '如果用户只给名称、关键词或模糊范围，不直接删，先回到 search 缩小范围。',
+        ],
+        clarificationTriggers: [
+          {
+            when: '缺少 `form_inst_ids`',
+            response: '先走 search / get，拿到精确记录 id 后再继续 delete。',
+          },
+          {
+            when: '候选记录多于一条',
+            response: '逐条展示候选，请用户明确选择要删除的记录集合。',
+          },
+        ],
+        disambiguationRules: [
+          'delete 只接受精确记录 id，不接受按名称、编码或模糊条件自动扩展删除范围。',
+        ],
+        targetResolutionPolicy: [
+          '`form_inst_ids` 必须来自用户显式提供，或来自上一跳 search / get 的确定结果。',
+        ],
+        executionGuardrails: [
+          'delete 是破坏性操作，必须先展示目标摘要，再等待明确确认。',
+          '禁止静默补全、猜测或扩大删除列表。',
+        ],
+      };
   }
 }
 
@@ -746,6 +1175,11 @@ export class ShadowMetadataService {
         continue;
       }
 
+      if (!isSearchSupportedField(field)) {
+        validationErrors.push(describeUnsupportedField(field, 'search'));
+        continue;
+      }
+
       const normalized = await this.normalizeSearchFieldValue({
         snapshot: context.snapshot,
         field,
@@ -863,7 +1297,7 @@ export class ShadowMetadataService {
     });
     const record = records[0];
     if (!record) {
-      throw new NotFoundError(`未找到客户记录: ${formInstId}`);
+      throw new NotFoundError(`未找到${mapShadowObjectLabel(objectKey)}记录: ${formInstId}`);
     }
 
     return {
@@ -1070,6 +1504,11 @@ export class ShadowMetadataService {
         continue;
       }
 
+      if (!isWriteSupportedField(field)) {
+        validationErrors.push(describeUnsupportedField(field, 'write'));
+        continue;
+      }
+
       const normalized =
         field.widgetType === 'basicDataWidget'
           ? await this.normalizeBasicDataFieldValue({
@@ -1195,15 +1634,29 @@ export class ShadowMetadataService {
       referIds,
       accessToken: params.accessToken,
     });
+    const fieldBoundKeys = widgets
+      .map((widget) => getFieldBoundDictionaryKey(widget))
+      .filter((bindingKey): bindingKey is FieldBoundDictionaryKey => Boolean(bindingKey));
+    const resolvedFieldBoundDictionaries = this.dictionaryResolver.resolveFieldBoundOptions({
+      bindingKeys: fieldBoundKeys,
+    });
 
     const fields: ShadowStandardizedField[] = [];
     const dictionaryBindings: PreparedDictionaryBinding[] = [];
 
     for (const widget of widgets) {
       const referId = parseReferId(widget);
+      const linkCodeId = parseLinkCodeId(widget);
+      const fieldBoundKey = getFieldBoundDictionaryKey(widget);
+      const enumBindingKey = referId ?? fieldBoundKey ?? null;
       const relationBinding = parseBasicDataBinding(widget);
-      const dictionaryBinding = referId ? resolvedDictionaries.get(referId) : undefined;
-      const semanticSlot = inferSemanticSlot(widget.title || widget.codeId, widget.type);
+      const dictionaryBinding = referId
+        ? resolvedDictionaries.get(referId)
+        : fieldBoundKey
+          ? resolvedFieldBoundDictionaries.get(fieldBoundKey)
+          : undefined;
+      const semanticSlot =
+        fieldBoundKey ?? inferSemanticSlot(params.objectKey, widget.title || widget.codeId, widget.type);
 
       const field: ShadowStandardizedField = {
         fieldCode: widget.codeId,
@@ -1212,6 +1665,7 @@ export class ShadowMetadataService {
         required: Boolean(widget.required),
         readOnly: isWritableSystemShadowField(params.objectKey, widget) ? false : isReadOnlyWidget(widget),
         multi: isMultiValue(widget),
+        ...(linkCodeId ? { linkCodeId } : {}),
         options:
           widget.type === 'radioWidget' || widget.type === 'checkboxWidget'
             ? normalizeStaticOptions(widget)
@@ -1225,18 +1679,15 @@ export class ShadowMetadataService {
                   aliases: entry.aliases,
                 }))
               : [],
-        semanticSlot:
-          widget.type === 'publicOptBoxWidget' && !referId && semanticSlot === 'region'
-            ? undefined
-            : semanticSlot,
-        ...(referId ? { referId } : {}),
+        semanticSlot,
+        ...(enumBindingKey ? { referId: enumBindingKey } : {}),
         ...(relationBinding ? { relationBinding } : {}),
       };
 
       if (widget.type === 'publicOptBoxWidget') {
         field.enumBinding = {
           kind: 'public_option',
-          referId: referId ?? null,
+          referId: enumBindingKey,
           source: dictionaryBinding?.source ?? 'unresolved',
           resolutionStatus: dictionaryBinding?.resolutionStatus ?? 'pending',
           acceptedValueShape: 'array<{title,dicId}>',
@@ -1246,7 +1697,7 @@ export class ShadowMetadataService {
         dictionaryBindings.push({
           fieldCode: field.fieldCode,
           label: field.label,
-          referId: referId ?? null,
+          referId: enumBindingKey,
           source: dictionaryBinding?.source ?? 'unresolved',
           resolutionStatus: dictionaryBinding?.resolutionStatus ?? 'pending',
           entries: (dictionaryBinding?.entries ?? []).map((entry) => ({
@@ -1323,6 +1774,10 @@ export class ShadowMetadataService {
           .map(getFieldParameterKey),
       ),
     );
+    const updateOptionalParams = Array.from(new Set(writableFields.map(getFieldParameterKey)));
+    const searchOptionalParams = Array.from(
+      new Set(searchableFields.map((field) => getSearchFieldParameterKey(field, searchableFields))),
+    );
     const sharedBase = {
       sourceObject: params.objectKey,
       sourceFormCodeId: params.formCodeId,
@@ -1348,11 +1803,16 @@ export class ShadowMetadataService {
         whenToUse: `当用户要搜索${objectLabel}、筛选${objectLabel}列表或按字段查${objectLabel}时使用。`,
         notWhenToUse: `当用户已经明确给出 formInstId，需要直接获取单条${objectLabel}详情时不要使用。`,
         requiredParams: [],
-        optionalParams: Array.from(
-          new Set(searchableFields.map((field) => getSearchFieldParameterKey(field, searchableFields))),
-        ),
+        optionalParams: searchOptionalParams,
         confirmationPolicy: 'no_confirmation_required',
         outputCardType: `${params.objectKey}-search-preview`,
+        interactionStrategy: buildSkillInteractionStrategy({
+          objectLabel,
+          operation: 'search',
+          fields: params.fields,
+          requiredParams: [],
+          optionalParams: searchOptionalParams,
+        }),
         executionBinding: this.buildExecutionBinding({
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
@@ -1372,6 +1832,13 @@ export class ShadowMetadataService {
         optionalParams: [],
         confirmationPolicy: 'no_confirmation_required',
         outputCardType: `${params.objectKey}-get-preview`,
+        interactionStrategy: buildSkillInteractionStrategy({
+          objectLabel,
+          operation: 'get',
+          fields: params.fields,
+          requiredParams: ['form_inst_id'],
+          optionalParams: [],
+        }),
         executionBinding: this.buildExecutionBinding({
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
@@ -1391,6 +1858,13 @@ export class ShadowMetadataService {
         optionalParams,
         confirmationPolicy: 'required_before_write',
         outputCardType: `${params.objectKey}-create-preview`,
+        interactionStrategy: buildSkillInteractionStrategy({
+          objectLabel,
+          operation: 'create',
+          fields: params.fields,
+          requiredParams,
+          optionalParams,
+        }),
         executionBinding: this.buildExecutionBinding({
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
@@ -1407,11 +1881,16 @@ export class ShadowMetadataService {
         whenToUse: `当用户要更新已有${objectLabel}基础字段时使用。`,
         notWhenToUse: `当用户没有明确 formInstId 或只是在做查询时不要使用。`,
         requiredParams: ['form_inst_id'],
-        optionalParams: Array.from(
-          new Set(writableFields.map(getFieldParameterKey)),
-        ),
+        optionalParams: updateOptionalParams,
         confirmationPolicy: 'required_before_write',
         outputCardType: `${params.objectKey}-update-preview`,
+        interactionStrategy: buildSkillInteractionStrategy({
+          objectLabel,
+          operation: 'update',
+          fields: params.fields,
+          requiredParams: ['form_inst_id'],
+          optionalParams: updateOptionalParams,
+        }),
         executionBinding: this.buildExecutionBinding({
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
@@ -1431,6 +1910,13 @@ export class ShadowMetadataService {
         optionalParams: [],
         confirmationPolicy: 'required_before_write',
         outputCardType: `${params.objectKey}-delete-preview`,
+        interactionStrategy: buildSkillInteractionStrategy({
+          objectLabel,
+          operation: 'delete',
+          fields: params.fields,
+          requiredParams: ['form_inst_ids'],
+          optionalParams: [],
+        }),
         executionBinding: this.buildExecutionBinding({
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
@@ -2053,7 +2539,9 @@ export class ShadowMetadataService {
         source: binding.source,
         resolutionStatus: binding.resolutionStatus,
         reason:
-          binding.referId
+          binding.source === 'field_binding_workbook'
+            ? `字段绑定字典 ${binding.referId ?? binding.fieldCode} 尚未加载成功`
+            : binding.referId
             ? `公共选项 ${binding.referId} 尚未拿到可用码表`
             : '公共选项字段缺少 referId，无法解析码表',
       }));
@@ -2093,9 +2581,10 @@ export class ShadowMetadataService {
     const validationErrors: string[] = [];
     const relationBinding = field.relationBinding;
     const widget = this.getSnapshotWidget(snapshot, field.fieldCode);
+    const relationFieldDescription = describeRelationField(field);
 
     if (!relationBinding?.formCodeId || !widget) {
-      validationErrors.push(`${field.label} 缺少关联对象配置，无法构造 basicDataWidget 输入值`);
+      validationErrors.push(`${relationFieldDescription} 缺少关联对象配置，无法构造 basicDataWidget 输入值`);
       return {
         value: undefined,
         validationErrors,
@@ -2105,7 +2594,7 @@ export class ShadowMetadataService {
 
     const values = Array.isArray(rawValue) ? rawValue : [rawValue];
     if (!field.multi && values.length > 1) {
-      validationErrors.push(`${field.label} 为单选关联字段，只接受单条关联记录`);
+      validationErrors.push(`${relationFieldDescription} 为单选关联字段，只接受单条关联记录`);
       return {
         value: undefined,
         validationErrors,
@@ -2129,7 +2618,7 @@ export class ShadowMetadataService {
       const linkedFormInstId = this.readBasicDataRecordId(value);
       if (!linkedFormInstId) {
         validationErrors.push(
-          `${field.label} 需要传入关联记录 formInstId/id，或传入包含 id/formCodeId/formDefId/展示字段 的完整对象`,
+          `${relationFieldDescription} 需要传入关联记录 formInstId/id，或传入包含 id/formCodeId/formDefId/展示字段 的完整对象`,
         );
         continue;
       }
@@ -2141,7 +2630,7 @@ export class ShadowMetadataService {
         formInstId: linkedFormInstId,
       });
       if (!linkedRecord) {
-        validationErrors.push(`${field.label} 未找到关联记录: ${linkedFormInstId}`);
+        validationErrors.push(`${relationFieldDescription} 未找到关联记录: ${linkedFormInstId}`);
         continue;
       }
 
@@ -2791,13 +3280,27 @@ export class ShadowMetadataService {
     const validationErrors: string[] = [];
     const entries = dictionaryBinding?.entries ?? [];
     const entryByDicId = new Map(entries.map((entry) => [entry.dicId, entry]));
-    const entryByTitle = new Map<string, ShadowDictionaryBindingRecord['entries'][number]>();
+    const entryByTitle = new Map<string, ShadowDictionaryBindingRecord['entries']>();
     for (const entry of entries) {
-      entryByTitle.set(entry.title, entry);
-      for (const alias of entry.aliases) {
-        entryByTitle.set(alias, entry);
+      const titleKeys = [entry.title, ...entry.aliases].filter(
+        (value, index, list): value is string => typeof value === 'string' && value.trim().length > 0 && list.indexOf(value) === index,
+      );
+      for (const titleKey of titleKeys) {
+        const existing = entryByTitle.get(titleKey) ?? [];
+        entryByTitle.set(titleKey, [...existing, entry]);
       }
     }
+
+    const canonicalizeEntry = (entry: ShadowDictionaryBindingRecord['entries'][number]) => ({
+      title: entry.title,
+      dicId: entry.dicId,
+    });
+
+    const findEntriesByTitle = (value: string) => {
+      const matches = entryByTitle.get(value) ?? [];
+      const uniqueMatches = new Map(matches.map((entry) => [entry.dicId, entry]));
+      return [...uniqueMatches.values()];
+    };
 
     const normalizeExplicitObject = (
       value: unknown,
@@ -2811,15 +3314,51 @@ export class ShadowMetadataService {
         typeof value.title === 'string' &&
         typeof value.dicId === 'string'
       ) {
+        const title = value.title.trim();
+        const dicId = value.dicId.trim();
+        const byDicId = entryByDicId.get(dicId);
+        if (dictionaryBinding?.resolutionStatus === 'resolved') {
+          if (byDicId) {
+            const titleMatches =
+              byDicId.title === title || byDicId.aliases.includes(title);
+            if (!titleMatches) {
+              validationErrors.push(`${field.label} 的 title 与 dicId 不匹配，请按已解析码表传入完整值`);
+              return {
+                items: undefined,
+                mapping: undefined,
+              };
+            }
+
+            return {
+              items: [canonicalizeEntry(byDicId)],
+              mapping: field.referId
+                ? ({
+                    fieldCode: field.fieldCode,
+                    label: field.label,
+                    referId: field.referId,
+                    matchedBy,
+                    value: [canonicalizeEntry(byDicId)],
+                  } satisfies ShadowResolvedDictionaryMapping)
+                : undefined,
+            };
+          }
+
+          validationErrors.push(`${field.label} 的 dicId 未命中已解析码表`);
+          return {
+            items: undefined,
+            mapping: undefined,
+          };
+        }
+
         return {
-          items: [{ title: value.title, dicId: value.dicId }],
+          items: [{ title, dicId }],
           mapping: field.referId
             ? ({
                 fieldCode: field.fieldCode,
                 label: field.label,
                 referId: field.referId,
                 matchedBy,
-                value: [{ title: value.title, dicId: value.dicId }],
+                value: [{ title, dicId }],
               } satisfies ShadowResolvedDictionaryMapping)
             : undefined,
         };
@@ -2914,7 +3453,7 @@ export class ShadowMetadataService {
     const byDicId = entryByDicId.get(rawValue);
     if (byDicId) {
       return {
-        value: [{ title: byDicId.title, dicId: byDicId.dicId }],
+        value: [canonicalizeEntry(byDicId)],
         validationErrors,
         resolvedMapping: field.referId
           ? {
@@ -2922,16 +3461,16 @@ export class ShadowMetadataService {
               label: field.label,
               referId: field.referId,
               matchedBy: 'dicId',
-              value: [{ title: byDicId.title, dicId: byDicId.dicId }],
+              value: [canonicalizeEntry(byDicId)],
             }
           : undefined,
       };
     }
 
-    const byTitle = entryByTitle.get(rawValue);
-    if (byTitle) {
+    const byTitle = findEntriesByTitle(rawValue);
+    if (byTitle.length === 1) {
       return {
-        value: [{ title: byTitle.title, dicId: byTitle.dicId }],
+        value: [canonicalizeEntry(byTitle[0]!)],
         validationErrors,
         resolvedMapping: field.referId
           ? {
@@ -2939,9 +3478,19 @@ export class ShadowMetadataService {
               label: field.label,
               referId: field.referId,
               matchedBy: 'title',
-              value: [{ title: byTitle.title, dicId: byTitle.dicId }],
+              value: [canonicalizeEntry(byTitle[0]!)],
             }
           : undefined,
+      };
+    }
+
+    if (byTitle.length > 1) {
+      validationErrors.push(
+        `${field.label} 的公共选项标题 "${rawValue}" 存在多个候选，请传入完整 {title,dicId}`,
+      );
+      return {
+        value: undefined,
+        validationErrors,
       };
     }
 

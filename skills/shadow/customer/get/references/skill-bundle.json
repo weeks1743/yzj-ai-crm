@@ -11,7 +11,36 @@
   "optionalParams": [],
   "confirmationPolicy": "no_confirmation_required",
   "outputCardType": "customer-get-preview",
+  "interactionStrategy": {
+    "recommendedFlow": [
+      "仅在目标记录已经唯一确定时使用本技能。",
+      "优先消费用户显式提供的 `form_inst_id` 或上一跳 search 的结果。",
+      "如果用户仍是模糊描述，先退回对应对象的 search 技能完成目标定位。"
+    ],
+    "parameterCollectionPolicy": [
+      "get 阶段只补目标识别信息，不补问与当前详情读取无关的可写字段。"
+    ],
+    "clarificationTriggers": [
+      {
+        "when": "缺少 `form_inst_id`",
+        "response": "改走对应对象的 search，或请用户从候选结果中指定唯一记录。"
+      },
+      {
+        "when": "用户给的是名称/编码，但还没有唯一定位",
+        "response": "先做 search 缩小范围，再携带准确 `formInstId` 调用 get。"
+      }
+    ],
+    "disambiguationRules": [
+      "不要根据名称、编码或自然语言描述直接猜测详情目标。"
+    ],
+    "targetResolutionPolicy": [
+      "唯一 `form_inst_id` 是 get 的硬前置条件。"
+    ],
+    "executionGuardrails": [
+      "get 是只读动作；若下一步要修改数据，应保留本次返回的 `formInstId` 再切到 update。"
+    ]
+  },
   "sourceObject": "customer",
   "sourceFormCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
-  "sourceVersion": "2026-04-24T03:10:49.533Z"
+  "sourceVersion": "2026-04-24T08:38:15.214Z"
 }

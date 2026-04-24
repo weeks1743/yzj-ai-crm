@@ -10,8 +10,8 @@
           "value": "{Bd_4__S_SERIAL}"
         },
         {
-          "field": "customer_name",
-          "value": "{customer_name}",
+          "field": "Te_4",
+          "value": "{Te_4}",
           "operator": "contain"
         }
       ],
@@ -43,7 +43,7 @@
           "parentCodeId": null,
           "type": "textWidget",
           "operator": "contain",
-          "value": "{customer_name}"
+          "value": "{Te_4}"
         }
       ]
     }
@@ -59,8 +59,8 @@
           "value": "{Bd_4__S_SERIAL}"
         },
         {
-          "field": "customer_name",
-          "value": "{customer_name}",
+          "field": "Te_4",
+          "value": "{Te_4}",
           "operator": "contain"
         }
       ],
@@ -92,7 +92,7 @@
           "parentCodeId": null,
           "type": "textWidget",
           "operator": "contain",
-          "value": "{customer_name}"
+          "value": "{Te_4}"
         }
       ]
     }

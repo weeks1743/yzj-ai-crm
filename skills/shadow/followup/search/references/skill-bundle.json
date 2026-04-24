@@ -11,7 +11,7 @@
     "Ra_2",
     "Te_1",
     "Te_0",
-    "customer_status",
+    "Ra_0",
     "Ra_1",
     "Bd_4",
     "linked_opportunity_form_inst_id",
@@ -28,7 +28,44 @@
   ],
   "confirmationPolicy": "no_confirmation_required",
   "outputCardType": "followup-search-preview",
+  "interactionStrategy": {
+    "recommendedFlow": [
+      "先把用户口语化描述转成筛选条件，再决定是否继续进入详情读取或写操作。",
+      "优先使用最少但最有区分度的条件发起查询，结果仍不唯一时再逐步补条件。",
+      "如果用户下一步要查看详情、更新或删除，先从查询结果中拿到唯一 `formInstId`。"
+    ],
+    "parameterCollectionPolicy": [
+      "优先使用业务标签、展示值和语义槽收集条件，不要反问用户原始 `codeId`。",
+      "如果当前条件过宽，只追问下一条最有区分度的筛选信息，不一次性索要全部字段。",
+      "关联字段在只有展示值时先走展示值查询；只有已经拿到关联记录 id / 对象时才走精确关系查询。"
+    ],
+    "clarificationTriggers": [
+      {
+        "when": "没有提取到任何可用筛选条件",
+        "response": "追问对象名、关键词、编码、日期或关联对象中的最小必要条件。"
+      },
+      {
+        "when": "结果集为空且用户预期系统中应有数据",
+        "response": "提示用户补充一个新的区分条件，并说明当前 `operatorOpenId` 视图可见性也可能影响结果。"
+      },
+      {
+        "when": "结果有多个候选且用户要继续 get / update / delete",
+        "response": "返回精简候选列表，请用户选定唯一记录后再继续后续技能。"
+      }
+    ],
+    "disambiguationRules": [
+      "关联字段若命中多个候选，不自动猜测，返回候选并要求用户选定。"
+    ],
+    "targetResolutionPolicy": [
+      "用户模糊提到某条记录时，优先走 search，而不是先要求 `formInstId`。",
+      "禁止根据名称、简称、上下文或猜测直接构造 `formInstId`、关联记录 id 或 `dicId`。"
+    ],
+    "executionGuardrails": [
+      "search 保持只读；任何后续写入都必须经过独立 preview 与确认链路。",
+      "当前未纳入查询支持的字段（如 地理位置(Lo_0, locationWidget) 当前未纳入影子技能查询支持、说明文字(De_0, describeWidget) 当前未纳入影子技能查询支持、说明文字(De_1, describeWidget) 当前未纳入影子技能查询支持 等 5 项）不能被近似拼装为查询条件。"
+    ]
+  },
   "sourceObject": "followup",
   "sourceFormCodeId": "0a618c5d806545b997f60e8461b3f504",
-  "sourceVersion": "2026-04-24T06:51:23.851Z"
+  "sourceVersion": "2026-04-24T08:59:16.696Z"
 }

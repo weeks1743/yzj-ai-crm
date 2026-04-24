@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import * as XLSX from 'xlsx';
 import { ApprovalClient } from '../src/approval-client.js';
 import { DictionaryResolver } from '../src/dictionary-resolver.js';
 import { LightCloudClient } from '../src/lightcloud-client.js';
@@ -14,10 +15,37 @@ const CUSTOMER_FORM_CODE_ID = 'customer-form-001';
 const CONTACT_FORM_CODE_ID = 'contact-form-001';
 const OPPORTUNITY_FORM_CODE_ID = 'opportunity-form-001';
 const FOLLOWUP_FORM_CODE_ID = 'followup-form-001';
+const ORDER_CHANGE_FORM_CODE_ID = 'order-change-form-001';
+const CUSTOMER_FORM_INST_ID = 'form-inst-001';
+const CONTACT_FORM_INST_ID = 'contact-inst-001';
+const OPPORTUNITY_FORM_INST_ID = 'opportunity-inst-001';
+const FOLLOWUP_FORM_INST_ID = 'followup-inst-001';
+const ORDER_CHANGE_FORM_INST_ID = 'change-inst-001';
 const CUSTOMER_SEARCH_OID = '69e75eb5e4b0e65b61c014da';
 const CONTACT_SEARCH_OID = '66160cfde4b014e237ba75ca';
 const SEARCH_RANGE_START_TS = 1777046400000;
 const SEARCH_RANGE_END_TS = 1777132799999;
+
+function writeFieldBoundWorkbook(workbookPath: string) {
+  mkdirSync(join(workbookPath, '..'), { recursive: true });
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet([
+    { dicId: 'meta', title: 'meta', parentId: '0', code: '', sort: 0, type: 2 },
+    { dicId: 'd005', title: '省', parentId: '0', code: 'province', sort: 1, type: 1 },
+    { dicId: 'd006', title: '市', parentId: '0', code: 'city', sort: 2, type: 1 },
+    { dicId: 'd007', title: '区', parentId: '0', code: 'district', sort: 3, type: 1 },
+    { dicId: 'd-province-js', title: '江苏', parentId: 'd005', code: '320000', sort: 4, type: 0 },
+    { dicId: 'd-province-zj', title: '浙江', parentId: 'd005', code: '330000', sort: 1, type: 0 },
+    { dicId: 'd-city-nt', title: '南通市', parentId: 'd006', code: '320600', sort: 4, type: 0 },
+    { dicId: 'd-city-hz', title: '杭州', parentId: 'd006', code: '330100', sort: 1, type: 0 },
+    { dicId: 'd-district-ct-a', title: '城区', parentId: 'd007', code: '320601', sort: 10, type: 0 },
+    { dicId: 'd-district-ct-b', title: '城区', parentId: 'd007', code: '310112', sort: 11, type: 0 },
+    { dicId: 'd-district-hm', title: '海门市', parentId: 'd007', code: '320684', sort: 12, type: 0 },
+    { dicId: 'd-district-bj', title: '滨江', parentId: 'd007', code: '330108', sort: 1, type: 0 },
+  ]);
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+  XLSX.writeFile(workbook, workbookPath);
+}
 
 const CUSTOMER_WIDGET_MAP = {
   _S_NAME: {
@@ -120,12 +148,14 @@ const CUSTOMER_WIDGET_MAP = {
     codeId: 'Pw_0',
     title: '省',
     type: 'publicOptBoxWidget',
+    linkCodeId: 'Pw_1',
     required: false,
   },
   Pw_1: {
     codeId: 'Pw_1',
     title: '市',
     type: 'publicOptBoxWidget',
+    linkCodeId: 'Pw_2',
     required: false,
   },
   Pw_2: {
@@ -283,6 +313,12 @@ const OPPORTUNITY_WIDGET_MAP = {
     type: 'dateWidget',
     required: false,
   },
+  Ps_0: {
+    codeId: 'Ps_0',
+    title: '负责人',
+    type: 'personSelectWidget',
+    required: false,
+  },
   Bd_0: {
     codeId: 'Bd_0',
     title: '关联客户',
@@ -310,6 +346,40 @@ const OPPORTUNITY_WIDGET_MAP = {
       { colEnName: '_S_TITLE', widgetType: 'textWidget' },
       { colEnName: '_S_NAME', widgetType: 'textWidget' },
     ],
+  },
+  Bd_1: {
+    codeId: 'Bd_1',
+    title: '关联联系人',
+    type: 'basicDataWidget',
+    required: false,
+    option: 'single',
+    extendFieldMap: {
+      displayCol: '_S_SERIAL',
+      extendSettingDataMap: {
+        displayCol: '_S_SERIAL',
+        linkForm: {
+          modelName: '联系人',
+          modelCode: CONTACT_FORM_CODE_ID,
+        },
+      },
+    },
+    dataSource: {
+      modelName: '联系人',
+      modelCode: CONTACT_FORM_CODE_ID,
+      partCode: CONTACT_FORM_CODE_ID,
+      partName: '联系人',
+    },
+    columnData: [
+      { colEnName: '_S_SERIAL', widgetType: 'serialNumWidget' },
+      { colEnName: '_S_TITLE', widgetType: 'textWidget' },
+      { colEnName: '_S_NAME', widgetType: 'textWidget' },
+    ],
+  },
+  At_0: {
+    codeId: 'At_0',
+    title: '附件',
+    type: 'attachmentWidget',
+    required: false,
   },
 } satisfies Record<string, unknown>;
 
@@ -339,8 +409,52 @@ const FOLLOWUP_WIDGET_MAP = {
     type: 'personSelectWidget',
     required: false,
   },
+  Ra_0: {
+    codeId: 'Ra_0',
+    title: '跟进方式',
+    type: 'radioWidget',
+    required: false,
+    options: [
+      {
+        key: 'followup-phone',
+        value: '电话',
+      },
+      {
+        key: 'followup-visit',
+        value: '拜访',
+      },
+    ],
+  },
   Bd_0: {
     codeId: 'Bd_0',
+    title: '关联客户',
+    type: 'basicDataWidget',
+    required: false,
+    option: 'single',
+    extendFieldMap: {
+      displayCol: '_S_TITLE',
+      extendSettingDataMap: {
+        displayCol: '_S_TITLE',
+        linkForm: {
+          modelName: '客户',
+          modelCode: CUSTOMER_FORM_CODE_ID,
+        },
+      },
+    },
+    dataSource: {
+      modelName: '客户',
+      modelCode: CUSTOMER_FORM_CODE_ID,
+      partCode: CUSTOMER_FORM_CODE_ID,
+      partName: '客户',
+    },
+    columnData: [
+      { colEnName: '_S_ENCODE', widgetType: 'textWidget' },
+      { colEnName: '_S_TITLE', widgetType: 'textWidget' },
+      { colEnName: '_S_NAME', widgetType: 'textWidget' },
+    ],
+  },
+  Bd_3: {
+    codeId: 'Bd_3',
     title: '关联商机',
     type: 'basicDataWidget',
     required: false,
@@ -365,6 +479,45 @@ const FOLLOWUP_WIDGET_MAP = {
       { colEnName: '_S_TITLE', widgetType: 'textWidget' },
       { colEnName: '_S_NAME', widgetType: 'textWidget' },
     ],
+  },
+  Bd_4: {
+    codeId: 'Bd_4',
+    title: '关联订单变更',
+    type: 'basicDataWidget',
+    required: false,
+    option: 'single',
+    extendFieldMap: {
+      displayCol: '_S_SERIAL',
+      extendSettingDataMap: {
+        displayCol: '_S_SERIAL',
+        linkForm: {
+          modelName: '订单变更',
+          modelCode: ORDER_CHANGE_FORM_CODE_ID,
+        },
+      },
+    },
+    dataSource: {
+      modelName: '订单变更',
+      modelCode: ORDER_CHANGE_FORM_CODE_ID,
+      partCode: ORDER_CHANGE_FORM_CODE_ID,
+      partName: '订单变更',
+    },
+    columnData: [
+      { colEnName: '_S_SERIAL', widgetType: 'serialNumWidget' },
+      { colEnName: '_S_TITLE', widgetType: 'textWidget' },
+    ],
+  },
+  At_0: {
+    codeId: 'At_0',
+    title: '附件',
+    type: 'attachmentWidget',
+    required: false,
+  },
+  Lo_0: {
+    codeId: 'Lo_0',
+    title: '跟进定位',
+    type: 'locationWidget',
+    required: false,
   },
 } satisfies Record<string, unknown>;
 
@@ -515,6 +668,264 @@ const CONTACT_FIELD_CONTENT = [
   },
 ];
 
+const OPPORTUNITY_FIELD_CONTENT = [
+  {
+    codeId: '_S_NAME',
+    title: '商机名称',
+    type: 'textWidget',
+    value: '华东制造样板商机',
+    rawValue: '华东制造样板商机',
+    parentCodeId: null,
+  },
+  {
+    codeId: '_S_TITLE',
+    title: '标题',
+    type: 'textWidget',
+    value: '华东制造样板商机',
+    rawValue: '华东制造样板商机',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Te_0',
+    title: '商机名称',
+    type: 'textWidget',
+    value: '华东制造样板商机',
+    rawValue: '华东制造样板商机',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Ra_0',
+    title: '商机状态',
+    type: 'radioWidget',
+    value: '跟进中',
+    rawValue: 'opportunity-active',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Da_0',
+    title: '预计成交日期',
+    type: 'dateWidget',
+    value: '2026-05-01',
+    rawValue: Date.parse('2026-05-01'),
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Ps_0',
+    title: '负责人',
+    type: 'personSelectWidget',
+    value: ['open-sales-1'],
+    rawValue: ['open-sales-1'],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_0',
+    title: '关联客户',
+    type: 'basicDataWidget',
+    value: '华东制造样板客户',
+    rawValue: [
+      {
+        id: CUSTOMER_FORM_INST_ID,
+        formCodeId: CUSTOMER_FORM_CODE_ID,
+        formDefId: 'form-def-customer',
+        flowInstId: '',
+        showName: '华东制造样板客户',
+        _S_TITLE: '华东制造样板客户',
+        _S_NAME: '华东制造样板客户',
+        _name_: '华东制造样板客户',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_1',
+    title: '关联联系人',
+    type: 'basicDataWidget',
+    value: 'CON-001',
+    rawValue: [
+      {
+        id: CONTACT_FORM_INST_ID,
+        formCodeId: CONTACT_FORM_CODE_ID,
+        formDefId: 'form-def-contact',
+        flowInstId: '',
+        showName: '张三',
+        _S_TITLE: '张三',
+        _S_NAME: '张三',
+        _name_: '张三',
+        _S_SERIAL: 'CON-001',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'At_0',
+    title: '附件',
+    type: 'attachmentWidget',
+    value: [
+      {
+        fileId: 'file-opportunity-001',
+        fileName: 'opportunity.pdf',
+        fileSize: '256',
+        fileType: 'doc',
+        fileExt: 'pdf',
+      },
+    ],
+    rawValue: [
+      {
+        fileId: 'file-opportunity-001',
+        fileName: 'opportunity.pdf',
+        fileSize: '256',
+        fileType: 'doc',
+        fileExt: 'pdf',
+      },
+    ],
+    parentCodeId: null,
+  },
+];
+
+const FOLLOWUP_FIELD_CONTENT = [
+  {
+    codeId: '_S_TITLE',
+    title: '标题',
+    type: 'textWidget',
+    value: '样板跟进记录',
+    rawValue: '样板跟进记录',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Te_0',
+    title: '跟进内容',
+    type: 'textAreaWidget',
+    value: '已完成电话回访',
+    rawValue: '已完成电话回访',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Da_0',
+    title: '最后跟进日期',
+    type: 'dateWidget',
+    value: '2026-04-24',
+    rawValue: Date.parse('2026-04-24'),
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Ps_0',
+    title: '跟进人',
+    type: 'personSelectWidget',
+    value: ['open-followup-1'],
+    rawValue: ['open-followup-1'],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Ra_0',
+    title: '跟进方式',
+    type: 'radioWidget',
+    value: '电话',
+    rawValue: 'followup-phone',
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_0',
+    title: '关联客户',
+    type: 'basicDataWidget',
+    value: '华东制造样板客户',
+    rawValue: [
+      {
+        id: CUSTOMER_FORM_INST_ID,
+        formCodeId: CUSTOMER_FORM_CODE_ID,
+        formDefId: 'form-def-customer',
+        flowInstId: '',
+        showName: '华东制造样板客户',
+        _S_TITLE: '华东制造样板客户',
+        _S_NAME: '华东制造样板客户',
+        _name_: '华东制造样板客户',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_3',
+    title: '关联商机',
+    type: 'basicDataWidget',
+    value: '华东制造样板商机',
+    rawValue: [
+      {
+        id: OPPORTUNITY_FORM_INST_ID,
+        formCodeId: OPPORTUNITY_FORM_CODE_ID,
+        formDefId: 'form-def-opportunity',
+        flowInstId: '',
+        showName: '华东制造样板商机',
+        _S_TITLE: '华东制造样板商机',
+        _S_NAME: '华东制造样板商机',
+        _name_: '华东制造样板商机',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'Bd_4',
+    title: '关联订单变更',
+    type: 'basicDataWidget',
+    value: 'OC-001',
+    rawValue: [
+      {
+        id: ORDER_CHANGE_FORM_INST_ID,
+        formCodeId: ORDER_CHANGE_FORM_CODE_ID,
+        formDefId: 'form-def-order-change',
+        flowInstId: '',
+        showName: '订单变更OC-001',
+        _S_TITLE: '订单变更OC-001',
+        _S_NAME: '订单变更OC-001',
+        _name_: '订单变更OC-001',
+        _S_SERIAL: 'OC-001',
+      },
+    ],
+    parentCodeId: null,
+  },
+  {
+    codeId: 'At_0',
+    title: '附件',
+    type: 'attachmentWidget',
+    value: [
+      {
+        fileId: 'file-followup-001',
+        fileName: 'followup.pptx',
+        fileSize: '1024',
+        fileType: 'doc',
+        fileExt: 'pptx',
+      },
+    ],
+    rawValue: [
+      {
+        fileId: 'file-followup-001',
+        fileName: 'followup.pptx',
+        fileSize: '1024',
+        fileType: 'doc',
+        fileExt: 'pptx',
+      },
+    ],
+    parentCodeId: null,
+  },
+];
+
+const ORDER_CHANGE_FIELD_CONTENT = [
+  {
+    codeId: '_S_TITLE',
+    title: '标题',
+    type: 'textWidget',
+    value: '订单变更OC-001',
+    rawValue: '订单变更OC-001',
+    parentCodeId: null,
+  },
+  {
+    codeId: '_S_SERIAL',
+    title: '订单变更编号',
+    type: 'serialNumWidget',
+    value: 'OC-001',
+    rawValue: 'OC-001',
+    parentCodeId: null,
+  },
+];
+
 class StubApprovalClient extends ApprovalClient {
   constructor() {
     super({ baseUrl: 'https://stub.yzj.local' });
@@ -568,7 +979,10 @@ class StubLightCloudClient extends LightCloudClient {
     return 'lightcloud-token';
   }
 
-  override async searchList(): Promise<{
+  override async searchList(params: {
+    accessToken: string;
+    body: Record<string, unknown>;
+  }): Promise<{
     pageNumber: number;
     totalPages: number;
     pageSize: number;
@@ -586,20 +1000,32 @@ class StubLightCloudClient extends LightCloudClient {
       }>;
     }>;
   }> {
+    const formCodeId = typeof params.body.formCodeId === 'string' ? params.body.formCodeId : CUSTOMER_FORM_CODE_ID;
+    const record =
+      formCodeId === OPPORTUNITY_FORM_CODE_ID
+        ? {
+            id: OPPORTUNITY_FORM_INST_ID,
+            important: { 标题: '华东制造样板商机' },
+            fieldContent: OPPORTUNITY_FIELD_CONTENT,
+          }
+        : formCodeId === FOLLOWUP_FORM_CODE_ID
+          ? {
+              id: FOLLOWUP_FORM_INST_ID,
+              important: { 标题: '样板跟进记录' },
+              fieldContent: FOLLOWUP_FIELD_CONTENT,
+            }
+          : {
+              id: CUSTOMER_FORM_INST_ID,
+              important: { 标题: '华东制造样板客户' },
+              fieldContent: CUSTOMER_FIELD_CONTENT,
+            };
+
     return {
       pageNumber: 1,
       totalPages: 1,
       pageSize: 20,
       totalElements: 1,
-      content: [
-        {
-          id: 'form-inst-001',
-          important: {
-            标题: '华东制造样板客户',
-          },
-          fieldContent: CUSTOMER_FIELD_CONTENT,
-        },
-      ],
+      content: [record],
     };
   }
 
@@ -623,13 +1049,13 @@ class StubLightCloudClient extends LightCloudClient {
       : [];
 
     if (params.body.formCodeId === CONTACT_FORM_CODE_ID) {
-      if (!requestedIds.includes('contact-inst-001')) {
+      if (!requestedIds.includes(CONTACT_FORM_INST_ID)) {
         return [];
       }
 
       return [
         {
-          id: 'contact-inst-001',
+          id: CONTACT_FORM_INST_ID,
           formDefId: 'form-def-contact',
           title: '张三',
           formCodeId: CONTACT_FORM_CODE_ID,
@@ -642,13 +1068,73 @@ class StubLightCloudClient extends LightCloudClient {
       ];
     }
 
-    if (!requestedIds.includes('form-inst-001')) {
+    if (params.body.formCodeId === OPPORTUNITY_FORM_CODE_ID) {
+      if (!requestedIds.includes(OPPORTUNITY_FORM_INST_ID)) {
+        return [];
+      }
+
+      return [
+        {
+          id: OPPORTUNITY_FORM_INST_ID,
+          formDefId: 'form-def-opportunity',
+          title: '华东制造样板商机',
+          formCodeId: OPPORTUNITY_FORM_CODE_ID,
+          flowInstId: '',
+          important: {
+            标题: '华东制造样板商机',
+          },
+          fieldContent: OPPORTUNITY_FIELD_CONTENT,
+        },
+      ];
+    }
+
+    if (params.body.formCodeId === FOLLOWUP_FORM_CODE_ID) {
+      if (!requestedIds.includes(FOLLOWUP_FORM_INST_ID)) {
+        return [];
+      }
+
+      return [
+        {
+          id: FOLLOWUP_FORM_INST_ID,
+          formDefId: 'form-def-followup',
+          title: '样板跟进记录',
+          formCodeId: FOLLOWUP_FORM_CODE_ID,
+          flowInstId: '',
+          important: {
+            标题: '样板跟进记录',
+          },
+          fieldContent: FOLLOWUP_FIELD_CONTENT,
+        },
+      ];
+    }
+
+    if (params.body.formCodeId === ORDER_CHANGE_FORM_CODE_ID) {
+      if (!requestedIds.includes(ORDER_CHANGE_FORM_INST_ID)) {
+        return [];
+      }
+
+      return [
+        {
+          id: ORDER_CHANGE_FORM_INST_ID,
+          formDefId: 'form-def-order-change',
+          title: '订单变更OC-001',
+          formCodeId: ORDER_CHANGE_FORM_CODE_ID,
+          flowInstId: '',
+          important: {
+            标题: '订单变更OC-001',
+          },
+          fieldContent: ORDER_CHANGE_FIELD_CONTENT,
+        },
+      ];
+    }
+
+    if (!requestedIds.includes(CUSTOMER_FORM_INST_ID)) {
       return [];
     }
 
     return [
       {
-        id: 'form-inst-001',
+        id: CUSTOMER_FORM_INST_ID,
         formDefId: 'form-def-customer',
         title: '华东制造样板客户',
         formCodeId: CUSTOMER_FORM_CODE_ID,
@@ -661,8 +1147,30 @@ class StubLightCloudClient extends LightCloudClient {
     ];
   }
 
-  override async batchSave(): Promise<string[]> {
-    return ['form-inst-001'];
+  override async batchSave(params: {
+    accessToken: string;
+    body: Record<string, unknown>;
+  }): Promise<string[]> {
+    const firstItem =
+      Array.isArray(params.body.data) && params.body.data[0] && typeof params.body.data[0] === 'object'
+        ? (params.body.data[0] as Record<string, unknown>)
+        : null;
+    const existingFormInstId =
+      firstItem && typeof firstItem.formInstId === 'string' ? firstItem.formInstId : null;
+
+    if (existingFormInstId) {
+      return [existingFormInstId];
+    }
+
+    if (params.body.formCodeId === OPPORTUNITY_FORM_CODE_ID) {
+      return [OPPORTUNITY_FORM_INST_ID];
+    }
+
+    if (params.body.formCodeId === FOLLOWUP_FORM_CODE_ID) {
+      return [FOLLOWUP_FORM_INST_ID];
+    }
+
+    return [CUSTOMER_FORM_INST_ID];
   }
 
   override async batchDelete(params: {
@@ -676,14 +1184,17 @@ class StubLightCloudClient extends LightCloudClient {
 }
 
 class StubSearchFormInstLightCloudClient extends StubLightCloudClient {
-  override async searchList(): Promise<{
+  override async searchList(params: {
+    accessToken: string;
+    body: Record<string, unknown>;
+  }): Promise<{
     pageNumber: number;
     totalPages: number;
     pageSize: number;
     totalElements: number;
     content: Array<Record<string, unknown>>;
   }> {
-    const page = await super.searchList();
+    const page = await super.searchList(params);
     return {
       ...page,
       content: page.content.map(({ id, ...record }) => ({
@@ -737,6 +1248,8 @@ function createService(
   });
   const repository = new ShadowMetadataRepository(createInMemoryDatabase());
   const approvalClient = new StubApprovalClient();
+  const fieldBoundWorkbookPath = join(skillOutputDir, '..', 'province-city-district.xlsx');
+  writeFieldBoundWorkbook(fieldBoundWorkbookPath);
 
   return new ShadowMetadataService({
     config,
@@ -747,6 +1260,7 @@ function createService(
       source: config.shadow.dictionarySource,
       jsonPath: config.shadow.dictionaryJsonPath,
       approvalClient,
+      fieldBoundWorkbookPath,
     }),
     now: createNowSequence(),
   });
@@ -837,7 +1351,16 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
       firstRefresh.fields.find((field) => field.fieldCode === 'Bd_1')?.relationBinding?.formCodeId,
       CONTACT_FORM_CODE_ID,
     );
-    assert.equal(firstRefresh.fields.find((field) => field.fieldCode === 'Pw_0')?.semanticSlot, undefined);
+    assert.equal(firstRefresh.fields.find((field) => field.fieldCode === 'Pw_0')?.semanticSlot, 'province');
+    assert.equal(firstRefresh.fields.find((field) => field.fieldCode === 'Pw_1')?.semanticSlot, 'city');
+    assert.equal(firstRefresh.fields.find((field) => field.fieldCode === 'Pw_2')?.semanticSlot, 'district');
+    assert.equal(firstRefresh.fields.find((field) => field.fieldCode === 'Pw_0')?.linkCodeId, 'Pw_1');
+    assert.equal(firstRefresh.fields.find((field) => field.fieldCode === 'Pw_1')?.linkCodeId, 'Pw_2');
+    assert.equal(firstRefresh.fields.find((field) => field.fieldCode === 'Pw_2')?.linkCodeId, undefined);
+    assert.equal(
+      firstRefresh.fields.find((field) => field.fieldCode === 'Pw_0')?.enumBinding?.resolutionStatus,
+      'resolved',
+    );
     assert.equal(
       firstRefresh.fields.find((field) => field.fieldCode === 'Pw_9')?.enumBinding?.resolutionStatus,
       'pending',
@@ -849,14 +1372,21 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
     const initialSearchSkill = service
       .listSkills('customer')
       .find((skill) => skill.skillName === 'shadow.customer_search');
+    const initialUpdateSkill = service
+      .listSkills('customer')
+      .find((skill) => skill.skillName === 'shadow.customer_update');
     assert.ok(initialCreateSkill);
     assert.ok(initialSearchSkill);
+    assert.ok(initialUpdateSkill);
     assert.deepEqual(initialCreateSkill?.requiredParams, ['customer_name']);
     assert.ok(initialCreateSkill?.optionalParams.includes('service_rep_open_id'));
     assert.ok(initialCreateSkill?.optionalParams.includes('last_followup_date'));
     assert.ok(initialCreateSkill?.optionalParams.includes('customer_type'));
     assert.ok(initialCreateSkill?.optionalParams.includes('At_0'));
     assert.ok(initialCreateSkill?.optionalParams.includes('linked_contact_form_inst_id'));
+    assert.ok(initialCreateSkill?.optionalParams.includes('province'));
+    assert.ok(initialCreateSkill?.optionalParams.includes('city'));
+    assert.ok(initialCreateSkill?.optionalParams.includes('district'));
     assert.ok(initialSearchSkill?.optionalParams.includes('linked_contact_form_inst_id'));
     assert.ok(initialSearchSkill?.optionalParams.includes('_S_NAME'));
     assert.ok(initialSearchSkill?.optionalParams.includes('Te_0'));
@@ -870,6 +1400,18 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
     assert.equal(initialSearchSkill?.optionalParams.includes('phone'), false);
     assert.equal(initialCreateSkill?.optionalParams.includes('region'), false);
     assert.equal(initialCreateSkill?.optionalParams.includes('Pw_0'), false);
+    assert.match(
+      initialCreateSkill?.interactionStrategy.parameterCollectionPolicy.join('\n') ?? '',
+      /业务标签/,
+    );
+    assert.match(
+      initialUpdateSkill?.interactionStrategy.recommendedFlow.join('\n') ?? '',
+      /只收集用户明确想改的字段/,
+    );
+    assert.match(
+      initialUpdateSkill?.interactionStrategy.parameterCollectionPolicy.join('\n') ?? '',
+      /把松井客户类型改成 VIP 客户/,
+    );
     assert.deepEqual(
       [...(initialSearchSkill?.optionalParams ?? [])].sort(),
       getExpectedSearchParams(firstRefresh.fields),
@@ -878,6 +1420,25 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
     assert.equal(existsSync(initialCreateSkill?.referencePaths.templateSummary ?? ''), true);
     assert.match(readFileSync(initialCreateSkill?.skillPath ?? '', 'utf8'), /open_id/);
     assert.match(readFileSync(initialCreateSkill?.skillPath ?? '', 'utf8'), /\$approval\.file_upload/);
+    const initialCreateSkillBundle = JSON.parse(
+      readFileSync(initialCreateSkill?.referencePaths.skillBundle ?? '', 'utf8'),
+    ) as {
+      interactionStrategy?: {
+        recommendedFlow?: string[];
+        clarificationTriggers?: Array<{ when: string }>;
+      };
+    };
+    assert.match(readFileSync(initialCreateSkill?.skillPath ?? '', 'utf8'), /## Interaction Strategy/);
+    assert.match(readFileSync(initialCreateSkill?.skillPath ?? '', 'utf8'), /### Clarification Rules/);
+    assert.match(readFileSync(initialUpdateSkill?.skillPath ?? '', 'utf8'), /先用名称、编码、关联线索或日期条件 search/);
+    assert.equal(
+      initialCreateSkillBundle.interactionStrategy?.clarificationTriggers?.[0]?.when,
+      '缺少必填字段',
+    );
+    assert.match(
+      initialCreateSkillBundle.interactionStrategy?.recommendedFlow?.join('\n') ?? '',
+      /业务语义参数/,
+    );
     const initialSearchSkillMarkdown = readFileSync(initialSearchSkill?.skillPath ?? '', 'utf8');
     const initialSearchExecution = readFileSync(initialSearchSkill?.referencePaths.execution ?? '', 'utf8');
     assert.match(initialSearchSkillMarkdown, /pageSize/);
@@ -918,6 +1479,9 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
         customer_type: 'VIP客户',
         last_followup_date: '2026-04-23',
         region: '北京',
+        province: '浙江',
+        city: '杭州',
+        district: { title: '滨江', dicId: 'd-district-bj' },
         linked_contact_form_inst_id: 'contact-inst-001',
       },
     });
@@ -930,6 +1494,9 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
     assert.deepEqual(preview.validationErrors, []);
     assert.deepEqual(preview.unresolvedDictionaries, []);
     assert.deepEqual(widgetValue.Pw_9, [{ title: '北京', dicId: 'd005a1' }]);
+    assert.deepEqual(widgetValue.Pw_0, [{ title: '浙江', dicId: 'd-province-zj' }]);
+    assert.deepEqual(widgetValue.Pw_1, [{ title: '杭州', dicId: 'd-city-hz' }]);
+    assert.deepEqual(widgetValue.Pw_2, [{ title: '滨江', dicId: 'd-district-bj' }]);
     assert.deepEqual(widgetValue.Ps_1, ['open-1']);
     assert.equal(widgetValue.Ra_3, 'EeFfGgHh');
     assert.equal(widgetValue.Da_0, Date.parse('2026-04-23'));
@@ -990,10 +1557,10 @@ test('ShadowMetadataService enforces strict unresolved dictionary, attachment, a
       [{ title: '北京', dicId: 'd005a1' }],
     );
 
-    const ignoredFieldPreview = await service.previewUpsert('customer', {
+    const resolvedFieldPreview = await service.previewUpsert('customer', {
       mode: 'update',
       operatorOpenId: 'oid-test-4',
-      formInstId: 'form-inst-001',
+      formInstId: CUSTOMER_FORM_INST_ID,
       params: {
         service_rep_open_id: {
           open_id: 'open-2',
@@ -1007,20 +1574,20 @@ test('ShadowMetadataService enforces strict unresolved dictionary, attachment, a
             fileExt: 'pdf',
           },
         ],
-        Pw_0: [{ title: '浙江', dicId: 'd-zj' }],
-        Pw_1: [{ title: '杭州', dicId: 'd-hz' }],
-        Pw_2: [{ title: '滨江', dicId: 'd-bj' }],
+        province: '浙江',
+        city: '杭州',
+        district: [{ title: '滨江', dicId: 'd-district-bj' }],
       },
     });
 
-    const ignoredWidgetValue = (ignoredFieldPreview.requestBody as {
+    const resolvedWidgetValue = (resolvedFieldPreview.requestBody as {
       data: Array<{ widgetValue: Record<string, unknown> }>;
     }).data[0]?.widgetValue;
-    assert.equal(ignoredFieldPreview.readyToSend, true);
-    assert.deepEqual(ignoredFieldPreview.validationErrors, []);
-    assert.deepEqual(ignoredFieldPreview.blockedReadonlyParams, []);
-    assert.deepEqual(ignoredWidgetValue.Ps_1, ['open-2']);
-    assert.deepEqual(ignoredWidgetValue.At_0, [
+    assert.equal(resolvedFieldPreview.readyToSend, true);
+    assert.deepEqual(resolvedFieldPreview.validationErrors, []);
+    assert.deepEqual(resolvedFieldPreview.blockedReadonlyParams, []);
+    assert.deepEqual(resolvedWidgetValue.Ps_1, ['open-2']);
+    assert.deepEqual(resolvedWidgetValue.At_0, [
       {
         fileId: 'file-1',
         fileName: 'fixture.pdf',
@@ -1029,14 +1596,62 @@ test('ShadowMetadataService enforces strict unresolved dictionary, attachment, a
         fileExt: 'pdf',
       },
     ]);
-    assert.equal('Pw_0' in ignoredWidgetValue, false);
-    assert.equal('Pw_1' in ignoredWidgetValue, false);
-    assert.equal('Pw_2' in ignoredWidgetValue, false);
+    assert.deepEqual(resolvedWidgetValue.Pw_0, [{ title: '浙江', dicId: 'd-province-zj' }]);
+    assert.deepEqual(resolvedWidgetValue.Pw_1, [{ title: '杭州', dicId: 'd-city-hz' }]);
+    assert.deepEqual(resolvedWidgetValue.Pw_2, [{ title: '滨江', dicId: 'd-district-bj' }]);
+
+    const ambiguousDistrictPreview = await service.previewUpsert('customer', {
+      mode: 'update',
+      operatorOpenId: 'oid-test-4b',
+      formInstId: CUSTOMER_FORM_INST_ID,
+      params: {
+        district: '城区',
+      },
+    });
+    assert.equal(ambiguousDistrictPreview.readyToSend, false);
+    assert.match(ambiguousDistrictPreview.validationErrors[0] ?? '', /多个候选/);
+    assert.match(ambiguousDistrictPreview.validationErrors[0] ?? '', /完整 \{title,dicId\}/);
+
+    const explicitDistrictPreview = await service.previewUpsert('customer', {
+      mode: 'update',
+      operatorOpenId: 'oid-test-4c',
+      formInstId: CUSTOMER_FORM_INST_ID,
+      params: {
+        province: '江苏',
+        city: '南通市',
+        district: {
+          title: '海门市',
+          dicId: 'd-district-hm',
+        },
+      },
+    });
+    const explicitDistrictWidgetValue = (explicitDistrictPreview.requestBody as {
+      data: Array<{ widgetValue: Record<string, unknown> }>;
+    }).data[0]?.widgetValue;
+    assert.equal(explicitDistrictPreview.readyToSend, true);
+    assert.deepEqual(explicitDistrictPreview.validationErrors, []);
+    assert.deepEqual(explicitDistrictWidgetValue.Pw_0, [{ title: '江苏', dicId: 'd-province-js' }]);
+    assert.deepEqual(explicitDistrictWidgetValue.Pw_1, [{ title: '南通市', dicId: 'd-city-nt' }]);
+    assert.deepEqual(explicitDistrictWidgetValue.Pw_2, [{ title: '海门市', dicId: 'd-district-hm' }]);
+
+    const mismatchedDistrictPreview = await service.previewUpsert('customer', {
+      mode: 'update',
+      operatorOpenId: 'oid-test-4d',
+      formInstId: CUSTOMER_FORM_INST_ID,
+      params: {
+        district: {
+          title: '海门市',
+          dicId: 'd-district-ct-a',
+        },
+      },
+    });
+    assert.equal(mismatchedDistrictPreview.readyToSend, false);
+    assert.match(mismatchedDistrictPreview.validationErrors[0] ?? '', /title 与 dicId 不匹配/);
 
     const invalidAttachmentPreview = await service.previewUpsert('customer', {
       mode: 'update',
       operatorOpenId: 'oid-test-4a',
-      formInstId: 'form-inst-001',
+      formInstId: CUSTOMER_FORM_INST_ID,
       params: {
         At_0: [{ fileId: 'file-1' }],
       },
@@ -1060,10 +1675,10 @@ test('ShadowMetadataService enforces strict unresolved dictionary, attachment, a
     const invalidBasicDataPreview = await service.previewUpsert('customer', {
       mode: 'update',
       operatorOpenId: 'oid-test-5a',
-      formInstId: 'form-inst-001',
+      formInstId: CUSTOMER_FORM_INST_ID,
       params: {
         linked_contact_form_inst_id: {
-          id: 'contact-inst-001',
+          id: CONTACT_FORM_INST_ID,
           formCodeId: CONTACT_FORM_CODE_ID,
           formDefId: 'form-def-contact',
         },
@@ -1092,10 +1707,10 @@ test('ShadowMetadataService enforces strict unresolved dictionary, attachment, a
     const displayOnlyBasicDataPreview = await service.previewUpsert('customer', {
       mode: 'update',
       operatorOpenId: 'oid-test-5b',
-      formInstId: 'form-inst-001',
+      formInstId: CUSTOMER_FORM_INST_ID,
       params: {
         linked_contact_form_inst_id: {
-          id: 'contact-inst-001',
+          id: CONTACT_FORM_INST_ID,
           formCodeId: CONTACT_FORM_CODE_ID,
           formDefId: 'form-def-contact',
           _S_SERIAL: 'CON-DISPLAY-ONLY',
@@ -1436,8 +2051,8 @@ test('ShadowMetadataService executes real search and get with live read bindings
           operator: 'eq',
         },
         {
-          field: 'Pw_0',
-          value: [{ title: '浙江', dicId: 'd-zj' }],
+          field: 'province',
+          value: '浙江',
           operator: 'eq',
         },
       ],
@@ -1446,18 +2061,26 @@ test('ShadowMetadataService executes real search and get with live read bindings
     });
     assert.equal(search.mode, 'live');
     assert.equal(search.records.length, 1);
-    assert.equal(search.records[0]?.formInstId, 'form-inst-001');
-    assert.equal(search.requestBody.searchItems.length, 2);
+    assert.equal(search.records[0]?.formInstId, CUSTOMER_FORM_INST_ID);
+    assert.equal(search.requestBody.searchItems.length, 3);
     assert.equal(search.requestBody.searchItems[0]?.codeId, 'Bd_1');
     assert.equal(search.requestBody.searchItems[0]?.operator, 'contains');
     assert.deepEqual(search.requestBody.searchItems[0]?.value, [
       {
-        _id_: 'contact-inst-001',
+        _id_: CONTACT_FORM_INST_ID,
         _name_: 'CON-001',
       },
     ]);
     assert.equal(search.requestBody.searchItems[1]?.codeId, 'Ps_1');
     assert.deepEqual(search.requestBody.searchItems[1]?.value, ['open-live-1']);
+    assert.equal(search.requestBody.searchItems[2]?.codeId, 'Pw_0');
+    assert.equal(search.requestBody.searchItems[2]?.operator, 'eq');
+    assert.deepEqual(search.requestBody.searchItems[2]?.value, [
+      {
+        title: '浙江',
+        dicId: 'd-province-zj',
+      },
+    ]);
 
     const displayAndDateSearch = await service.executeSearch('customer', {
       operatorOpenId: 'oid-live-1',
@@ -1496,10 +2119,10 @@ test('ShadowMetadataService executes real search and get with live read bindings
 
     const detail = await service.executeGet('customer', {
       operatorOpenId: 'oid-live-1',
-      formInstId: 'form-inst-001',
+      formInstId: CUSTOMER_FORM_INST_ID,
     });
     assert.equal(detail.mode, 'live');
-    assert.equal(detail.record.formInstId, 'form-inst-001');
+    assert.equal(detail.record.formInstId, CUSTOMER_FORM_INST_ID);
     assert.equal(detail.record.fieldMap.Te_0?.value, '华东制造样板客户');
     assert.equal(detail.record.fieldMap.Ra_3?.rawValue, 'EeFfGgHh');
   } finally {
@@ -1534,7 +2157,7 @@ test('ShadowMetadataService maps searchList formInstId when upstream omits top-l
 
     assert.equal(search.mode, 'live');
     assert.equal(search.records.length, 1);
-    assert.equal(search.records[0]?.formInstId, 'form-inst-001');
+    assert.equal(search.records[0]?.formInstId, CUSTOMER_FORM_INST_ID);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1559,7 +2182,7 @@ test('ShadowMetadataService executes real update write with customer type, follo
     const result = await service.executeUpsert('customer', {
       mode: 'update',
       operatorOpenId: 'oid-live-1',
-      formInstId: 'form-inst-001',
+      formInstId: CUSTOMER_FORM_INST_ID,
       params: {
         customer_name: '华东制造更新客户',
         customer_type: 'VIP客户',
@@ -1577,13 +2200,13 @@ test('ShadowMetadataService executes real update write with customer type, follo
           },
         ],
         linked_contact_form_inst_id: 'contact-inst-001',
-        Pw_0: [{ title: '浙江', dicId: 'd-zj' }],
+        province: '浙江',
       },
     });
 
     assert.equal(result.mode, 'live');
     assert.equal(result.writeMode, 'update');
-    assert.deepEqual(result.formInstIds, ['form-inst-001']);
+    assert.deepEqual(result.formInstIds, [CUSTOMER_FORM_INST_ID]);
     assert.equal(result.requestBody.data[0]?.widgetValue.Te_0, '华东制造更新客户');
     assert.equal(result.requestBody.data[0]?.widgetValue.Ra_3, 'EeFfGgHh');
     assert.equal(result.requestBody.data[0]?.widgetValue.Da_0, Date.parse('2026-04-23'));
@@ -1610,7 +2233,12 @@ test('ShadowMetadataService executes real update write with customer type, follo
         _S_SERIAL: 'CON-001',
       },
     ]);
-    assert.equal('Pw_0' in (result.requestBody.data[0]?.widgetValue ?? {}), false);
+    assert.deepEqual(result.requestBody.data[0]?.widgetValue.Pw_0, [
+      {
+        title: '浙江',
+        dicId: 'd-province-zj',
+      },
+    ]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1682,7 +2310,7 @@ test('ShadowMetadataService generates object-specific contact skill names instea
       operatorOpenId: 'oid-contact-1',
       params: {
         _S_NAME: '张三',
-        linked_customer_form_inst_id: 'form-inst-001',
+        linked_customer_form_inst_id: CUSTOMER_FORM_INST_ID,
       },
     });
     assert.equal(contactPreview.readyToSend, true);
@@ -1691,7 +2319,7 @@ test('ShadowMetadataService generates object-specific contact skill names instea
         ?.widgetValue.Bd_0,
       [
         {
-          id: 'form-inst-001',
+          id: CUSTOMER_FORM_INST_ID,
           formCodeId: CUSTOMER_FORM_CODE_ID,
           formDefId: 'form-def-customer',
           flowInstId: '',
@@ -1732,16 +2360,31 @@ test('ShadowMetadataService refreshes opportunity and followup metadata into obj
       (skill) => skill.skillName === 'shadow.followup_create',
     );
 
-    assert.equal(opportunityDetail.fields.length, 6);
-    assert.equal(followupDetail.fields.length, 5);
+    assert.equal(opportunityDetail.fields.length, 9);
+    assert.equal(followupDetail.fields.length, 10);
     assert.equal(opportunitySkills.length, 5);
     assert.equal(followupSkills.length, 5);
     assert.ok(opportunityCreateSkill);
     assert.ok(followupCreateSkill);
     assert.ok(opportunitySearchSkill?.optionalParams.includes('linked_customer_form_inst_id'));
+    assert.ok(opportunitySearchSkill?.optionalParams.includes('linked_contact_form_inst_id'));
     assert.ok(followupSearchSkill?.optionalParams.includes('linked_opportunity_form_inst_id'));
-    assert.ok(opportunityCreateSkill?.requiredParams.includes('customer_name'));
+    assert.ok(followupSearchSkill?.optionalParams.includes('linked_customer_form_inst_id'));
+    assert.ok(followupSearchSkill?.optionalParams.includes('Bd_4'));
+    assert.ok(opportunityCreateSkill?.requiredParams.includes('opportunity_name'));
+    assert.ok(opportunityCreateSkill?.optionalParams.includes('owner_open_id'));
+    assert.ok(opportunityCreateSkill?.optionalParams.includes('At_0'));
     assert.ok(followupCreateSkill?.requiredParams.includes('Te_0'));
+    assert.ok(followupCreateSkill?.optionalParams.includes('Bd_4'));
+    assert.ok(followupCreateSkill?.optionalParams.includes('At_0'));
+    assert.equal(
+      followupDetail.fields.find((field) => field.fieldCode === 'Bd_4')?.relationBinding?.modelName,
+      '订单变更',
+    );
+    assert.equal(
+      followupDetail.fields.find((field) => field.fieldCode === 'Bd_4')?.relationBinding?.formCodeId,
+      ORDER_CHANGE_FORM_CODE_ID,
+    );
     assert.match(opportunityCreateSkill?.skillPath ?? '', /\/skills\/opportunity\/create\/SKILL\.md$/);
     assert.match(followupCreateSkill?.skillPath ?? '', /\/skills\/followup\/create\/SKILL\.md$/);
     assert.equal(existsSync(opportunityCreateSkill?.skillPath ?? ''), true);
@@ -1754,8 +2397,173 @@ test('ShadowMetadataService refreshes opportunity and followup metadata into obj
       readFileSync(followupCreateSkill?.referencePaths.skillBundle ?? '', 'utf8'),
       /"skillName": "shadow\.followup_create"/,
     );
+    assert.match(
+      readFileSync(opportunityCreateSkill?.referencePaths.skillBundle ?? '', 'utf8'),
+      /"interactionStrategy"/,
+    );
+    assert.match(
+      readFileSync(followupCreateSkill?.skillPath ?? '', 'utf8'),
+      /## Interaction Strategy/,
+    );
     assert.match(readFileSync(opportunitySearchSkill?.skillPath ?? '', 'utf8'), /linked_customer_form_inst_id/);
     assert.match(readFileSync(followupSearchSkill?.skillPath ?? '', 'utf8'), /linked_opportunity_form_inst_id/);
+    assert.match(readFileSync(followupSearchSkill?.skillPath ?? '', 'utf8'), /Bd_4/);
+    assert.match(
+      readFileSync(followupCreateSkill?.skillPath ?? '', 'utf8'),
+      /未支持字段/,
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ShadowMetadataService normalizes opportunity and followup complex fields and rejects unsupported widgets', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-opportunity-followup-preview-'));
+  const dictionaryPath = join(tempDir, 'shadow-dictionaries.json');
+  const service = createService(dictionaryPath, join(tempDir, 'skills'));
+
+  try {
+    await service.refreshObject('opportunity');
+    await service.refreshObject('followup');
+
+    const opportunityPreview = await service.previewUpsert('opportunity', {
+      mode: 'create',
+      operatorOpenId: 'oid-opportunity-1',
+      params: {
+        opportunity_name: '华东制造样板商机',
+        opportunity_status: '跟进中',
+        owner_open_id: 'open-sales-1',
+        linked_customer_form_inst_id: CUSTOMER_FORM_INST_ID,
+        linked_contact_form_inst_id: CONTACT_FORM_INST_ID,
+        Da_0: '2026-05-01',
+        At_0: {
+          fileId: 'file-opportunity-002',
+          fileName: 'opportunity.xlsx',
+          fileSize: '512',
+          fileType: 'doc',
+          fileExt: 'xlsx',
+        },
+      },
+    });
+    assert.equal(opportunityPreview.readyToSend, true);
+    assert.deepEqual(
+      (opportunityPreview.requestBody as {
+        data: Array<{ widgetValue: Record<string, unknown> }>;
+      }).data[0]?.widgetValue.Bd_0,
+      [
+        {
+          id: CUSTOMER_FORM_INST_ID,
+          formCodeId: CUSTOMER_FORM_CODE_ID,
+          formDefId: 'form-def-customer',
+          flowInstId: '',
+          showName: '华东制造样板客户',
+          _S_TITLE: '华东制造样板客户',
+          _S_NAME: '华东制造样板客户',
+          _name_: '华东制造样板客户',
+        },
+      ],
+    );
+    assert.deepEqual(
+      (opportunityPreview.requestBody as {
+        data: Array<{ widgetValue: Record<string, unknown> }>;
+      }).data[0]?.widgetValue.Bd_1,
+      [
+        {
+          id: CONTACT_FORM_INST_ID,
+          formCodeId: CONTACT_FORM_CODE_ID,
+          formDefId: 'form-def-contact',
+          flowInstId: '',
+          showName: '张三',
+          _S_TITLE: '张三',
+          _S_NAME: '张三',
+          _name_: '张三',
+          _S_SERIAL: 'CON-001',
+        },
+      ],
+    );
+    assert.deepEqual(
+      (opportunityPreview.requestBody as {
+        data: Array<{ widgetValue: Record<string, unknown> }>;
+      }).data[0]?.widgetValue.At_0,
+      [
+        {
+          fileId: 'file-opportunity-002',
+          fileName: 'opportunity.xlsx',
+          fileSize: '512',
+          fileType: 'doc',
+          fileExt: 'xlsx',
+        },
+      ],
+    );
+
+    const followupPreview = await service.previewUpsert('followup', {
+      mode: 'create',
+      operatorOpenId: 'oid-followup-1',
+      params: {
+        Te_0: '完成现场回访并记录问题',
+        last_followup_date: '2026-04-24',
+        owner_open_id: 'open-followup-1',
+        linked_customer_form_inst_id: CUSTOMER_FORM_INST_ID,
+        linked_opportunity_form_inst_id: OPPORTUNITY_FORM_INST_ID,
+        Bd_4: ORDER_CHANGE_FORM_INST_ID,
+        At_0: [
+          {
+            fileId: 'file-followup-002',
+            fileName: 'followup.docx',
+            fileSize: '2048',
+            fileType: 'doc',
+            fileExt: 'docx',
+          },
+        ],
+      },
+    });
+    assert.equal(followupPreview.readyToSend, true);
+    assert.deepEqual(
+      (followupPreview.requestBody as {
+        data: Array<{ widgetValue: Record<string, unknown> }>;
+      }).data[0]?.widgetValue.Bd_4,
+      [
+        {
+          id: ORDER_CHANGE_FORM_INST_ID,
+          formCodeId: ORDER_CHANGE_FORM_CODE_ID,
+          formDefId: 'form-def-order-change',
+          flowInstId: '',
+          showName: '订单变更OC-001',
+          _S_TITLE: '订单变更OC-001',
+          _S_NAME: '订单变更OC-001',
+          _name_: '订单变更OC-001',
+          _S_SERIAL: 'OC-001',
+        },
+      ],
+    );
+
+    const unsupportedWritePreview = await service.previewUpsert('followup', {
+      mode: 'update',
+      operatorOpenId: 'oid-followup-2',
+      formInstId: FOLLOWUP_FORM_INST_ID,
+      params: {
+        Lo_0: {
+          longitude: 121.5,
+          latitude: 31.2,
+        },
+      },
+    });
+    assert.equal(unsupportedWritePreview.readyToSend, false);
+    assert.match(unsupportedWritePreview.validationErrors[0] ?? '', /Lo_0/);
+    assert.match(unsupportedWritePreview.validationErrors[0] ?? '', /locationWidget/);
+
+    const unsupportedSearchPreview = await service.previewSearch('followup', {
+      operatorOpenId: 'oid-followup-3',
+      filters: [
+        {
+          field: 'Lo_0',
+          value: '上海',
+        },
+      ],
+    });
+    assert.equal(unsupportedSearchPreview.readyToSend, false);
+    assert.match(unsupportedSearchPreview.validationErrors[0] ?? '', /Lo_0/);
+    assert.match(unsupportedSearchPreview.validationErrors[0] ?? '', /查询支持/);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

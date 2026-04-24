@@ -124,6 +124,10 @@ export interface AssetPageConfig {
 
 export type ShadowObjectKey = 'customer' | 'contact' | 'opportunity' | 'followup';
 export type ShadowDictionarySource = 'manual_json' | 'approval_api' | 'hybrid';
+export type ShadowResolvedDictionarySource =
+  | ShadowDictionarySource
+  | 'field_binding_workbook'
+  | 'unresolved';
 export type ShadowObjectActivationStatus = 'active' | 'pending' | 'not_configured';
 export type ShadowObjectRefreshStatus = 'not_started' | 'ready' | 'failed';
 export type ShadowDictionaryResolutionStatus = 'resolved' | 'pending' | 'failed';
@@ -132,13 +136,18 @@ export type ShadowSkillOperation = 'search' | 'get' | 'create' | 'update' | 'del
 export type ShadowExecutionPhase = 'preview_only' | 'live_read_enabled' | 'live_write_enabled';
 export type ShadowSemanticSlot =
   | 'customer_name'
+  | 'opportunity_name'
   | 'owner_open_id'
   | 'service_rep_open_id'
   | 'customer_status'
+  | 'opportunity_status'
   | 'customer_type'
   | 'industry'
   | 'last_followup_date'
   | 'region'
+  | 'province'
+  | 'city'
+  | 'district'
   | 'phone'
   | string;
 
@@ -156,7 +165,7 @@ export interface ShadowFieldOption {
 export interface ShadowFieldEnumBindingView {
   kind: 'public_option';
   referId: string | null;
-  source: ShadowDictionarySource | 'unresolved';
+  source: ShadowResolvedDictionarySource;
   resolutionStatus: ShadowDictionaryResolutionStatus;
   acceptedValueShape: ShadowDictionaryAcceptedValueShape;
   resolvedEntryCount: number;
@@ -176,6 +185,7 @@ export interface ShadowStandardizedFieldView {
   required: boolean;
   readOnly: boolean;
   multi: boolean;
+  linkCodeId?: string | null;
   options: ShadowFieldOption[];
   referId?: string;
   semanticSlot?: ShadowSemanticSlot;
@@ -210,7 +220,7 @@ export interface ShadowDictionaryEntryView {
   code: string | null;
   state: string | null;
   sort: number | null;
-  source: ShadowDictionarySource | 'unresolved';
+  source: ShadowResolvedDictionarySource;
   sourceVersion: string;
   aliases: string[];
 }
@@ -220,7 +230,7 @@ export interface ShadowDictionaryBindingView {
   fieldCode: string;
   label: string;
   referId: string | null;
-  source: ShadowDictionarySource | 'unresolved';
+  source: ShadowResolvedDictionarySource;
   resolutionStatus: ShadowDictionaryResolutionStatus;
   acceptedValueShape: ShadowDictionaryAcceptedValueShape;
   snapshotVersion: string;
@@ -256,6 +266,20 @@ export interface ShadowSkillExecutionBindingView {
   phase: ShadowExecutionPhase;
 }
 
+export interface ShadowSkillClarificationRuleView {
+  when: string;
+  response: string;
+}
+
+export interface ShadowSkillInteractionStrategyView {
+  recommendedFlow: string[];
+  parameterCollectionPolicy: string[];
+  clarificationTriggers: ShadowSkillClarificationRuleView[];
+  disambiguationRules: string[];
+  targetResolutionPolicy: string[];
+  executionGuardrails: string[];
+}
+
 export interface ShadowSkillView {
   skillName: string;
   skillKey: string;
@@ -267,6 +291,7 @@ export interface ShadowSkillView {
   optionalParams: string[];
   confirmationPolicy: string;
   outputCardType: string;
+  interactionStrategy: ShadowSkillInteractionStrategyView;
   sourceObject: ShadowObjectKey;
   sourceFormCodeId: string;
   sourceVersion: string;

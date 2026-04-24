@@ -23,11 +23,56 @@
     "Ra_0",
     "Ra_1",
     "_S_NAME",
-    "Da_0"
+    "Da_0",
+    "district",
+    "province",
+    "city"
   ],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "contact-update-preview",
+  "interactionStrategy": {
+    "recommendedFlow": [
+      "先解析用户要改哪一条记录，以及要改哪些字段。",
+      "如果缺少 `form_inst_id`，先用名称、编码、关联线索或日期条件 search，拿到唯一目标后再更新。",
+      "只收集用户明确想改的字段；未提及字段保持原值不动。",
+      "变更值归一化后先生成 preview，得到明确确认后再执行 live write。"
+    ],
+    "parameterCollectionPolicy": [
+      "追问时优先使用业务标签和变更目标，不要求用户先给字段码。",
+      "如果用户像“把松井客户类型改成 VIP 客户”这样表达，先提取目标线索与变更意图，再通过 search 解析目标记录。",
+      "如果已经有上一跳 search / get 结果，优先复用其中的 `formInstId`。",
+      "当更新关系字段时，优先把用户口语化描述解析成关联对象，再回填精确关系值。",
+      "附件更新仍应先完成上传，再把上传结果对象作为变更值写入。"
+    ],
+    "clarificationTriggers": [
+      {
+        "when": "目标记录尚未唯一解析",
+        "response": "先返回候选并要求用户选择唯一记录，再进入 update。"
+      },
+      {
+        "when": "没有提取到任何有效变更字段",
+        "response": "请用户明确说明希望修改哪些字段和值，而不是直接发起空更新。"
+      },
+      {
+        "when": "新值是歧义的人员、关联对象或公共选项",
+        "response": "要求补充精确标识、候选选择或完整 `{title,dicId}`，不要自动猜测。"
+      }
+    ],
+    "disambiguationRules": [
+      "关系字段若命中多个候选，必须停下来澄清，不允许直接覆盖已有关联。",
+      "人员字段同名或无法唯一识别时，只接受精确 `open_id` 或唯一候选。",
+      "公共选项 / 省市区字段在标题重复时，只接受完整 `{title,dicId}`，不能 title-only 自动猜。"
+    ],
+    "targetResolutionPolicy": [
+      "update 的硬前置是唯一目标；可以通过 search 获得 `formInstId`，但不能直接按模糊名称更新。"
+    ],
+    "executionGuardrails": [
+      "只发送 `form_inst_id` 加本次变更字段，不清空未提及字段。",
+      "先 preview，再确认，再 live write。",
+      "如果当前上下文能拿到旧值，应在确认摘要中显式展示旧值 / 新值，避免误覆盖关键字段。"
+    ]
+  },
   "sourceObject": "contact",
   "sourceFormCodeId": "a3ccc61c75c34cb28a7113a311418080",
-  "sourceVersion": "2026-04-23T16:35:58.394Z"
+  "sourceVersion": "2026-04-24T08:59:16.078Z"
 }

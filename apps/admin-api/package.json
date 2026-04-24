@@ -6,11 +6,15 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.build.json",
-    "test": "tsx --test tests/**/*.test.ts"
+    "test": "tsx --test tests/**/*.test.ts",
+    "test:live-shadow": "tsx --test tests/live-shadow.live.ts"
   },
   "devDependencies": {
     "@types/node": "^24.6.1",
     "tsx": "^4.21.0",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
   }
 }

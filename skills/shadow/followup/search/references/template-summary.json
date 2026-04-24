@@ -3,8 +3,8 @@
   "objectLabel": "商机跟进记录",
   "formCodeId": "0a618c5d806545b997f60e8461b3f504",
   "formDefId": null,
-  "sourceVersion": "2026-04-24T06:51:23.851Z",
-  "schemaHash": "6ea01274538ebbae4a6204604f5d4c54be636e480edbad36bf4258371db407b6",
+  "sourceVersion": "2026-04-24T08:59:16.696Z",
+  "schemaHash": "d55c4662f9ef053014f3e657f68f8028775db7ab1e4052fa09ec1aae0731f05a",
   "fieldCount": 23,
   "normalizedFields": [
     {
@@ -14,8 +14,7 @@
       "required": false,
       "readOnly": false,
       "multi": false,
-      "options": [],
-      "semanticSlot": "customer_name"
+      "options": []
     },
     {
       "fieldCode": "Ra_2",
@@ -53,8 +52,7 @@
       "required": false,
       "readOnly": false,
       "multi": false,
-      "options": [],
-      "semanticSlot": "customer_name"
+      "options": []
     },
     {
       "fieldCode": "Ra_0",
@@ -99,8 +97,7 @@
           "key": "cOhLEeBv",
           "value": "流失客户"
         }
-      ],
-      "semanticSlot": "customer_status"
+      ]
     },
     {
       "fieldCode": "Ra_1",
