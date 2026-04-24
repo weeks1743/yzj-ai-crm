@@ -97,6 +97,19 @@ function parsePort(value: string | undefined): number {
   return port;
 }
 
+function parsePositiveInteger(value: string | undefined, fallbackValue: number, label: string): number {
+  if (!value) {
+    return fallbackValue;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new ConfigError(`${label} 必须是正整数`);
+  }
+
+  return parsed;
+}
+
 function parseDictionarySource(value: string | undefined): ShadowDictionarySource {
   if (!value) {
     return 'manual_json';
@@ -177,6 +190,18 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
         dirname(envFilePath),
         env.ORG_SYNC_SQLITE_PATH || '.local/admin-api.sqlite',
       ),
+    },
+    external: {
+      image: {
+        baseUrl: (env.EXT_IMAGE_BASE_URL || 'https://api.linkapi.org').trim(),
+        apiKey: env.EXT_IMAGE_API_KEY?.trim() || null,
+        model: (env.EXT_IMAGE_MODEL || 'gpt-image-2').trim(),
+        timeoutMs: parsePositiveInteger(
+          env.EXT_IMAGE_TIMEOUT_MS,
+          60000,
+          'EXT_IMAGE_TIMEOUT_MS',
+        ),
+      },
     },
     meta: {
       configSource: '.env',

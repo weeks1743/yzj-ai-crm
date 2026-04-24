@@ -9,6 +9,15 @@ export type ShadowObjectRefreshStatus = 'not_started' | 'ready' | 'failed';
 export type ShadowDictionaryResolutionStatus = 'resolved' | 'pending' | 'failed';
 export type ShadowDictionaryAcceptedValueShape = 'array<{title,dicId}>';
 export type FieldBoundDictionaryKey = 'province' | 'city' | 'district';
+export type ExternalSkillStatus = '运行中' | '告警中' | '占位中';
+export type ExternalSkillImplementationType =
+  | 'http_request'
+  | 'tool'
+  | 'mcp'
+  | 'skill'
+  | 'placeholder';
+export type ImageGenerationSize = 'auto' | '1024x1024' | '1536x1024' | '1024x1536';
+export type ImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high';
 export type ShadowSemanticSlot =
   | 'customer_name'
   | 'opportunity_name'
@@ -64,6 +73,14 @@ export interface AppConfig {
   };
   storage: {
     sqlitePath: string;
+  };
+  external: {
+    image: {
+      baseUrl: string;
+      apiKey: string | null;
+      model: string;
+      timeoutMs: number;
+    };
   };
   meta: {
     configSource: '.env';
@@ -132,6 +149,42 @@ export interface ApiErrorResponse {
   code: string;
   message: string;
   runId?: string;
+}
+
+export interface ExternalSkillCatalogItem {
+  id: string;
+  label: string;
+  skillCode: string;
+  type: '外部技能';
+  trigger: string;
+  route?: string;
+  dependencies: string[];
+  status: ExternalSkillStatus;
+  implementationType: ExternalSkillImplementationType;
+  supportsInvoke: boolean;
+  provider?: string | null;
+  model?: string | null;
+  owner: string;
+  sla: string;
+  summary: string;
+}
+
+export interface ImageGenerationRequest {
+  prompt: string;
+  size?: ImageGenerationSize;
+  quality?: ImageGenerationQuality;
+}
+
+export interface ImageGenerationResponse {
+  skillCode: 'ext.image_generate';
+  model: string;
+  provider: string;
+  size: ImageGenerationSize;
+  quality: ImageGenerationQuality;
+  previewDataUrl: string;
+  mimeType: string;
+  latencyMs: number;
+  generatedAt: string;
 }
 
 export interface YzjAccessTokenResponse {

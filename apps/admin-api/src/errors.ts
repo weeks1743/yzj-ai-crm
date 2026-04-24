@@ -40,6 +40,18 @@ export class SyncAlreadyRunningError extends AppError {
   }
 }
 
+export class ServiceUnavailableError extends AppError {
+  constructor(message: string, details?: unknown) {
+    super(message, 'SERVICE_UNAVAILABLE', 503, details);
+  }
+}
+
+export class ExternalSkillProviderError extends AppError {
+  constructor(message: string, statusCode = 502, details?: unknown) {
+    super(message, 'EXTERNAL_SKILL_PROVIDER_ERROR', statusCode, details);
+  }
+}
+
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;

@@ -9,6 +9,10 @@ interface TestConfigOptions {
   contactFormCodeId?: string | null;
   opportunityFormCodeId?: string | null;
   followupFormCodeId?: string | null;
+  imageBaseUrl?: string;
+  imageApiKey?: string | null;
+  imageModel?: string;
+  imageTimeoutMs?: number;
 }
 
 export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
@@ -68,6 +72,14 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
     },
     storage: {
       sqlitePath: ':memory:',
+    },
+    external: {
+      image: {
+        baseUrl: options.imageBaseUrl ?? 'https://api.linkapi.org',
+        apiKey: options.imageApiKey ?? null,
+        model: options.imageModel ?? 'gpt-image-2',
+        timeoutMs: options.imageTimeoutMs ?? 60000,
+      },
     },
     meta: {
       configSource: '.env',

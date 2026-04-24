@@ -6,6 +6,7 @@ import { createAdminApiServer } from './app.js';
 import { loadAppConfig } from './config.js';
 import { openDatabase } from './database.js';
 import { DictionaryResolver } from './dictionary-resolver.js';
+import { ExternalSkillService } from './external-skill-service.js';
 import { LightCloudClient } from './lightcloud-client.js';
 import { OrgSyncRepository } from './org-sync-repository.js';
 import { OrgSyncService } from './org-sync-service.js';
@@ -53,11 +54,16 @@ const shadowMetadataService = new ShadowMetadataService({
     ),
   }),
 });
+const externalSkillService = new ExternalSkillService({
+  config,
+});
+
 const server = createAdminApiServer({
   config,
   orgSyncService,
   approvalFileService,
   shadowMetadataService,
+  externalSkillService,
 });
 
 server.listen(config.server.port, () => {

@@ -39,6 +39,10 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.match(config.storage.sqlitePath, /\.local\/admin-api\.sqlite$/);
   assert.match(config.shadow.dictionaryJsonPath, /\.local\/shadow-dictionaries\.json$/);
   assert.match(config.shadow.skillOutputDir, /skills\/shadow$/);
+  assert.equal(config.external.image.baseUrl, 'https://api.linkapi.org');
+  assert.equal(config.external.image.apiKey, null);
+  assert.equal(config.external.image.model, 'gpt-image-2');
+  assert.equal(config.external.image.timeoutMs, 60000);
 });
 
 test('loadAppConfig throws when required env is missing', () => {

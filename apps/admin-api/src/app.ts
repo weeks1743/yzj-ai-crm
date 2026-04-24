@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type {
   ApiErrorResponse,
   AppConfig,
+  ImageGenerationRequest,
   ShadowObjectKey,
   ShadowPreviewDeleteInput,
   ShadowPreviewGetInput,
@@ -10,6 +11,7 @@ import type {
 } from './contracts.js';
 import { ApprovalFileService } from './approval-file-service.js';
 import { AppError, BadRequestError } from './errors.js';
+import { ExternalSkillService } from './external-skill-service.js';
 import { OrgSyncService, getRunIdFromConflict } from './org-sync-service.js';
 import { getTenantAppSettings, getYzjAuthSettings } from './settings-service.js';
 import { ShadowMetadataService } from './shadow-metadata-service.js';
@@ -19,6 +21,7 @@ interface CreateAdminApiServerOptions {
   orgSyncService: OrgSyncService;
   shadowMetadataService: ShadowMetadataService;
   approvalFileService: ApprovalFileService;
+  externalSkillService: ExternalSkillService;
 }
 
 const SHADOW_OBJECT_KEYS = new Set<ShadowObjectKey>([
@@ -123,6 +126,17 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
 
       if (method === 'GET' && url.pathname === '/api/shadow/objects') {
         writeJson(response, 200, options.shadowMetadataService.listObjects());
+        return;
+      }
+
+      if (method === 'GET' && url.pathname === '/api/external-skills') {
+        writeJson(response, 200, options.externalSkillService.listSkills());
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/external-skills/image-generate') {
+        const payload = await readJsonBody<ImageGenerationRequest>(request);
+        writeJson(response, 200, await options.externalSkillService.generateImage(payload));
         return;
       }
 

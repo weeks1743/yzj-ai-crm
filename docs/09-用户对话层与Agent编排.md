@@ -118,6 +118,7 @@ flowchart TD
 
 例如：
 
+- `ext.image_generate`
 - `ext.company_research_pm`
 - `ext.web_search`
 - `ext.web_fetch_extract`
@@ -131,10 +132,12 @@ flowchart TD
 阶段性收敛如下：
 
 - `scene.audio_import` 相关链路优先走已有的通义 Agent 服务
+- `ext.image_generate` 先走 `http_request provider`
 - 其他外部技能先统一走 `mock provider`
 
 建议至少维护以下映射关系：
 
+- `ext.image_generate -> http_request_provider`
 - `ext.audio_transcribe -> tongyi_agent_provider`
 - `ext.company_research_pm -> mock_provider`
 - `ext.web_search -> mock_provider`
@@ -147,6 +150,7 @@ flowchart TD
 
 - 录音导入是 v1 核心场景
 - 通义 Agent 服务已经存在，可直接复用
+- 图片生成先以单一 HTTP provider 落一条真实外部技能链路
 - 其他外部技能先 mock，更有利于尽快打通全链路
 
 ### 编排层要求

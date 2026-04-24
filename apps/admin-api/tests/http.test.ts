@@ -5,13 +5,14 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { YzjEmployee } from '../src/contracts.js';
+import type { FetchLike, YzjEmployee } from '../src/contracts.js';
 import * as XLSX from 'xlsx';
 import { ApprovalFileClient } from '../src/approval-file-client.js';
 import { ApprovalFileService } from '../src/approval-file-service.js';
 import { ApprovalClient } from '../src/approval-client.js';
 import { createAdminApiServer } from '../src/app.js';
 import { DictionaryResolver } from '../src/dictionary-resolver.js';
+import { ExternalSkillService } from '../src/external-skill-service.js';
 import { LightCloudClient } from '../src/lightcloud-client.js';
 import { OrgSyncRepository } from '../src/org-sync-repository.js';
 import { OrgSyncService } from '../src/org-sync-service.js';
@@ -1248,7 +1249,10 @@ class StubApprovalFileService extends ApprovalFileService {
   }
 }
 
-async function createTestServer() {
+async function createTestServer(options: {
+  imageApiKey?: string | null;
+  imageFetchImpl?: FetchLike;
+} = {}) {
   const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-http-'));
   const fieldBoundWorkbookPath = join(tempDir, 'province-city-district.xlsx');
   writeFieldBoundWorkbook(fieldBoundWorkbookPath);
@@ -1258,6 +1262,7 @@ async function createTestServer() {
     contactFormCodeId: CONTACT_FORM_CODE_ID,
     opportunityFormCodeId: OPPORTUNITY_FORM_CODE_ID,
     followupFormCodeId: FOLLOWUP_FORM_CODE_ID,
+    imageApiKey: options.imageApiKey ?? null,
   });
   const database = createInMemoryDatabase();
   const orgSyncRepository = new OrgSyncRepository(database);
@@ -1297,6 +1302,11 @@ async function createTestServer() {
     orgSyncService,
     approvalFileService: new StubApprovalFileService(),
     shadowMetadataService,
+    externalSkillService: new ExternalSkillService({
+      config,
+      fetchImpl: options.imageFetchImpl,
+      now: () => new Date('2026-04-24T09:00:00.000Z'),
+    }),
   });
 
   server.listen(0);
@@ -1909,6 +1919,116 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     assert.equal(previewPayload.readyToSend, false);
     assert.deepEqual(previewPayload.missingRuntimeInputs, ['operatorOpenId']);
     assert.equal(previewPayload.requestBody.data[0].widgetValue.Te_0, '华东制造样板客户');
+  } finally {
+    runtime.server.close();
+    await once(runtime.server, 'close');
+    rmSync(runtime.tempDir, { recursive: true, force: true });
+  }
+});
+
+test('HTTP endpoints expose external skill catalog and readable config errors', async () => {
+  const runtime = await createTestServer({
+    imageApiKey: null,
+  });
+
+  try {
+    const skillsResponse = await fetch(`${runtime.baseUrl}/api/external-skills`);
+    assert.equal(skillsResponse.status, 200);
+    const skillsPayload = (await skillsResponse.json()) as Array<{
+      skillCode: string;
+      status: string;
+      implementationType: string;
+      supportsInvoke: boolean;
+    }>;
+    const imageSkill = skillsPayload.find((item) => item.skillCode === 'ext.image_generate');
+    assert.ok(imageSkill);
+    assert.equal(imageSkill.status, '告警中');
+    assert.equal(imageSkill.implementationType, 'http_request');
+    assert.equal(imageSkill.supportsInvoke, true);
+
+    const invokeResponse = await fetch(`${runtime.baseUrl}/api/external-skills/image-generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt: '生成一张橙色商务科技海报',
+      }),
+    });
+    assert.equal(invokeResponse.status, 503);
+    const invokePayload = (await invokeResponse.json()) as { message: string };
+    assert.match(invokePayload.message, /EXT_IMAGE_API_KEY/);
+  } finally {
+    runtime.server.close();
+    await once(runtime.server, 'close');
+    rmSync(runtime.tempDir, { recursive: true, force: true });
+  }
+});
+
+test('HTTP endpoints execute image generation and return preview metadata', async () => {
+  const runtime = await createTestServer({
+    imageApiKey: 'image-api-key',
+    imageFetchImpl: (async () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              b64_json: 'ZmFrZS1pbWFnZS1iYXNlNjQ=',
+              mime_type: 'image/png',
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+          },
+        },
+      )) as FetchLike,
+  });
+
+  try {
+    const skillsResponse = await fetch(`${runtime.baseUrl}/api/external-skills`);
+    assert.equal(skillsResponse.status, 200);
+    const skillsPayload = (await skillsResponse.json()) as Array<{
+      skillCode: string;
+      status: string;
+    }>;
+    const imageSkill = skillsPayload.find((item) => item.skillCode === 'ext.image_generate');
+    assert.ok(imageSkill);
+    assert.equal(imageSkill.status, '运行中');
+
+    const invokeResponse = await fetch(`${runtime.baseUrl}/api/external-skills/image-generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt: '生成一张面向制造业 CRM 的品牌海报',
+        size: '1024x1024',
+        quality: 'medium',
+      }),
+    });
+    assert.equal(invokeResponse.status, 200);
+
+    const invokePayload = (await invokeResponse.json()) as {
+      skillCode: string;
+      model: string;
+      provider: string;
+      size: string;
+      quality: string;
+      previewDataUrl: string;
+      latencyMs: number;
+      generatedAt: string;
+    };
+    assert.equal(invokePayload.skillCode, 'ext.image_generate');
+    assert.equal(invokePayload.model, 'gpt-image-2');
+    assert.equal(invokePayload.provider, 'linkapi_images_provider');
+    assert.equal(invokePayload.size, '1024x1024');
+    assert.equal(invokePayload.quality, 'medium');
+    assert.equal(invokePayload.generatedAt, '2026-04-24T09:00:00.000Z');
+    assert.match(invokePayload.previewDataUrl, /^data:image\/png;base64,/);
+    assert.equal(typeof invokePayload.latencyMs, 'number');
   } finally {
     runtime.server.close();
     await once(runtime.server, 'close');
