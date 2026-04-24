@@ -1,0 +1,323 @@
+{
+  "objectKey": "contact",
+  "objectLabel": "联系人",
+  "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
+  "formDefId": null,
+  "sourceVersion": "2026-04-23T16:35:58.394Z",
+  "schemaHash": "89270c89212d60836c0e9a5c2cad66a1366c71dde9bcf8cbbd7337f3321594c9",
+  "fieldCount": 29,
+  "normalizedFields": [
+    {
+      "fieldCode": "Bd_0",
+      "label": "选择客户",
+      "widgetType": "basicDataWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "linked_customer_form_inst_id",
+      "relationBinding": {
+        "kind": "basic_data",
+        "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+        "modelName": "客户",
+        "displayCol": "_S_NAME"
+      }
+    },
+    {
+      "fieldCode": "_S_ORDER",
+      "label": "显示顺序",
+      "widgetType": "numberWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_SERIAL",
+      "label": "联系人编号",
+      "widgetType": "serialNumWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_DATE",
+      "label": "申请日期",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_1",
+      "label": "备注",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_0",
+      "label": "地址",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "At_0",
+      "label": "附件",
+      "widgetType": "attachmentWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_ENCODE",
+      "label": "编码",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_TITLE",
+      "label": "标题",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_5",
+      "label": "邮编",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_4",
+      "label": "微信号",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_3",
+      "label": "Email",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_2",
+      "label": "办公电话",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "phone"
+    },
+    {
+      "fieldCode": "Te_1",
+      "label": "职务",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ra_0",
+      "label": "称谓",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "先生",
+          "key": "AaBaCcDd",
+          "value": "先生"
+        },
+        {
+          "title": "女士",
+          "key": "EeFfGgHh",
+          "value": "女士"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Ra_1",
+      "label": "国家",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "中国",
+          "key": "AaBaCcDd",
+          "value": "中国"
+        }
+      ]
+    },
+    {
+      "fieldCode": "_S_NAME",
+      "label": "联系人姓名",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_APPLY",
+      "label": "提交人",
+      "widgetType": "personSelectWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Da_0",
+      "label": "生日",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_0",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_1",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_2",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_3",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_DISABLE",
+      "label": "启用状态",
+      "widgetType": "switchWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "customer_status"
+    },
+    {
+      "fieldCode": "Pw_2",
+      "label": "区",
+      "widgetType": "publicOptBoxWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": true,
+      "options": [],
+      "enumBinding": {
+        "kind": "public_option",
+        "referId": null,
+        "source": "unresolved",
+        "resolutionStatus": "pending",
+        "acceptedValueShape": "array<{title,dicId}>",
+        "resolvedEntryCount": 0
+      }
+    },
+    {
+      "fieldCode": "_S_DEPT",
+      "label": "所属部门",
+      "widgetType": "departmentSelectWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Nu_0",
+      "label": "手机",
+      "widgetType": "numberWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "phone"
+    },
+    {
+      "fieldCode": "Pw_0",
+      "label": "省",
+      "widgetType": "publicOptBoxWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": true,
+      "options": [],
+      "enumBinding": {
+        "kind": "public_option",
+        "referId": null,
+        "source": "unresolved",
+        "resolutionStatus": "pending",
+        "acceptedValueShape": "array<{title,dicId}>",
+        "resolvedEntryCount": 0
+      }
+    },
+    {
+      "fieldCode": "Pw_1",
+      "label": "市",
+      "widgetType": "publicOptBoxWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": true,
+      "options": [],
+      "enumBinding": {
+        "kind": "public_option",
+        "referId": null,
+        "source": "unresolved",
+        "resolutionStatus": "pending",
+        "acceptedValueShape": "array<{title,dicId}>",
+        "resolvedEntryCount": 0
+      }
+    }
+  ]
+}

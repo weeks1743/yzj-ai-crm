@@ -1,0 +1,774 @@
+{
+  "objectKey": "customer",
+  "objectLabel": "客户",
+  "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+  "formDefId": null,
+  "sourceVersion": "2026-04-24T03:10:49.533Z",
+  "schemaHash": "05297519a43d282a2cb53c3c2ce34045a192859bfc052cd9e2bcc62a66f9be48",
+  "fieldCount": 49,
+  "normalizedFields": [
+    {
+      "fieldCode": "Bd_1",
+      "label": "联系人编号",
+      "widgetType": "basicDataWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "linked_contact_form_inst_id",
+      "relationBinding": {
+        "kind": "basic_data",
+        "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
+        "modelName": "联系人",
+        "displayCol": "_S_SERIAL"
+      }
+    },
+    {
+      "fieldCode": "_S_ENCODE",
+      "label": "编码",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_TITLE",
+      "label": "标题",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_5",
+      "label": "联系人姓名",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_4",
+      "label": "法定代表人",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_3",
+      "label": "纳税人识别号",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_4",
+      "label": "备注",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_3",
+      "label": "详细地址",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_2",
+      "label": "联系人地址",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_APPLY",
+      "label": "提交人",
+      "widgetType": "personSelectWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_8",
+      "label": "联系人Email",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Da_0",
+      "label": "最后跟进日期",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "last_followup_date"
+    },
+    {
+      "fieldCode": "Te_7",
+      "label": "办公电话",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "phone"
+    },
+    {
+      "fieldCode": "Da_1",
+      "label": "注册时间",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Te_6",
+      "label": "联系人职务",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Da_2",
+      "label": "下次回访日期",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_0",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ps_0",
+      "label": "销售负责人",
+      "widgetType": "personSelectWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "owner_open_id"
+    },
+    {
+      "fieldCode": "De_1",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ps_1",
+      "label": "售后服务代表",
+      "widgetType": "personSelectWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "service_rep_open_id"
+    },
+    {
+      "fieldCode": "De_2",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_3",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_4",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "De_5",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_DISABLE",
+      "label": "启用状态",
+      "widgetType": "switchWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "customer_status"
+    },
+    {
+      "fieldCode": "De_6",
+      "label": "说明文字",
+      "widgetType": "describeWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Pw_2",
+      "label": "区",
+      "widgetType": "publicOptBoxWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": true,
+      "options": [],
+      "enumBinding": {
+        "kind": "public_option",
+        "referId": null,
+        "source": "unresolved",
+        "resolutionStatus": "pending",
+        "acceptedValueShape": "array<{title,dicId}>",
+        "resolvedEntryCount": 0
+      }
+    },
+    {
+      "fieldCode": "_S_DEPT",
+      "label": "所属部门",
+      "widgetType": "departmentSelectWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Pw_0",
+      "label": "省",
+      "widgetType": "publicOptBoxWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": true,
+      "options": [],
+      "enumBinding": {
+        "kind": "public_option",
+        "referId": null,
+        "source": "unresolved",
+        "resolutionStatus": "pending",
+        "acceptedValueShape": "array<{title,dicId}>",
+        "resolvedEntryCount": 0
+      }
+    },
+    {
+      "fieldCode": "Ra_10",
+      "label": "国家",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "中国",
+          "key": "AaBaCcDd",
+          "value": "中国"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Pw_1",
+      "label": "市",
+      "widgetType": "publicOptBoxWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": true,
+      "options": [],
+      "enumBinding": {
+        "kind": "public_option",
+        "referId": null,
+        "source": "unresolved",
+        "resolutionStatus": "pending",
+        "acceptedValueShape": "array<{title,dicId}>",
+        "resolvedEntryCount": 0
+      }
+    },
+    {
+      "fieldCode": "_S_ORDER",
+      "label": "显示顺序",
+      "widgetType": "numberWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_SERIAL",
+      "label": "客户编码",
+      "widgetType": "serialNumWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "_S_DATE",
+      "label": "申请日期",
+      "widgetType": "dateWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_1",
+      "label": "经营范围",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ta_0",
+      "label": "线索信息",
+      "widgetType": "textAreaWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "At_0",
+      "label": "附件",
+      "widgetType": "attachmentWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": []
+    },
+    {
+      "fieldCode": "Ra_6",
+      "label": "客户规模",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "10以内",
+          "key": "AaBaCcDd",
+          "value": "10以内"
+        },
+        {
+          "title": "10-99",
+          "key": "EeFfGgHh",
+          "value": "10-99"
+        },
+        {
+          "title": "99-499",
+          "key": "IiJjKkLl",
+          "value": "99-499"
+        },
+        {
+          "title": "499以上",
+          "key": "tJIN0oqw",
+          "value": "499以上"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Ra_7",
+      "label": "注册资金",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "50万以下",
+          "key": "AaBaCcDd",
+          "value": "50万以下"
+        },
+        {
+          "title": "50-99万",
+          "key": "EeFfGgHh",
+          "value": "50-99万"
+        },
+        {
+          "title": "100-499万",
+          "key": "IiJjKkLl",
+          "value": "100-499万"
+        },
+        {
+          "title": "500-999万",
+          "key": "LhKEH7uA",
+          "value": "500-999万"
+        },
+        {
+          "title": "1000-9999w",
+          "key": "BAAmauig",
+          "value": "1000-9999w"
+        },
+        {
+          "title": "9999w以上",
+          "key": "T3ReGwbc",
+          "value": "9999w以上"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Ra_4",
+      "label": "重要级别",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "A类客户",
+          "key": "AaBaCcDd",
+          "value": "A类客户"
+        },
+        {
+          "title": "B类客户",
+          "key": "EeFfGgHh",
+          "value": "B类客户"
+        },
+        {
+          "title": "C类客户",
+          "key": "IiJjKkLl",
+          "value": "C类客户"
+        },
+        {
+          "title": "D类客户",
+          "key": "STaf9MeO",
+          "value": "D类客户"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Ra_5",
+      "label": "公司性质",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "国有企业",
+          "key": "AaBaCcDd",
+          "value": "国有企业"
+        },
+        {
+          "title": "外资企业",
+          "key": "EeFfGgHh",
+          "value": "外资企业"
+        },
+        {
+          "title": "民营企业",
+          "key": "IiJjKkLl",
+          "value": "民营企业"
+        },
+        {
+          "title": "独资企业",
+          "key": "x76wJheZ",
+          "value": "独资企业"
+        },
+        {
+          "title": "合资企业",
+          "key": "NywOZ4Ec",
+          "value": "合资企业"
+        },
+        {
+          "title": "集体企业",
+          "key": "uRJ5sL1V",
+          "value": "集体企业"
+        },
+        {
+          "title": "股份制企业",
+          "key": "u5yaYqKe",
+          "value": "股份制企业"
+        },
+        {
+          "title": "股份有限公司（非上市）",
+          "key": "I4lE5FgT",
+          "value": "股份有限公司（非上市）"
+        },
+        {
+          "title": "有限责任公司（自然人企业）",
+          "key": "JvCsiNs1",
+          "value": "有限责任公司（自然人企业）"
+        },
+        {
+          "title": "其他有限责任公司",
+          "key": "jmDzmp1B",
+          "value": "其他有限责任公司"
+        },
+        {
+          "title": "有限责任公司（自然人投资或控股）",
+          "key": "1OzOy8CU",
+          "value": "有限责任公司（自然人投资或控股）"
+        },
+        {
+          "title": "有限责任公司（台港澳法人独资）",
+          "key": "1uy9M3Wk",
+          "value": "有限责任公司（台港澳法人独资）"
+        },
+        {
+          "title": "有限责任公司",
+          "key": "1W3MbwPj",
+          "value": "有限责任公司"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Ra_3",
+      "label": "客户类型",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "普通客户",
+          "key": "AaBaCcDd",
+          "value": "普通客户"
+        },
+        {
+          "title": "VIP客户",
+          "key": "EeFfGgHh",
+          "value": "VIP客户"
+        },
+        {
+          "title": "合作伙伴",
+          "key": "IiJjKkLl",
+          "value": "合作伙伴"
+        },
+        {
+          "title": "竞争对手",
+          "key": "xFt2lAJk",
+          "value": "竞争对手"
+        },
+        {
+          "title": "竞争对手客户",
+          "key": "iMImPYQb",
+          "value": "竞争对手客户"
+        },
+        {
+          "title": "集成商",
+          "key": "lFzMOxCi",
+          "value": "集成商"
+        },
+        {
+          "title": "代理商",
+          "key": "taa2znU6",
+          "value": "代理商"
+        },
+        {
+          "title": "供应商",
+          "key": "1ObdPkUd",
+          "value": "供应商"
+        },
+        {
+          "title": "其他",
+          "key": "MTntQa6U",
+          "value": "其他"
+        }
+      ],
+      "semanticSlot": "customer_type"
+    },
+    {
+      "fieldCode": "Ra_0",
+      "label": "客户状态",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "销售线索阶段",
+          "key": "AaBaCcDd",
+          "value": "销售线索阶段"
+        },
+        {
+          "title": "休眠线索",
+          "key": "EeFfGgHh",
+          "value": "休眠线索"
+        },
+        {
+          "title": "潜在客户",
+          "key": "IiJjKkLl",
+          "value": "潜在客户"
+        },
+        {
+          "title": "商机阶段客户",
+          "key": "epHyM6GZ",
+          "value": "商机阶段客户"
+        },
+        {
+          "title": "失败关闭",
+          "key": "f2HDSnPQ",
+          "value": "失败关闭"
+        },
+        {
+          "title": "已成交客户",
+          "key": "8TiZ1Suy",
+          "value": "已成交客户"
+        },
+        {
+          "title": "流失客户",
+          "key": "7iTzpJGJ",
+          "value": "流失客户"
+        }
+      ],
+      "semanticSlot": "customer_status"
+    },
+    {
+      "fieldCode": "Ra_1",
+      "label": "客户是否分配",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "已分配",
+          "key": "AaBaCcDd",
+          "value": "已分配"
+        },
+        {
+          "title": "未分配",
+          "key": "EeFfGgHh",
+          "value": "未分配"
+        }
+      ]
+    },
+    {
+      "fieldCode": "_S_NAME",
+      "label": "客户名称",
+      "widgetType": "textWidget",
+      "required": false,
+      "readOnly": true,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "customer_name"
+    },
+    {
+      "fieldCode": "Ra_8",
+      "label": "所属行业",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "电子",
+          "key": "AaBaCcDd",
+          "value": "电子"
+        },
+        {
+          "title": "通讯",
+          "key": "EeFfGgHh",
+          "value": "通讯"
+        },
+        {
+          "title": "咨询",
+          "key": "IiJjKkLl",
+          "value": "咨询"
+        },
+        {
+          "title": "互联网",
+          "key": "R4pdg9RP",
+          "value": "互联网"
+        },
+        {
+          "title": "教育",
+          "key": "F8zPeQr3",
+          "value": "教育"
+        }
+      ],
+      "semanticSlot": "industry"
+    },
+    {
+      "fieldCode": "Ra_9",
+      "label": "联系人称谓",
+      "widgetType": "radioWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [
+        {
+          "title": "单选框选项1",
+          "key": "AaBaCcDd",
+          "value": "单选框选项1"
+        },
+        {
+          "title": "单选框选项2",
+          "key": "EeFfGgHh",
+          "value": "单选框选项2"
+        },
+        {
+          "title": "单选框选项3",
+          "key": "IiJjKkLl",
+          "value": "单选框选项3"
+        }
+      ]
+    },
+    {
+      "fieldCode": "Nu_1",
+      "label": "联系人手机",
+      "widgetType": "numberWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "phone"
+    },
+    {
+      "fieldCode": "Nu_0",
+      "label": "公司电话",
+      "widgetType": "numberWidget",
+      "required": false,
+      "readOnly": false,
+      "multi": false,
+      "options": [],
+      "semanticSlot": "phone"
+    }
+  ]
+}

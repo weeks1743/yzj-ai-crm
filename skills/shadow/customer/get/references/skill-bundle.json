@@ -1,0 +1,17 @@
+{
+  "skillName": "shadow.customer_get",
+  "skillKey": "customer_get",
+  "operation": "get",
+  "description": "按 formInstId 获取客户单据详情。",
+  "whenToUse": "当用户已经明确指定某条客户记录时使用。",
+  "notWhenToUse": "当用户只提供模糊条件，需要先搜索客户时不要使用。",
+  "requiredParams": [
+    "form_inst_id"
+  ],
+  "optionalParams": [],
+  "confirmationPolicy": "no_confirmation_required",
+  "outputCardType": "customer-get-preview",
+  "sourceObject": "customer",
+  "sourceFormCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+  "sourceVersion": "2026-04-24T03:10:49.533Z"
+}

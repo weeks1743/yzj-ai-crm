@@ -1,0 +1,6 @@
+interface:
+  display_name: "联系人查询（影子）"
+  short_description: "按联系人模板执行或预演轻云条件查询请求"
+  default_prompt: "Use $shadow.contact_search to prepare a preview-first 联系人 search request from the current shadow template snapshot."
+policy:
+  allow_implicit_invocation: false

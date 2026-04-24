@@ -1,0 +1,6 @@
+interface:
+  display_name: "客户更新（影子）"
+  short_description: "按客户模板预演轻云更新请求"
+  default_prompt: "Use $shadow.customer_update to prepare a preview-first 客户 update request from the current shadow template snapshot."
+policy:
+  allow_implicit_invocation: false

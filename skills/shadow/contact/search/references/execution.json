@@ -1,0 +1,101 @@
+{
+  "previewApi": {
+    "method": "POST",
+    "path": "/api/shadow/objects/contact/preview/search",
+    "payloadExample": {
+      "operatorOpenId": "{operatorOpenId}",
+      "filters": [
+        {
+          "field": "linked_customer_form_inst_id",
+          "value": "{linked_customer_form_inst_id__S_NAME}"
+        },
+        {
+          "field": "_S_NAME",
+          "value": "{_S_NAME}",
+          "operator": "contain"
+        }
+      ],
+      "pageNumber": 1,
+      "pageSize": 20
+    }
+  },
+  "lightCloudPreview": {
+    "url": "https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "eid": "21024647",
+      "oid": "{operatorOpenId}",
+      "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
+      "pageNumber": 1,
+      "pageSize": 20,
+      "searchItems": [
+        {
+          "codeId": "Bd_0",
+          "parentCodeId": null,
+          "type": "basicDataWidget",
+          "value": "{linked_customer_form_inst_id__S_NAME}"
+        },
+        {
+          "codeId": "_S_NAME",
+          "parentCodeId": null,
+          "type": "textWidget",
+          "operator": "contain",
+          "value": "{_S_NAME}"
+        }
+      ]
+    }
+  },
+  "liveApi": {
+    "method": "POST",
+    "path": "/api/shadow/objects/contact/execute/search",
+    "payloadExample": {
+      "operatorOpenId": "{operatorOpenId}",
+      "filters": [
+        {
+          "field": "linked_customer_form_inst_id",
+          "value": "{linked_customer_form_inst_id__S_NAME}"
+        },
+        {
+          "field": "_S_NAME",
+          "value": "{_S_NAME}",
+          "operator": "contain"
+        }
+      ],
+      "pageNumber": 1,
+      "pageSize": 20
+    }
+  },
+  "lightCloudLive": {
+    "url": "https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "eid": "21024647",
+      "oid": "{operatorOpenId}",
+      "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
+      "pageNumber": 1,
+      "pageSize": 20,
+      "searchItems": [
+        {
+          "codeId": "Bd_0",
+          "parentCodeId": null,
+          "type": "basicDataWidget",
+          "value": "{linked_customer_form_inst_id__S_NAME}"
+        },
+        {
+          "codeId": "_S_NAME",
+          "parentCodeId": null,
+          "type": "textWidget",
+          "operator": "contain",
+          "value": "{_S_NAME}"
+        }
+      ]
+    }
+  },
+  "phase": "live_read_enabled"
+}

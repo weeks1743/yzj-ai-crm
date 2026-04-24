@@ -1,0 +1,97 @@
+{
+  "previewApi": {
+    "method": "POST",
+    "path": "/api/shadow/objects/contact/preview/upsert",
+    "payloadExample": {
+      "mode": "update",
+      "formInstId": "{formInstId}",
+      "operatorOpenId": "{operatorOpenId}",
+      "params": {
+        "linked_customer_form_inst_id": {
+          "formInstId": "{linked_customer_form_inst_id_formInstId}"
+        },
+        "Ta_1": "{Ta_1}"
+      }
+    }
+  },
+  "lightCloudPreview": {
+    "url": "https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "eid": "21024647",
+      "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
+      "oid": "{operatorOpenId}",
+      "data": [
+        {
+          "formInstId": "{formInstId}",
+          "widgetValue": {
+            "Bd_0": [
+              {
+                "id": "{linked_customer_form_inst_id_formInstId}",
+                "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+                "formDefId": "{linked_customer_form_inst_id_formDefId}",
+                "flowInstId": "",
+                "showName": "{linked_customer_form_inst_id_showName}",
+                "_S_TITLE": "{linked_customer_form_inst_id_showName}",
+                "_S_NAME": "{linked_customer_form_inst_id__S_NAME}",
+                "_name_": "{linked_customer_form_inst_id_showName}"
+              }
+            ],
+            "Ta_1": "{Ta_1}"
+          }
+        }
+      ]
+    }
+  },
+  "liveApi": {
+    "method": "POST",
+    "path": "/api/shadow/objects/contact/execute/upsert",
+    "payloadExample": {
+      "mode": "update",
+      "formInstId": "{formInstId}",
+      "operatorOpenId": "{operatorOpenId}",
+      "params": {
+        "linked_customer_form_inst_id": {
+          "formInstId": "{linked_customer_form_inst_id_formInstId}"
+        },
+        "Ta_1": "{Ta_1}"
+      }
+    }
+  },
+  "lightCloudLive": {
+    "url": "https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "eid": "21024647",
+      "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
+      "oid": "{operatorOpenId}",
+      "data": [
+        {
+          "formInstId": "{formInstId}",
+          "widgetValue": {
+            "Bd_0": [
+              {
+                "id": "{linked_customer_form_inst_id_formInstId}",
+                "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+                "formDefId": "{linked_customer_form_inst_id_formDefId}",
+                "flowInstId": "",
+                "showName": "{linked_customer_form_inst_id_showName}",
+                "_S_TITLE": "{linked_customer_form_inst_id_showName}",
+                "_S_NAME": "{linked_customer_form_inst_id__S_NAME}",
+                "_name_": "{linked_customer_form_inst_id_showName}"
+              }
+            ],
+            "Ta_1": "{Ta_1}"
+          }
+        }
+      ]
+    }
+  },
+  "phase": "live_write_enabled"
+}

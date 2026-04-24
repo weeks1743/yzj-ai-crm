@@ -1,0 +1,17 @@
+{
+  "skillName": "shadow.contact_delete",
+  "skillKey": "contact_delete",
+  "operation": "delete",
+  "description": "基于联系人对象 formInstIds 预演或执行轻云批量删除请求。",
+  "whenToUse": "当用户已经明确给出要删除的联系人 formInstIds，并确认执行删除时使用。",
+  "notWhenToUse": "当用户还在搜索联系人、核对详情，或未明确确认删除时不要使用。",
+  "requiredParams": [
+    "form_inst_ids"
+  ],
+  "optionalParams": [],
+  "confirmationPolicy": "required_before_write",
+  "outputCardType": "contact-delete-preview",
+  "sourceObject": "contact",
+  "sourceFormCodeId": "a3ccc61c75c34cb28a7113a311418080",
+  "sourceVersion": "2026-04-23T16:35:58.394Z"
+}

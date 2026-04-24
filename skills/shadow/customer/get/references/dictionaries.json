@@ -1,0 +1,39 @@
+{
+  "objectKey": "customer",
+  "sourceVersion": "2026-04-24T03:10:49.533Z",
+  "bindings": [
+    {
+      "objectKey": "customer",
+      "fieldCode": "Pw_2",
+      "label": "区",
+      "referId": null,
+      "source": "unresolved",
+      "resolutionStatus": "pending",
+      "acceptedValueShape": "array<{title,dicId}>",
+      "snapshotVersion": "2026-04-24T03:10:49.533Z",
+      "entries": []
+    },
+    {
+      "objectKey": "customer",
+      "fieldCode": "Pw_0",
+      "label": "省",
+      "referId": null,
+      "source": "unresolved",
+      "resolutionStatus": "pending",
+      "acceptedValueShape": "array<{title,dicId}>",
+      "snapshotVersion": "2026-04-24T03:10:49.533Z",
+      "entries": []
+    },
+    {
+      "objectKey": "customer",
+      "fieldCode": "Pw_1",
+      "label": "市",
+      "referId": null,
+      "source": "unresolved",
+      "resolutionStatus": "pending",
+      "acceptedValueShape": "array<{title,dicId}>",
+      "snapshotVersion": "2026-04-24T03:10:49.533Z",
+      "entries": []
+    }
+  ]
+}

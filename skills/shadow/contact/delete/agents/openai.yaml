@@ -1,0 +1,6 @@
+interface:
+  display_name: "联系人删除（影子）"
+  short_description: "按formInstIds预演或执行联系人批量删除请求"
+  default_prompt: "Use $shadow.contact_delete to prepare a preview-first 联系人 delete request from the current shadow template snapshot."
+policy:
+  allow_implicit_invocation: false

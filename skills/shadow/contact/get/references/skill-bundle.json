@@ -1,0 +1,17 @@
+{
+  "skillName": "shadow.contact_get",
+  "skillKey": "contact_get",
+  "operation": "get",
+  "description": "按 formInstId 获取联系人单据详情。",
+  "whenToUse": "当用户已经明确指定某条联系人记录时使用。",
+  "notWhenToUse": "当用户只提供模糊条件，需要先搜索联系人时不要使用。",
+  "requiredParams": [
+    "form_inst_id"
+  ],
+  "optionalParams": [],
+  "confirmationPolicy": "no_confirmation_required",
+  "outputCardType": "contact-get-preview",
+  "sourceObject": "contact",
+  "sourceFormCodeId": "a3ccc61c75c34cb28a7113a311418080",
+  "sourceVersion": "2026-04-23T16:35:58.394Z"
+}

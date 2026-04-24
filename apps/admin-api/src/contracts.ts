@@ -1,0 +1,639 @@
+export type ShadowObjectKey = 'customer' | 'contact' | 'opportunity' | 'followup';
+export type ShadowDictionarySource = 'manual_json' | 'approval_api' | 'hybrid';
+export type ShadowObjectActivationStatus = 'active' | 'pending' | 'not_configured';
+export type ShadowObjectRefreshStatus = 'not_started' | 'ready' | 'failed';
+export type ShadowDictionaryResolutionStatus = 'resolved' | 'pending' | 'failed';
+export type ShadowDictionaryAcceptedValueShape = 'array<{title,dicId}>';
+export type ShadowSemanticSlot =
+  | 'customer_name'
+  | 'owner_open_id'
+  | 'service_rep_open_id'
+  | 'customer_status'
+  | 'customer_type'
+  | 'industry'
+  | 'last_followup_date'
+  | 'region'
+  | 'phone'
+  | string;
+
+export interface ShadowObjectConfig {
+  key: ShadowObjectKey;
+  label: string;
+  formCodeId: string | null;
+  enabled: boolean;
+}
+
+export interface AppConfig {
+  yzj: {
+    eid: string;
+    appId: string;
+    appSecret: string;
+    signKey: string;
+    orgReadSecret: string;
+    baseUrl: string;
+    approval: {
+      appId: string;
+      appSecret: string;
+      developerKey: string;
+      fileSecret: string | null;
+    };
+    lightCloud: {
+      appId: string;
+      appSecret: string;
+      secret: string;
+    };
+  };
+  shadow: {
+    dictionarySource: ShadowDictionarySource;
+    dictionaryJsonPath: string;
+    skillOutputDir: string;
+    objects: Record<ShadowObjectKey, ShadowObjectConfig>;
+  };
+  server: {
+    port: number;
+  };
+  storage: {
+    sqlitePath: string;
+  };
+  meta: {
+    configSource: '.env';
+    envFilePath: string;
+  };
+}
+
+export interface TenantAppSettingsResponse {
+  eid: string;
+  appId: string;
+  appName: string;
+  enabled: boolean;
+  configSource: string;
+  isolationKey: string;
+}
+
+export interface CredentialSummary {
+  key: 'appId' | 'appSecret' | 'signKey' | 'orgReadSecret';
+  label: string;
+  configured: boolean;
+  maskedValue: string;
+  description: string;
+}
+
+export interface YzjAuthSettingsResponse {
+  yzjServerBaseUrl: string;
+  tokenScope: 'resGroupSecret';
+  tokenEndpoint: string;
+  employeeEndpoint: string;
+  credentials: CredentialSummary[];
+}
+
+export type OrgSyncTriggerType = 'manual';
+export type OrgSyncRunStatus = 'running' | 'completed' | 'failed';
+
+export interface OrgSyncRunSummary {
+  id: string;
+  triggerType: OrgSyncTriggerType;
+  status: OrgSyncRunStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  pageCount: number;
+  fetchedCount: number;
+  upsertedCount: number;
+  skippedCount: number;
+  errorMessage: string | null;
+}
+
+export interface OrgSyncSettingsResponse {
+  syncMode: 'manual_full_active_only';
+  schedulerEnabled: false;
+  pageSize: number;
+  employeeCount: number;
+  isSyncing: boolean;
+  lastRun: OrgSyncRunSummary | null;
+  recentRuns: OrgSyncRunSummary[];
+}
+
+export interface ManualSyncStartResponse {
+  runId: string;
+  status: 'running';
+  message: string;
+}
+
+export interface ApiErrorResponse {
+  code: string;
+  message: string;
+  runId?: string;
+}
+
+export interface YzjAccessTokenResponse {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?: {
+    accessToken: string;
+    expireIn: number;
+    refreshToken?: string;
+  };
+}
+
+export interface YzjApprovalFileUploadItem {
+  fileId: string;
+  fileType: string;
+  isEncrypted?: boolean;
+  fileName: string;
+  length: number;
+}
+
+export interface YzjApprovalFileUploadResponse {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?: YzjApprovalFileUploadItem[];
+}
+
+export interface YzjPersonListResponse {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?: YzjEmployee[];
+}
+
+export interface YzjEmployee {
+  openId: string;
+  uid?: string;
+  name?: string;
+  phone?: string;
+  email?: string;
+  jobTitle?: string;
+  status?: string;
+  birthday?: string;
+  hireDate?: string;
+  positiveDate?: string;
+  gender?: string;
+  isHidePhone?: string;
+  jobNo?: string;
+  orgId?: string;
+  orgUserType?: string;
+  photoUrl?: string;
+  department?: string;
+  weights?: string;
+  contact?: string;
+  staffType?: string;
+  [key: string]: unknown;
+}
+
+export interface OrgEmployeeRecord {
+  eid: string;
+  appId: string;
+  openId: string;
+  uid: string | null;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  jobTitle: string | null;
+  status: string | null;
+  syncedAt: string;
+  rawPayloadJson: string;
+}
+
+export interface SyncProgress {
+  pageCount: number;
+  fetchedCount: number;
+  upsertedCount: number;
+  skippedCount: number;
+}
+
+export interface FetchLike {
+  (input: string | URL, init?: RequestInit): Promise<Response>;
+}
+
+export interface YzjApprovalOption {
+  key?: string;
+  value?: string;
+  checked?: boolean;
+  [key: string]: unknown;
+}
+
+export interface YzjApprovalWidget {
+  codeId: string;
+  title?: string;
+  type: string;
+  required?: boolean;
+  readOnly?: boolean;
+  option?: 'single' | 'multi' | string | null;
+  options?: YzjApprovalOption[];
+  referId?: string;
+  parentCodeId?: string | null;
+  extendFieldMap?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface YzjApprovalDetailWidget {
+  codeId: string;
+  title?: string;
+  type: string;
+  widgetVos?: Record<string, YzjApprovalWidget>;
+  extendFieldMap?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface YzjApprovalFormTemplateResponse {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?: {
+    formDefId?: string;
+    formInfo?: {
+      widgetMap?: Record<string, YzjApprovalWidget>;
+      detailMap?: Record<string, YzjApprovalDetailWidget>;
+    };
+    [key: string]: unknown;
+  };
+}
+
+export interface YzjDictionaryCategory {
+  dicId: string;
+  title: string;
+  sort?: number;
+}
+
+export interface YzjDictionaryOption {
+  dicId: string;
+  title: string;
+  parentId: string;
+  sort?: number;
+}
+
+export interface YzjDictionaryEntry {
+  dicId: string;
+  title: string;
+  parentId: string;
+  code?: string;
+  state?: string;
+  sort?: number;
+  createTime?: number;
+  updateTime?: number;
+}
+
+export interface YzjApprovalListResponse<T> {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?: {
+    list?: T[];
+    total?: number;
+    pageNumber?: number;
+    pageSize?: number;
+  };
+}
+
+export interface ShadowFieldOption {
+  title: string;
+  key?: string;
+  value?: string;
+  dicId?: string;
+  code?: string | null;
+  state?: string | null;
+  sort?: number | null;
+  aliases?: string[];
+}
+
+export interface ShadowFieldEnumBinding {
+  kind: 'public_option';
+  referId: string | null;
+  source: ShadowDictionarySource | 'unresolved';
+  resolutionStatus: ShadowDictionaryResolutionStatus;
+  acceptedValueShape: ShadowDictionaryAcceptedValueShape;
+  resolvedEntryCount: number;
+}
+
+export interface ShadowFieldRelationBinding {
+  kind: 'basic_data';
+  formCodeId: string | null;
+  modelName: string | null;
+  displayCol: string | null;
+}
+
+export interface ShadowStandardizedField {
+  fieldCode: string;
+  label: string;
+  widgetType: string;
+  required: boolean;
+  readOnly: boolean;
+  multi: boolean;
+  options: ShadowFieldOption[];
+  referId?: string;
+  semanticSlot?: ShadowSemanticSlot;
+  enumBinding?: ShadowFieldEnumBinding;
+  relationBinding?: ShadowFieldRelationBinding;
+}
+
+export interface ShadowObjectRegistryRecord {
+  objectKey: ShadowObjectKey;
+  label: string;
+  enabled: boolean;
+  activationStatus: ShadowObjectActivationStatus;
+  formCodeId: string | null;
+  formDefId: string | null;
+  refreshStatus: ShadowObjectRefreshStatus;
+  latestSnapshotVersion: string | null;
+  latestSchemaHash: string | null;
+  lastRefreshAt: string | null;
+  lastError: string | null;
+}
+
+export interface ShadowObjectSnapshotRecord {
+  id: string;
+  objectKey: ShadowObjectKey;
+  snapshotVersion: string;
+  schemaHash: string;
+  formCodeId: string;
+  formDefId: string | null;
+  normalizedFields: ShadowStandardizedField[];
+  dictionaryBindings: ShadowDictionaryBindingRecord[];
+  rawTemplate: unknown;
+  createdAt: string;
+}
+
+export interface ShadowSkillContract {
+  skillName: string;
+  skillKey: string;
+  operation: 'search' | 'get' | 'create' | 'update' | 'delete';
+  description: string;
+  whenToUse: string;
+  notWhenToUse: string;
+  requiredParams: string[];
+  optionalParams: string[];
+  confirmationPolicy: string;
+  outputCardType: string;
+  sourceObject: ShadowObjectKey;
+  sourceFormCodeId: string;
+  sourceVersion: string;
+  bundleDirectory: string;
+  skillPath: string;
+  agentMetadataPath: string | null;
+  referencePaths: {
+    skillBundle: string;
+    templateSummary: string;
+    templateRaw: string;
+    dictionaries: string;
+    execution: string;
+  };
+  executionBinding: {
+    previewApi: {
+      method: 'POST';
+      path: string;
+      payloadExample: Record<string, unknown>;
+    };
+    liveApi?: {
+      method: 'POST';
+      path: string;
+      payloadExample: Record<string, unknown>;
+    };
+    lightCloudPreview: {
+      url: string;
+      method: 'POST';
+      headers: Record<string, string>;
+      body: Record<string, unknown>;
+    };
+    lightCloudLive?: {
+      url: string;
+      method: 'POST';
+      headers: Record<string, string>;
+      body: Record<string, unknown>;
+    };
+    phase: 'preview_only' | 'live_read_enabled' | 'live_write_enabled';
+  };
+}
+
+export interface ShadowObjectSummaryResponse extends ShadowObjectRegistryRecord {}
+
+export interface ShadowObjectDetailResponse extends ShadowObjectRegistryRecord {
+  fields: ShadowStandardizedField[];
+  snapshotVersion: string | null;
+  schemaHash: string | null;
+}
+
+export interface ShadowDictionaryEntryRecord {
+  referId: string;
+  dicId: string;
+  title: string;
+  code: string | null;
+  state: string | null;
+  sort: number | null;
+  source: ShadowDictionarySource | 'unresolved';
+  sourceVersion: string;
+  aliases: string[];
+}
+
+export interface ShadowDictionaryBindingRecord {
+  objectKey: ShadowObjectKey;
+  fieldCode: string;
+  label: string;
+  referId: string | null;
+  source: ShadowDictionarySource | 'unresolved';
+  resolutionStatus: ShadowDictionaryResolutionStatus;
+  acceptedValueShape: ShadowDictionaryAcceptedValueShape;
+  snapshotVersion: string;
+  entries: ShadowDictionaryEntryRecord[];
+}
+
+export interface ShadowPreviewSearchInput {
+  filters?: Array<{
+    field: string;
+    value: unknown;
+    operator?: string;
+  }>;
+  operatorOpenId?: string;
+  pageNumber?: number;
+  pageSize?: number;
+}
+
+export interface ShadowPreviewGetInput {
+  formInstId?: string;
+  operatorOpenId?: string;
+}
+
+export interface ShadowPreviewUpsertInput {
+  mode: 'create' | 'update';
+  formInstId?: string;
+  params?: Record<string, unknown>;
+  operatorOpenId?: string;
+}
+
+export interface ShadowPreviewDeleteInput {
+  formInstIds?: string[];
+  operatorOpenId?: string;
+}
+
+export interface ShadowResolvedDictionaryMapping {
+  fieldCode: string;
+  label: string;
+  referId: string;
+  matchedBy: 'title' | 'dicId' | 'object' | 'array-object';
+  value: Array<{
+    title: string;
+    dicId: string;
+  }>;
+}
+
+export interface ShadowUnresolvedDictionary {
+  fieldCode: string;
+  label: string;
+  referId: string | null;
+  source: ShadowDictionarySource | 'unresolved';
+  resolutionStatus: ShadowDictionaryResolutionStatus;
+  reason: string;
+}
+
+export interface ShadowPreviewResponse {
+  objectKey: ShadowObjectKey;
+  operation: 'search' | 'get' | 'upsert' | 'delete';
+  unresolvedDictionaries: ShadowUnresolvedDictionary[];
+  resolvedDictionaryMappings: ShadowResolvedDictionaryMapping[];
+  missingRequiredParams: string[];
+  blockedReadonlyParams: string[];
+  missingRuntimeInputs: string[];
+  validationErrors: string[];
+  readyToSend: boolean;
+  requestBody: unknown;
+}
+
+export interface YzjLightCloudFieldContentItem {
+  codeId: string;
+  rawValue?: unknown;
+  parentCodeId?: string | null;
+  sum?: boolean;
+  title?: string;
+  type?: string;
+  value?: unknown;
+  [key: string]: unknown;
+}
+
+export interface YzjLightCloudRecord {
+  id?: string;
+  formInstId?: string;
+  formInstance?: {
+    id?: string;
+    [key: string]: unknown;
+  };
+  important?: Record<string, unknown>;
+  fieldContent?: YzjLightCloudFieldContentItem[];
+  [key: string]: unknown;
+}
+
+export interface YzjLightCloudListResponse {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?: YzjLightCloudRecord[];
+}
+
+export interface YzjLightCloudBatchSaveResponse {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?:
+    | string[]
+    | {
+        hasException?: boolean;
+        formInstIds?: Array<string | null>;
+        exceptions?: Record<string, unknown>;
+      };
+}
+
+export interface YzjLightCloudBatchDeleteResponse {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?: string[];
+}
+
+export interface YzjLightCloudSearchPage {
+  pageNumber: number;
+  totalPages: number;
+  pageSize: number;
+  totalElements: number;
+  content: YzjLightCloudRecord[];
+}
+
+export interface YzjLightCloudSearchResponse {
+  success: boolean;
+  errorCode: number;
+  error?: string | null;
+  data?: Partial<YzjLightCloudSearchPage>;
+}
+
+export interface ShadowLiveRecordField {
+  codeId: string;
+  title: string | null;
+  type: string | null;
+  value: unknown;
+  rawValue: unknown;
+  parentCodeId: string | null;
+}
+
+export interface ShadowLiveRecord {
+  formInstId: string;
+  important: Record<string, unknown>;
+  fields: ShadowLiveRecordField[];
+  fieldMap: Record<string, ShadowLiveRecordField>;
+  rawRecord: YzjLightCloudRecord;
+}
+
+export interface ShadowExecuteSearchResponse {
+  objectKey: ShadowObjectKey;
+  operation: 'search';
+  mode: 'live';
+  requestBody: Record<string, unknown>;
+  pageNumber: number;
+  pageSize: number;
+  totalPages: number;
+  totalElements: number;
+  records: ShadowLiveRecord[];
+}
+
+export interface ShadowExecuteGetResponse {
+  objectKey: ShadowObjectKey;
+  operation: 'get';
+  mode: 'live';
+  requestBody: Record<string, unknown>;
+  record: ShadowLiveRecord;
+}
+
+export interface ShadowExecuteUpsertResponse {
+  objectKey: ShadowObjectKey;
+  operation: 'upsert';
+  mode: 'live';
+  writeMode: ShadowPreviewUpsertInput['mode'];
+  requestBody: Record<string, unknown>;
+  formInstIds: string[];
+}
+
+export interface ShadowExecuteDeleteResponse {
+  objectKey: ShadowObjectKey;
+  operation: 'delete';
+  mode: 'live';
+  requestBody: Record<string, unknown>;
+  formInstIds: string[];
+}
+
+export interface ManualDictionaryEntry {
+  dicId: string;
+  title: string;
+  code?: string;
+  state?: string;
+  sort?: number;
+  aliases?: string[];
+}
+
+export interface ManualDictionaryDefinition {
+  referId: string;
+  title: string;
+  aliases?: string[];
+  entries: ManualDictionaryEntry[];
+}
+
+export interface ManualDictionaryFile {
+  version?: string;
+  dictionaries: ManualDictionaryDefinition[];
+}
