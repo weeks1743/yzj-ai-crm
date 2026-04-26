@@ -1,7 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import Busboy from 'busboy';
 import type {
   ApiErrorResponse,
   AppConfig,
+  EnterprisePptTemplatePromptResponse,
+  EnterprisePptTemplateUploadResponse,
+  ExternalSkillJobRequest,
   ImageGenerationRequest,
   ShadowObjectKey,
   ShadowPreviewDeleteInput,
@@ -11,6 +15,7 @@ import type {
 } from './contracts.js';
 import { ApprovalFileService } from './approval-file-service.js';
 import { AppError, BadRequestError } from './errors.js';
+import { EnterprisePptTemplateService } from './enterprise-ppt-template-service.js';
 import { ExternalSkillService } from './external-skill-service.js';
 import { OrgSyncService, getRunIdFromConflict } from './org-sync-service.js';
 import { getTenantAppSettings, getYzjAuthSettings } from './settings-service.js';
@@ -22,6 +27,7 @@ interface CreateAdminApiServerOptions {
   shadowMetadataService: ShadowMetadataService;
   approvalFileService: ApprovalFileService;
   externalSkillService: ExternalSkillService;
+  enterprisePptTemplateService: EnterprisePptTemplateService;
 }
 
 const SHADOW_OBJECT_KEYS = new Set<ShadowObjectKey>([
@@ -85,6 +91,75 @@ async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
   }
 }
 
+async function readMultipartBody(request: IncomingMessage): Promise<{
+  fields: Record<string, string>;
+  files: Array<{
+    fieldName: string;
+    fileName: string;
+    mimeType: string;
+    content: Buffer;
+  }>;
+}> {
+  const contentType = request.headers['content-type'] ?? '';
+  if (!contentType.includes('multipart/form-data')) {
+    throw new BadRequestError('请求必须是 multipart/form-data');
+  }
+
+  return new Promise((resolvePromise, reject) => {
+    const fields: Record<string, string> = {};
+    const files: Array<{
+      fieldName: string;
+      fileName: string;
+      mimeType: string;
+      content: Buffer;
+    }> = [];
+    const busboy = Busboy({
+      headers: request.headers,
+    });
+
+    busboy.on('field', (name, value) => {
+      fields[name] = value;
+    });
+
+    busboy.on('file', (fieldName, fileStream, info) => {
+      const chunks: Buffer[] = [];
+      fileStream.on('data', (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      fileStream.on('end', () => {
+        files.push({
+          fieldName,
+          fileName: normalizeMultipartFileName(info.filename),
+          mimeType: info.mimeType,
+          content: Buffer.concat(chunks),
+        });
+      });
+      fileStream.on('error', (error) => {
+        reject(new BadRequestError('上传文件读取失败', { cause: error }));
+      });
+    });
+
+    busboy.on('error', (error) => {
+      reject(new BadRequestError('multipart 请求解析失败', { cause: error }));
+    });
+
+    busboy.on('finish', () => {
+      resolvePromise({ fields, files });
+    });
+
+    request.pipe(busboy);
+  });
+}
+
+function normalizeMultipartFileName(fileName: string): string {
+  if (!/[\u00C0-\u00FF]/.test(fileName)) {
+    return fileName;
+  }
+
+  const decoded = Buffer.from(fileName, 'latin1').toString('utf8');
+  return /[^\u0000-\u007F]/.test(decoded) ? decoded : fileName;
+}
+
 function parseShadowObjectKey(value: string): ShadowObjectKey {
   if (SHADOW_OBJECT_KEYS.has(value as ShadowObjectKey)) {
     return value as ShadowObjectKey;
@@ -124,13 +199,86 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         return;
       }
 
+      if (method === 'GET' && url.pathname === '/api/settings/ppt-templates') {
+        writeJson(response, 200, options.enterprisePptTemplateService.listTemplates());
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/settings/ppt-templates/default-prompt') {
+        const payload = await readJsonBody<{ prompt?: string }>(request);
+        const result: EnterprisePptTemplatePromptResponse =
+          options.enterprisePptTemplateService.updateDefaultPrompt(payload.prompt ?? '');
+        writeJson(
+          response,
+          200,
+          result,
+        );
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/settings/ppt-templates/upload') {
+        const payload = await readMultipartBody(request);
+        const file = payload.files.find((item) => item.fieldName === 'file') ?? payload.files[0];
+        if (!file) {
+          throw new BadRequestError('请上传 .pptx 模板文件');
+        }
+
+        const result = await options.enterprisePptTemplateService.uploadTemplate({
+          fileName: file.fileName,
+          file: file.content,
+          name: payload.fields.name,
+        });
+        writeJson(response, 201, result satisfies EnterprisePptTemplateUploadResponse);
+        return;
+      }
+
+      if (url.pathname.startsWith('/api/settings/ppt-templates/')) {
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length === 5) {
+          const templateId = decodeURIComponent(parts[3] ?? '');
+          const action = parts[4] ?? '';
+
+          if (method === 'POST' && action === 'rename') {
+            const payload = await readJsonBody<{ name?: string }>(request);
+            writeJson(
+              response,
+              200,
+              await options.enterprisePptTemplateService.renameTemplate(templateId, payload.name ?? ''),
+            );
+            return;
+          }
+
+          if (method === 'POST' && action === 'activate') {
+            writeJson(response, 200, await options.enterprisePptTemplateService.activateTemplate(templateId));
+            return;
+          }
+
+          if (method === 'GET' && action === 'download') {
+            const payload = await options.enterprisePptTemplateService.downloadTemplate(templateId);
+            response.writeHead(200, {
+              'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              'Content-Length': String(payload.file.byteLength),
+              'Content-Disposition': `attachment; filename="${encodeURIComponent(payload.fileName)}"`,
+              'Access-Control-Allow-Origin': '*',
+            });
+            response.end(payload.file);
+            return;
+          }
+
+          if (method === 'POST' && action === 'delete') {
+            writeJson(response, 200, await options.enterprisePptTemplateService.deleteTemplate(templateId));
+            return;
+          }
+        }
+      }
+
       if (method === 'GET' && url.pathname === '/api/shadow/objects') {
         writeJson(response, 200, options.shadowMetadataService.listObjects());
         return;
       }
 
       if (method === 'GET' && url.pathname === '/api/external-skills') {
-        writeJson(response, 200, options.externalSkillService.listSkills());
+        writeJson(response, 200, await options.externalSkillService.listSkills());
         return;
       }
 
@@ -138,6 +286,43 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         const payload = await readJsonBody<ImageGenerationRequest>(request);
         writeJson(response, 200, await options.externalSkillService.generateImage(payload));
         return;
+      }
+
+      if (url.pathname.startsWith('/api/external-skills/')) {
+        const parts = url.pathname.split('/').filter(Boolean);
+
+        if (method === 'POST' && parts.length === 4 && parts[3] === 'jobs') {
+          const skillCode = decodeURIComponent(parts[2] ?? '');
+          const payload = await readJsonBody<ExternalSkillJobRequest>(request);
+          writeJson(response, 202, await options.externalSkillService.createSkillJob(skillCode, payload));
+          return;
+        }
+
+        if (method === 'GET' && parts.length === 4 && parts[2] === 'jobs') {
+          const jobId = decodeURIComponent(parts[3] ?? '');
+          writeJson(response, 200, await options.externalSkillService.getSkillJob(jobId));
+          return;
+        }
+
+        if (method === 'POST' && parts.length === 5 && parts[2] === 'jobs' && parts[4] === 'presentation-session') {
+          const jobId = decodeURIComponent(parts[3] ?? '');
+          writeJson(response, 200, await options.externalSkillService.createPresentationSession(jobId));
+          return;
+        }
+
+        if (method === 'GET' && parts.length === 6 && parts[2] === 'jobs' && parts[4] === 'artifacts') {
+          const jobId = decodeURIComponent(parts[3] ?? '');
+          const artifactId = decodeURIComponent(parts[5] ?? '');
+          const { artifact, content } = await options.externalSkillService.getSkillJobArtifact(jobId, artifactId);
+          response.writeHead(200, {
+            'Content-Type': artifact.mimeType,
+            'Content-Length': String(content.byteLength),
+            'Content-Disposition': `attachment; filename="${encodeURIComponent(artifact.fileName)}"`,
+            'Access-Control-Allow-Origin': '*',
+          });
+          response.end(content);
+          return;
+        }
       }
 
       if (method === 'POST' && url.pathname === '/api/approval/files/upload') {

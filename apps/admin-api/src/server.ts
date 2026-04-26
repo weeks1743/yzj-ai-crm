@@ -6,6 +6,9 @@ import { createAdminApiServer } from './app.js';
 import { loadAppConfig } from './config.js';
 import { openDatabase } from './database.js';
 import { DictionaryResolver } from './dictionary-resolver.js';
+import { DocmeeTemplateClient } from './docmee-template-client.js';
+import { EnterprisePptTemplateRepository } from './enterprise-ppt-template-repository.js';
+import { EnterprisePptTemplateService } from './enterprise-ppt-template-service.js';
 import { ExternalSkillService } from './external-skill-service.js';
 import { LightCloudClient } from './lightcloud-client.js';
 import { OrgSyncRepository } from './org-sync-repository.js';
@@ -54,8 +57,19 @@ const shadowMetadataService = new ShadowMetadataService({
     ),
   }),
 });
+const enterprisePptTemplateService = new EnterprisePptTemplateService({
+  config,
+  repository: new EnterprisePptTemplateRepository(database),
+  client: config.docmee.apiKey
+    ? new DocmeeTemplateClient({
+        baseUrl: config.docmee.baseUrl,
+        apiKey: config.docmee.apiKey,
+      })
+    : null,
+});
 const externalSkillService = new ExternalSkillService({
   config,
+  enterprisePptTemplateResolver: enterprisePptTemplateService,
 });
 
 const server = createAdminApiServer({
@@ -64,6 +78,7 @@ const server = createAdminApiServer({
   approvalFileService,
   shadowMetadataService,
   externalSkillService,
+  enterprisePptTemplateService,
 });
 
 server.listen(config.server.port, () => {

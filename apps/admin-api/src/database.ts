@@ -184,6 +184,26 @@ export function openDatabase(databasePath: string): DatabaseSync {
       created_at TEXT NOT NULL,
       UNIQUE(object_key, snapshot_version)
     );
+
+    CREATE TABLE IF NOT EXISTS enterprise_ppt_templates (
+      template_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      source_file_name TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS enterprise_ppt_template_settings (
+      singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+      default_prompt TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_enterprise_ppt_templates_single_active
+    ON enterprise_ppt_templates(is_active)
+    WHERE is_active = 1;
   `);
   migrateSnapshotDictionaryBindings(database);
 

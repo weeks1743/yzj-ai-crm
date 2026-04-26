@@ -26,6 +26,30 @@ test('openDatabase creates minimal shadow tables for fresh database', () => {
       rows.map((row) => row.name),
       ['shadow_object_registry', 'shadow_object_snapshots'],
     );
+
+    const pptTemplateTable = database
+      .prepare(
+        `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table' AND name = 'enterprise_ppt_templates'
+          LIMIT 1
+        `,
+      )
+      .get() as unknown as { name: string } | undefined;
+    assert.equal(pptTemplateTable?.name, 'enterprise_ppt_templates');
+
+    const pptTemplateSettingsTable = database
+      .prepare(
+        `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table' AND name = 'enterprise_ppt_template_settings'
+          LIMIT 1
+        `,
+      )
+      .get() as unknown as { name: string } | undefined;
+    assert.equal(pptTemplateSettingsTable?.name, 'enterprise_ppt_template_settings');
   } finally {
     database.close();
   }

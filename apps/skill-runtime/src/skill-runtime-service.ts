@@ -6,10 +6,12 @@ import type {
   HealthResponse,
   JobResponse,
   ModelDescriptor,
+  PresentationSessionResponse,
   SkillCatalogEntry,
   SupportedDeepseekModel,
 } from './contracts.js';
 import { SUPPORTED_DEEPSEEK_MODELS } from './contracts.js';
+import { DocmeeClient } from './docmee-client.js';
 import {
   AppError,
   BadRequestError,
@@ -21,6 +23,8 @@ import { JobRepository } from './job-repository.js';
 import { SkillCatalogService } from './skill-catalog-service.js';
 import { SkillExecutor } from './skill-executor.js';
 
+const MODEL_FREE_SKILLS = new Set(['super-ppt']);
+
 export class SkillRuntimeService {
   private readonly runningJobs = new Set<string>();
 
@@ -31,6 +35,7 @@ export class SkillRuntimeService {
       repository: JobRepository;
       artifactStore: ArtifactStore;
       executor: SkillExecutor;
+      docmeeClient: DocmeeClient;
     },
   ) {}
 
@@ -87,6 +92,10 @@ export class SkillRuntimeService {
     );
   }
 
+  private requiresModel(skillName: string): boolean {
+    return !MODEL_FREE_SKILLS.has(skillName);
+  }
+
   async createJob(input: CreateJobRequest): Promise<JobResponse> {
     const skillName = input.skillName?.trim();
     if (!skillName) {
@@ -118,7 +127,7 @@ export class SkillRuntimeService {
     const workingDirectory = input.workingDirectory
       ? this.assertAllowedExternalPath(input.workingDirectory, 'workingDirectory')
       : null;
-    const model = this.validateModel(input.model);
+    const model = this.requiresModel(skillName) ? this.validateModel(input.model) : null;
 
     const job = this.options.repository.createJob({
       skillName,
@@ -126,6 +135,8 @@ export class SkillRuntimeService {
       requestText,
       attachments,
       workingDirectory,
+      templateId: input.templateId?.trim() || null,
+      presentationPrompt: input.presentationPrompt?.trim() || null,
     });
 
     this.options.repository.appendEvent(job.jobId, 'status', 'Job 已入队');
@@ -142,6 +153,51 @@ export class SkillRuntimeService {
 
   getArtifact(jobId: string, artifactId: string) {
     return this.options.artifactStore.readArtifact(jobId, artifactId);
+  }
+
+  async createPresentationSession(jobId: string): Promise<PresentationSessionResponse> {
+    const job = this.options.repository.getJob(jobId);
+    if (job.skillName !== 'super-ppt') {
+      throw new ConflictError(`当前 job 不支持 PPT 编辑会话: ${job.skillName}`);
+    }
+
+    const presentationEvent = this.options.repository
+      .listEvents(jobId)
+      .filter((event) => event.type === 'presentation_ready')
+      .at(-1);
+
+    if (!presentationEvent?.data || typeof presentationEvent.data !== 'object') {
+      throw new ConflictError('当前 job 尚未生成可编辑的 PPT');
+    }
+
+    const payload = presentationEvent.data as {
+      pptId?: unknown;
+      subject?: unknown;
+      animation?: unknown;
+    };
+    const pptId = typeof payload.pptId === 'string' ? payload.pptId : '';
+    const subject = typeof payload.subject === 'string' ? payload.subject : '';
+    if (!pptId || !subject) {
+      throw new ConflictError('当前 job 的 PPT 元数据不完整，无法创建编辑会话');
+    }
+
+    const tokenPayload = await this.options.docmeeClient.createApiToken({
+      uid: `sp-${jobId.slice(0, 8)}-${Date.now().toString(36)}`,
+      limit: 200,
+      timeOfHours: this.options.config.docmee.editorTokenHours,
+    });
+    const expiresInSeconds = Number.isFinite(tokenPayload.expireTime) && tokenPayload.expireTime > 0
+      ? tokenPayload.expireTime
+      : this.options.config.docmee.editorTokenHours * 3600;
+
+    return {
+      jobId,
+      pptId,
+      token: tokenPayload.token,
+      subject,
+      animation: false,
+      expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
+    };
   }
 
   private async runJob(jobId: string): Promise<void> {

@@ -40,6 +40,23 @@ function parsePort(value: string | undefined): number {
   return port;
 }
 
+function parsePositiveInteger(
+  value: string | undefined,
+  fallbackValue: number,
+  label: string,
+): number {
+  if (!value?.trim()) {
+    return fallbackValue;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new ConfigError(`${label} 必须是正整数`);
+  }
+
+  return parsed;
+}
+
 function splitList(value: string | undefined): string[] {
   if (!value?.trim()) {
     return [];
@@ -123,6 +140,15 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
       baseUrl: (env.ARK_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3').trim(),
       apiKey: env.ARK_API_KEY?.trim() || null,
       webSearchModel: (env.ARK_WEB_SEARCH_MODEL || 'doubao-seed-2-0-lite-260215').trim(),
+    },
+    docmee: {
+      baseUrl: (env.DOCMEE_BASE_URL || 'https://open.docmee.cn').trim(),
+      apiKey: env.DOCMEE_API_KEY?.trim() || null,
+      editorTokenHours: parsePositiveInteger(
+        env.DOCMEE_EDITOR_TOKEN_HOURS,
+        1,
+        'DOCMEE_EDITOR_TOKEN_HOURS',
+      ),
     },
     meta: {
       configSource: '.env',

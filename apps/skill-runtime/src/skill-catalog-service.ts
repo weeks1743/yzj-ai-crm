@@ -6,13 +6,36 @@ import type {
 } from './contracts.js';
 import { getDependencyDetail } from './dependency-probe.js';
 
-const EXECUTABLE_SKILLS = new Set(['company-research', 'pptx']);
+const EXECUTABLE_SKILLS = new Set([
+  'company-research',
+  'customer-journey-map',
+  'jobs-to-be-done',
+  'problem-statement',
+  'saas-revenue-growth-metrics',
+  'super-ppt',
+  'pptx',
+]);
 const EXPLICIT_UNSUPPORTED_SKILLS = new Set(['docx', 'xlsx', 'pdf']);
 
 const SKILL_DEPENDENCIES: Record<string, string[]> = {
   'company-research': [
     'env:DEEPSEEK_API_KEY',
     'env:ARK_API_KEY',
+  ],
+  'customer-journey-map': [
+    'env:DEEPSEEK_API_KEY',
+  ],
+  'jobs-to-be-done': [
+    'env:DEEPSEEK_API_KEY',
+  ],
+  'problem-statement': [
+    'env:DEEPSEEK_API_KEY',
+  ],
+  'saas-revenue-growth-metrics': [
+    'env:DEEPSEEK_API_KEY',
+  ],
+  'super-ppt': [
+    'env:DOCMEE_API_KEY',
   ],
   pptx: [
     'env:DEEPSEEK_API_KEY',
@@ -49,6 +72,15 @@ function resolveAllowedTools(skill: LoadedSkill): string[] {
     return ['web_search', 'web_fetch_extract', 'read_skill_file', 'write_text_artifact'];
   }
 
+  if (
+    skill.skillName === 'customer-journey-map'
+    || skill.skillName === 'jobs-to-be-done'
+    || skill.skillName === 'problem-statement'
+    || skill.skillName === 'saas-revenue-growth-metrics'
+  ) {
+    return ['read_skill_file', 'read_source_file', 'write_text_artifact'];
+  }
+
   if (skill.skillName === 'pptx') {
     return [
       'read_source_file',
@@ -68,6 +100,10 @@ function resolveAllowedTools(skill: LoadedSkill): string[] {
       'write_workspace_file',
       'read_skill_file',
     ];
+  }
+
+  if (skill.skillName === 'super-ppt') {
+    return [];
   }
 
   return [];

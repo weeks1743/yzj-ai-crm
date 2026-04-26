@@ -99,6 +99,11 @@ export function createSkillRuntimeServer(options: {
           return;
         }
 
+        if (method === 'POST' && parts.length === 4 && parts[3] === 'presentation-session') {
+          writeJson(response, 200, await options.service.createPresentationSession(jobId));
+          return;
+        }
+
         if (method === 'GET' && parts.length === 5 && parts[3] === 'artifacts') {
           const artifactId = parts[4];
           if (!artifactId) {

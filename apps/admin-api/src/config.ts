@@ -185,6 +185,10 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
     server: {
       port: parsePort(env.ADMIN_API_PORT),
     },
+    docmee: {
+      baseUrl: (env.DOCMEE_BASE_URL || 'https://open.docmee.cn').trim(),
+      apiKey: env.DOCMEE_API_KEY?.trim() || null,
+    },
     storage: {
       sqlitePath: resolve(
         dirname(envFilePath),
@@ -201,6 +205,9 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
           60000,
           'EXT_IMAGE_TIMEOUT_MS',
         ),
+      },
+      skillRuntime: {
+        baseUrl: (env.SKILL_RUNTIME_BASE_URL || 'http://127.0.0.1:3012').trim(),
       },
     },
     meta: {

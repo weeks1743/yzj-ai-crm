@@ -2,7 +2,9 @@ import {
   copyFileSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { ArtifactStore, guessMimeType } from './artifact-store.js';
@@ -14,19 +16,91 @@ import type {
   JobEvent,
   LoadedSkill,
   StoredJobRecord,
+  SupportedDeepseekModel,
   WebSearchClient,
 } from './contracts.js';
+import { DocmeeClient, type DocmeeAiLayoutResponse, type DocmeeOptionItem } from './docmee-client.js';
 import { inferPptxMode, type PptxMode } from './pptx-deck.js';
-import { BadRequestError } from './errors.js';
+import { BadRequestError, ExternalServiceError } from './errors.js';
 import { isPathWithin } from './path-utils.js';
 import { JobRepository } from './job-repository.js';
 import {
   createCompanyResearchTools,
+  createGenericTextTools,
   createPptxTools,
   type ExecutionPaths,
   type ToolExecutionRecord,
   runToolLoop,
 } from './tool-runtime.js';
+import {
+  createPromptMetadata,
+  createSuperPptRuntimeToken,
+  DEFAULT_SUPER_PPT_PROMPT,
+  type DocmeeLayoutState,
+  runOfficialDocmeeLayoutFlow,
+  resolveSuperPptPrompt,
+} from './super-ppt-docmee.js';
+
+const GENERIC_TEXT_SKILLS = new Set([
+  'customer-journey-map',
+  'jobs-to-be-done',
+  'problem-statement',
+  'saas-revenue-growth-metrics',
+]);
+const SUPER_PPT_SKILL = 'super-ppt';
+const SUPER_PPT_OFFICIAL_FLOW_TIMEOUT_MS = 600_000;
+const SUPER_PPT_OFFICIAL_FLOW_INTERVAL_MS = 5_000;
+
+function extractMarkdownSubject(markdown: string, attachmentPath: string): string {
+  const headingMatch = markdown.match(/^#\s+(.+)$/m);
+  if (headingMatch?.[1]?.trim()) {
+    return headingMatch[1].trim();
+  }
+
+  const fileName = basename(attachmentPath, extname(attachmentPath)).trim();
+  return fileName || 'super-ppt';
+}
+
+function resolveDocmeeOptionValue(
+  items: DocmeeOptionItem[],
+  preferredValue: string,
+  fallbackValue: string,
+): string {
+  const matchedItem = items.find((item) => item.value === preferredValue || item.name === preferredValue);
+  return matchedItem?.value || fallbackValue || items[0]?.value;
+}
+
+function pickDocmeeMarkdownContent(payload: {
+  text?: string;
+  markdown?: string;
+}, taskId: string): string {
+  const content = payload.markdown?.trim() || payload.text?.trim() || '';
+  if (!content) {
+    throw new ExternalServiceError('Docmee 未返回可用的 Markdown 内容', {
+      taskId,
+      payload,
+    });
+  }
+
+  return content;
+}
+
+function isDocmeeTemplateLayoutFailure(error: unknown): boolean {
+  if (!(error instanceof ExternalServiceError)) {
+    return false;
+  }
+
+  const detailsText = (() => {
+    try {
+      return JSON.stringify(error.details ?? {});
+    } catch {
+      return String(error.details ?? '');
+    }
+  })().toLowerCase();
+  const combined = `${error.message}\n${detailsText}`.toLowerCase();
+  return combined.includes('模板解析失败')
+    || combined.includes('classification result must include at least one content page');
+}
 
 function walkFiles(baseDir: string, currentDir = baseDir): string[] {
   const entries = readdirSync(currentDir, { withFileTypes: true });
@@ -79,6 +153,7 @@ export class SkillExecutor {
       artifactStore: ArtifactStore;
       chatClient: ChatCompletionClient;
       webSearchClient: WebSearchClient;
+      docmeeClient: DocmeeClient;
       fetchImpl?: FetchLike;
     },
   ) {}
@@ -280,6 +355,44 @@ export class SkillExecutor {
     };
   }
 
+  private buildGenericTextPrompt(skill: LoadedSkill, stagedAttachments: string[], paths: ExecutionPaths, job: StoredJobRecord): {
+    systemPrompt: string;
+    userPrompt: string;
+  } {
+    const supportFileHints = [];
+    if (skill.profile.hasTemplate) {
+      supportFileHints.push('- 如需固定结构，请先读取 template.md。');
+    }
+    if (skill.profile.examples.length > 0) {
+      supportFileHints.push('- 如需把握输出语气或结构，可按需读取 examples/ 下的示例。');
+    }
+
+    return {
+      systemPrompt: [
+        `你正在执行 skill: ${skill.skillName}`,
+        '',
+        skill.promptContent,
+        '',
+        '执行约束：',
+        '- 只允许使用这些工具：read_skill_file, read_source_file, write_text_artifact。',
+        '- 必须产出结构化 markdown，不要输出闲聊式答复。',
+        '- 如果用户提供了附件，优先读取附件后再组织内容；没有附件时，直接基于 requestText 生成。',
+        '- 如技能自带 template.md 或 examples，可按需读取，但不要把模板说明原样照抄到最终结果中。',
+        '- 必须在结束前调用 write_text_artifact 生成 markdown 产物。',
+        `- 输出 artifact 建议文件名：${skill.skillName}-${job.jobId}.md`,
+        `- Job 输出目录：${paths.outputsDir}`,
+        `- Job 附件目录：${paths.inputsDir}`,
+        ...supportFileHints,
+      ].join('\n'),
+      userPrompt: [
+        `用户请求：${job.requestText}`,
+        '',
+        '可用输入文件：',
+        ...(stagedAttachments.length > 0 ? stagedAttachments.map((item) => `- ${item}`) : ['- 无']),
+      ].join('\n'),
+    };
+  }
+
   private ensurePptxArtifacts(jobId: string): void {
     const artifacts = this.options.repository.listArtifacts(jobId);
     const hasPptx = artifacts.some((artifact) => artifact.mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
@@ -292,6 +405,302 @@ export class SkillExecutor {
     if (!hasPdf || !hasJpg) {
       throw new BadRequestError('pptx skill 未生成完整预览产物（PDF/JPG）');
     }
+  }
+
+  private assertSuperPptAttachment(stagedAttachments: string[]): string {
+    if (stagedAttachments.length !== 1) {
+      throw new BadRequestError('super-ppt 当前只支持 1 个 markdown 附件');
+    }
+
+    const attachmentPath = stagedAttachments[0]!;
+    if (extname(attachmentPath).toLowerCase() !== '.md') {
+      throw new BadRequestError('super-ppt 当前只支持 .md 附件');
+    }
+
+    return attachmentPath;
+  }
+
+  private async executeSuperPpt(input: {
+    job: StoredJobRecord;
+    paths: ExecutionPaths;
+    stagedAttachments: string[];
+    emitEvent: (type: JobEvent['type'], message: string, data?: unknown) => void;
+    publishTextArtifact: (fileName: string, content: string, mimeType?: string) => JobArtifact;
+    publishFileArtifact: (sourcePath: string, fileName?: string, mimeType?: string) => JobArtifact;
+  }): Promise<{ finalText: string | null }> {
+    const sourceAttachment = this.assertSuperPptAttachment(input.stagedAttachments);
+    const sourceMarkdownRaw = readFileSync(sourceAttachment, 'utf8');
+    const sourceMarkdown = sourceMarkdownRaw.trim();
+    if (!sourceMarkdown) {
+      throw new BadRequestError('super-ppt 附件内容为空');
+    }
+
+    const subject = extractMarkdownSubject(sourceMarkdown, sourceAttachment);
+    const resolvedPrompt = resolveSuperPptPrompt(input.job.presentationPrompt?.trim() || DEFAULT_SUPER_PPT_PROMPT);
+    const runtimeToken = await createSuperPptRuntimeToken(this.options.docmeeClient, input.job.jobId);
+
+    input.emitEvent('message', 'Docmee createTask 已开始', {
+      subject,
+      sourceAttachment,
+      promptFallbackApplied: resolvedPrompt.isFallbackApplied,
+    });
+    const task = await this.options.docmeeClient.createTask({
+      type: 2,
+      files: [
+        {
+          fileName: basename(sourceAttachment),
+          file: readFileSync(sourceAttachment),
+          mimeType: 'text/markdown; charset=utf-8',
+        },
+      ],
+    }, runtimeToken);
+
+    const optionPayload = await this.options.docmeeClient.options(runtimeToken);
+    const scene = resolveDocmeeOptionValue(optionPayload.scene, '公司介绍', '公司介绍');
+    const audience = resolveDocmeeOptionValue(optionPayload.audience, '大众', '大众');
+    const lang = resolveDocmeeOptionValue(optionPayload.lang, 'zh', 'zh');
+
+    input.emitEvent('message', 'Docmee 大纲生成中', {
+      taskId: task.id,
+      scene,
+      audience,
+      lang,
+    });
+    const generated = await this.options.docmeeClient.generateContent({
+      id: task.id,
+      stream: true,
+      outlineType: 'JSON',
+      questionMode: false,
+      isNeedAsk: false,
+      length: 'short',
+      scene,
+      audience,
+      lang,
+      prompt: resolvedPrompt.effectivePrompt,
+      aiSearch: false,
+      isGenImg: false,
+    }, runtimeToken);
+    if (typeof generated.result === 'undefined') {
+      throw new ExternalServiceError('Docmee 未返回结构化大纲结果', {
+        taskId: task.id,
+        generated,
+      });
+    }
+
+    input.emitEvent('message', 'Docmee AI 智能布局排版中', {
+      taskId: task.id,
+      templateId: input.job.templateId,
+    });
+    let docmeeFlow = 'official-v2-main-flow';
+    let aiLayout: DocmeeAiLayoutResponse = {
+      streamLog: '',
+      events: [],
+      finalEventData: undefined,
+      inferredMarkdown: null,
+      inferredHtml: null,
+      inferredStatus: null,
+      aborted: false,
+    };
+    let latestData: Record<string, unknown> | null = null;
+    let convertResult: Record<string, unknown> | null = null;
+    let latestDataError: string | null = null;
+    let convertResultError: string | null = null;
+    let finalMarkdownSource = 'markdown_generate_after_official_layout';
+    let convertStatus: string | null = null;
+    let finalMarkdown = '';
+    let officialLayoutState: DocmeeLayoutState | null = null;
+    let officialFlowError: {
+      message: string;
+      details?: unknown;
+    } | null = null;
+
+    try {
+      const officialFlow = await runOfficialDocmeeLayoutFlow({
+        docmeeClient: this.options.docmeeClient,
+        taskId: task.id,
+        runtimeToken,
+        data: generated.result,
+        templateId: input.job.templateId ?? undefined,
+        timeoutMs: SUPER_PPT_OFFICIAL_FLOW_TIMEOUT_MS,
+        intervalMs: SUPER_PPT_OFFICIAL_FLOW_INTERVAL_MS,
+      });
+      aiLayout = officialFlow.aiLayout;
+      latestData = officialFlow.latestData;
+      convertResult = officialFlow.convertResult;
+      latestDataError = officialFlow.latestDataError;
+      convertResultError = officialFlow.convertResultError;
+      officialLayoutState = officialFlow.layoutState;
+      convertStatus = officialFlow.layoutState.status;
+
+      input.emitEvent('message', 'Docmee AI 布局已完成，开始生成最终 Markdown', {
+        taskId: task.id,
+        layoutStatus: officialFlow.layoutState.status,
+        layoutSource: officialFlow.layoutState.source,
+        templateId: input.job.templateId,
+      });
+      const markdownGenerated = await this.options.docmeeClient.generateContent({
+        id: task.id,
+        stream: false,
+        outlineType: 'MD',
+        questionMode: false,
+        isNeedAsk: false,
+        length: 'short',
+        scene,
+        audience,
+        lang,
+        prompt: resolvedPrompt.effectivePrompt,
+        aiSearch: false,
+        isGenImg: false,
+      }, runtimeToken);
+      finalMarkdown = pickDocmeeMarkdownContent(markdownGenerated, task.id);
+    } catch (error) {
+      officialFlowError = {
+        message: error instanceof Error ? error.message : String(error),
+        details: error instanceof ExternalServiceError ? error.details : undefined,
+      };
+      latestDataError = officialFlowError.message;
+
+      if (input.job.templateId && isDocmeeTemplateLayoutFailure(error)) {
+        input.emitEvent('error', 'Docmee 模板解析失败，已停止本次带模板生成', {
+          taskId: task.id,
+          templateId: input.job.templateId,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        throw new ExternalServiceError(
+          'Docmee 模板解析失败：当前模板未识别到可用内容页，请在企业PPT模板中更换或修复模板后重试。',
+          {
+            taskId: task.id,
+            templateId: input.job.templateId,
+            cause: error instanceof ExternalServiceError ? error.details : error,
+          },
+        );
+      }
+
+      input.emitEvent('error', 'Docmee 官方链路未完成，已停止本次生成，未执行降级链路', {
+        taskId: task.id,
+        templateId: input.job.templateId,
+        reason: officialFlowError.message,
+        officialFlowError: officialFlowError.details ?? null,
+      });
+      throw new ExternalServiceError(
+        'Docmee 官方链路未完成，已停止本次生成，未执行降级 PPT。请检查模板兼容性或等待布局任务完成后重试。',
+        {
+          taskId: task.id,
+          templateId: input.job.templateId,
+          officialFlowError,
+          cause: error instanceof ExternalServiceError ? error.details : error,
+        },
+      );
+    }
+
+    input.emitEvent('message', 'Docmee PPT 生成中', {
+      taskId: task.id,
+      templateId: input.job.templateId,
+      finalMarkdownSource,
+    });
+    const pptInfo = await this.options.docmeeClient.generatePptx({
+      id: task.id,
+      markdown: finalMarkdown,
+      templateId: input.job.templateId ?? undefined,
+    }, runtimeToken);
+    const pptId = pptInfo.id?.trim();
+    if (!pptId) {
+      throw new ExternalServiceError('Docmee 未返回 pptId', {
+        taskId: task.id,
+        pptInfo,
+      });
+    }
+
+    const downloaded = await this.options.docmeeClient.downloadPptxBinary(pptId, runtimeToken);
+    const pptFileName = `super-ppt-${input.job.jobId}.pptx`;
+    const pptFilePath = join(input.paths.outputsDir, pptFileName);
+    writeFileSync(pptFilePath, downloaded.file);
+
+    const pptArtifact = input.publishFileArtifact(
+      pptFilePath,
+      pptFileName,
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    );
+    const sourceMarkdownArtifact = input.publishTextArtifact(
+      `super-ppt-${input.job.jobId}-source.md`,
+      sourceMarkdownRaw,
+      'text/markdown',
+    );
+    const contentOutlineArtifact = input.publishTextArtifact(
+      `super-ppt-${input.job.jobId}-content-outline.json`,
+      JSON.stringify(generated.result, null, 2),
+      'application/json',
+    );
+    const aiLayoutLogArtifact = input.publishTextArtifact(
+      `super-ppt-${input.job.jobId}-ai-layout.log`,
+      aiLayout.streamLog,
+      'text/plain',
+    );
+    const finalMarkdownArtifact = input.publishTextArtifact(
+      `super-ppt-${input.job.jobId}-final-markdown.md`,
+      finalMarkdown,
+      'text/markdown',
+    );
+    input.publishTextArtifact(
+      `super-ppt-${input.job.jobId}.json`,
+      JSON.stringify(
+        {
+          docmeeFlow,
+          taskId: task.id,
+          pptId,
+          subject: pptInfo.subject || subject,
+          scene,
+          audience,
+          lang,
+          sourceAttachment,
+          sourceMarkdownArtifactId: sourceMarkdownArtifact.artifactId,
+          contentOutlineArtifactId: contentOutlineArtifact.artifactId,
+          aiLayoutLogArtifactId: aiLayoutLogArtifact.artifactId,
+          finalMarkdownArtifactId: finalMarkdownArtifact.artifactId,
+          sourceMarkdownCharLength: sourceMarkdownRaw.length,
+          sourceMarkdownLineCount: sourceMarkdownRaw.split(/\r?\n/).length,
+          prompt: createPromptMetadata(this.options.config, resolvedPrompt),
+          requestedTemplateId: input.job.templateId,
+          latestData,
+          latestDataError,
+          convertResult,
+          convertResultError,
+          officialLayoutState,
+          officialFlowError,
+          generated,
+          aiLayout: {
+            finalEventData: aiLayout.finalEventData,
+            inferredMarkdown: aiLayout.inferredMarkdown,
+            inferredHtml: aiLayout.inferredHtml,
+            inferredStatus: aiLayout.inferredStatus,
+            eventCount: aiLayout.events.length,
+            aborted: aiLayout.aborted ?? false,
+          },
+          finalMarkdownSource,
+          convertStatus,
+          pptInfo,
+          downloadMetadata: downloaded.metadata,
+        },
+        null,
+        2,
+      ),
+      'application/json',
+    );
+
+    input.emitEvent('presentation_ready', 'PPT 已生成，可进入编辑器继续修改', {
+      pptId,
+      subject: pptInfo.subject || subject,
+      templateId: pptInfo.templateId || downloaded.metadata.templateId || input.job.templateId || null,
+      coverUrl: pptInfo.coverUrl || downloaded.metadata.coverUrl || null,
+      animation: false,
+      artifactId: pptArtifact.artifactId,
+      docmeeFlow,
+      convertStatus,
+    });
+
+    return {
+      finalText: `PPT 已生成：${pptInfo.subject || subject}（pptId: ${pptId}）`,
+    };
   }
 
   async execute(job: StoredJobRecord, skill: LoadedSkill): Promise<{ finalText: string | null }> {
@@ -325,6 +734,17 @@ export class SkillExecutor {
       publishFileArtifact,
     };
 
+    if (skill.skillName === SUPER_PPT_SKILL) {
+      return this.executeSuperPpt({
+        job,
+        paths,
+        stagedAttachments,
+        emitEvent,
+        publishTextArtifact,
+        publishFileArtifact,
+      });
+    }
+
     let systemPrompt = '';
     let userPrompt = '';
     let tools;
@@ -338,6 +758,9 @@ export class SkillExecutor {
     if (skill.skillName === 'company-research') {
       ({ systemPrompt, userPrompt } = this.buildCompanyResearchPrompt(skill, stagedAttachments, paths, job));
       tools = createCompanyResearchTools();
+    } else if (GENERIC_TEXT_SKILLS.has(skill.skillName)) {
+      ({ systemPrompt, userPrompt } = this.buildGenericTextPrompt(skill, stagedAttachments, paths, job));
+      tools = createGenericTextTools();
     } else if (skill.skillName === 'pptx') {
       const pptxMode = inferPptxMode(stagedAttachments);
       if (pptxMode === 'fresh_deck') {
@@ -373,9 +796,14 @@ export class SkillExecutor {
       throw new BadRequestError(`当前 skill 尚不支持执行: ${skill.skillName}`);
     }
 
+    const model = job.model as SupportedDeepseekModel | null;
+    if (!model) {
+      throw new BadRequestError(`当前 skill 缺少可用模型: ${skill.skillName}`);
+    }
+
     const result = await runToolLoop({
       client: this.options.chatClient,
-      model: job.model,
+      model,
       systemPrompt,
       userPrompt,
       tools,
@@ -385,8 +813,12 @@ export class SkillExecutor {
     });
 
     this.publishOutputArtifacts(job.jobId, paths.outputsDir);
-    if (skill.skillName === 'company-research' && this.options.repository.listArtifacts(job.jobId).length === 0 && result.finalText?.trim()) {
-      publishTextArtifact(`company-research-${job.jobId}.md`, result.finalText.trim());
+    if (
+      (skill.skillName === 'company-research' || GENERIC_TEXT_SKILLS.has(skill.skillName))
+      && this.options.repository.listArtifacts(job.jobId).length === 0
+      && result.finalText?.trim()
+    ) {
+      publishTextArtifact(`${skill.skillName}-${job.jobId}.md`, result.finalText.trim());
     }
 
     if (skill.skillName === 'pptx') {

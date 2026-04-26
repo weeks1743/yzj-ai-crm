@@ -122,6 +122,12 @@ export default [
         component: './skills/[skillPage]',
       },
       {
+        path: '/skills/external-skills/super-ppt/editor',
+        hideInMenu: true,
+        layout: false,
+        component: './skills/external-skills/super-ppt/editor',
+      },
+      {
         name: '写回确认策略',
         path: '/skills/writeback-policies',
         icon: 'safetyCertificate',
@@ -139,6 +145,12 @@ export default [
         path: '/settings/tenant-app',
         icon: 'cluster',
         component: './settings/[settingKey]',
+      },
+      {
+        name: '企业PPT模板',
+        path: '/settings/ppt-templates',
+        icon: 'filePpt',
+        component: './settings/ppt-templates/index',
       },
       {
         name: '云之家接入',

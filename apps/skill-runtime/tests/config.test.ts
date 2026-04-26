@@ -21,6 +21,8 @@ test('loadAppConfig parses defaults and resolves skill runtime paths', () => {
   assert.deepEqual(config.runtime.skillDirs, ['/repo/3rdSkill']);
   assert.deepEqual(config.runtime.allowedRoots, ['/repo/tmp', '/repo/3rdSkill']);
   assert.equal(config.ark.webSearchModel, 'ep-web-search-001');
+  assert.equal(config.docmee.baseUrl, 'https://open.docmee.cn');
+  assert.equal(config.docmee.editorTokenHours, 1);
 });
 
 test('loadAppConfig rejects non-whitelisted default model', () => {

@@ -91,6 +91,7 @@ export function probeDependencies(config: AppConfig): DependencySnapshot {
   const details = Object.fromEntries([
     probeEnv('DEEPSEEK_API_KEY', config.deepseek.apiKey),
     probeEnv('ARK_API_KEY', config.ark.apiKey),
+    probeEnv('DOCMEE_API_KEY', config.docmee.apiKey),
     probeCommand('python3', ['--version']),
     probeCommand('soffice', ['--version']),
     probeCommand('pdftoppm', ['-v']),

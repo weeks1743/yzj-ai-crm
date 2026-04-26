@@ -36,6 +36,15 @@ const CONTACT_SEARCH_OID = '66160cfde4b014e237ba75ca';
 const SEARCH_RANGE_START_TS = 1777046400000;
 const SEARCH_RANGE_END_TS = 1777132799999;
 
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+  });
+}
+
 function writeFieldBoundWorkbook(workbookPath: string) {
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.json_to_sheet([
@@ -1252,6 +1261,7 @@ class StubApprovalFileService extends ApprovalFileService {
 async function createTestServer(options: {
   imageApiKey?: string | null;
   imageFetchImpl?: FetchLike;
+  skillRuntimeFetchImpl?: FetchLike;
 } = {}) {
   const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-http-'));
   const fieldBoundWorkbookPath = join(tempDir, 'province-city-district.xlsx');
@@ -1297,6 +1307,83 @@ async function createTestServer(options: {
     now: () => new Date('2026-04-23T09:00:00.000Z'),
   });
 
+  const combinedFetchImpl: FetchLike = (async (input, init) => {
+    const url = String(input);
+    if (url.startsWith(config.external.skillRuntime.baseUrl)) {
+      if (options.skillRuntimeFetchImpl) {
+        return options.skillRuntimeFetchImpl(input, init);
+      }
+
+      if (url.endsWith('/api/models')) {
+        return jsonResponse([
+          { name: 'deepseek-v4-flash', label: 'deepseek-v4-flash', isDefault: true },
+          { name: 'deepseek-v4-pro', label: 'deepseek-v4-pro', isDefault: false },
+        ]);
+      }
+
+      if (url.endsWith('/api/skills')) {
+        return jsonResponse([
+          {
+            skillName: 'company-research',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY', 'env:ARK_API_KEY'],
+            missingDependencies: [],
+            summary: 'company summary',
+          },
+          {
+            skillName: 'customer-journey-map',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY'],
+            missingDependencies: [],
+            summary: 'journey summary',
+          },
+          {
+            skillName: 'jobs-to-be-done',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY'],
+            missingDependencies: [],
+            summary: 'jtbd summary',
+          },
+          {
+            skillName: 'problem-statement',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY'],
+            missingDependencies: [],
+            summary: 'problem summary',
+          },
+          {
+            skillName: 'saas-revenue-growth-metrics',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY'],
+            missingDependencies: [],
+            summary: 'saas summary',
+          },
+          {
+            skillName: 'super-ppt',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DOCMEE_API_KEY'],
+            missingDependencies: [],
+            summary: 'super-ppt summary',
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected skill-runtime url: ${url}`);
+    }
+
+    if (options.imageFetchImpl) {
+      return options.imageFetchImpl(input, init);
+    }
+
+    throw new Error(`Unexpected external fetch url: ${url}`);
+  }) as FetchLike;
+
   const server = createAdminApiServer({
     config,
     orgSyncService,
@@ -1304,7 +1391,7 @@ async function createTestServer(options: {
     shadowMetadataService,
     externalSkillService: new ExternalSkillService({
       config,
-      fetchImpl: options.imageFetchImpl,
+      fetchImpl: combinedFetchImpl,
       now: () => new Date('2026-04-24T09:00:00.000Z'),
     }),
   });
@@ -1939,12 +2026,22 @@ test('HTTP endpoints expose external skill catalog and readable config errors', 
       status: string;
       implementationType: string;
       supportsInvoke: boolean;
+      debugMode?: string;
     }>;
     const imageSkill = skillsPayload.find((item) => item.skillCode === 'ext.image_generate');
+    const companySkill = skillsPayload.find((item) => item.skillCode === 'ext.company_research_pm');
+    const superPptSkill = skillsPayload.find((item) => item.skillCode === 'ext.super_ppt');
     assert.ok(imageSkill);
+    assert.ok(companySkill);
+    assert.ok(superPptSkill);
     assert.equal(imageSkill.status, '告警中');
     assert.equal(imageSkill.implementationType, 'http_request');
     assert.equal(imageSkill.supportsInvoke, true);
+    assert.equal(companySkill.implementationType, 'skill');
+    assert.equal(companySkill.supportsInvoke, true);
+    assert.equal(companySkill.debugMode, 'skill_job');
+    assert.equal(superPptSkill.implementationType, 'skill');
+    assert.equal(superPptSkill.supportsInvoke, true);
 
     const invokeResponse = await fetch(`${runtime.baseUrl}/api/external-skills/image-generate`, {
       method: 'POST',
@@ -1993,10 +2090,14 @@ test('HTTP endpoints execute image generation and return preview metadata', asyn
     const skillsPayload = (await skillsResponse.json()) as Array<{
       skillCode: string;
       status: string;
+      implementationType?: string;
     }>;
     const imageSkill = skillsPayload.find((item) => item.skillCode === 'ext.image_generate');
+    const problemSkill = skillsPayload.find((item) => item.skillCode === 'ext.problem_statement_pm');
     assert.ok(imageSkill);
+    assert.ok(problemSkill);
     assert.equal(imageSkill.status, '运行中');
+    assert.equal(problemSkill.implementationType, 'skill');
 
     const invokeResponse = await fetch(`${runtime.baseUrl}/api/external-skills/image-generate`, {
       method: 'POST',
@@ -2029,6 +2130,167 @@ test('HTTP endpoints execute image generation and return preview metadata', asyn
     assert.equal(invokePayload.generatedAt, '2026-04-24T09:00:00.000Z');
     assert.match(invokePayload.previewDataUrl, /^data:image\/png;base64,/);
     assert.equal(typeof invokePayload.latencyMs, 'number');
+  } finally {
+    runtime.server.close();
+    await once(runtime.server, 'close');
+    rmSync(runtime.tempDir, { recursive: true, force: true });
+  }
+});
+
+test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => {
+  const runtime = await createTestServer({
+    skillRuntimeFetchImpl: (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/models')) {
+        return jsonResponse([
+          { name: 'deepseek-v4-flash', label: 'deepseek-v4-flash', isDefault: true },
+          { name: 'deepseek-v4-pro', label: 'deepseek-v4-pro', isDefault: false },
+        ]);
+      }
+      if (url.endsWith('/api/skills')) {
+        return jsonResponse([
+          {
+            skillName: 'problem-statement',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY'],
+            missingDependencies: [],
+            summary: 'problem summary',
+          },
+        ]);
+      }
+      if (url.endsWith('/api/jobs') && init?.method === 'POST') {
+        return jsonResponse({
+          jobId: 'job-001',
+          skillName: 'problem-statement',
+          model: 'deepseek-v4-pro',
+          status: 'queued',
+          finalText: null,
+          events: [
+            {
+              id: 'evt-1',
+              type: 'status',
+              message: 'Job 已入队',
+              createdAt: '2026-04-25T10:00:00.000Z',
+            },
+          ],
+          artifacts: [],
+          error: null,
+          createdAt: '2026-04-25T10:00:00.000Z',
+          updatedAt: '2026-04-25T10:00:00.000Z',
+        }, 202);
+      }
+      if (url.endsWith('/api/jobs/job-001')) {
+        return jsonResponse({
+          jobId: 'job-001',
+          skillName: 'problem-statement',
+          model: 'deepseek-v4-pro',
+          status: 'succeeded',
+          finalText: '# 问题陈述',
+          events: [
+            {
+              id: 'evt-1',
+              type: 'status',
+              message: 'Job 已完成',
+              createdAt: '2026-04-25T10:01:00.000Z',
+            },
+          ],
+          artifacts: [
+            {
+              artifactId: 'artifact-001',
+              jobId: 'job-001',
+              fileName: 'problem-statement.md',
+              mimeType: 'text/markdown',
+              byteSize: 128,
+              createdAt: '2026-04-25T10:01:00.000Z',
+              downloadPath: '/api/jobs/job-001/artifacts/artifact-001',
+            },
+          ],
+          error: null,
+          createdAt: '2026-04-25T10:00:00.000Z',
+          updatedAt: '2026-04-25T10:01:00.000Z',
+        });
+      }
+      if (url.endsWith('/api/jobs/job-001/artifacts/artifact-001')) {
+        return new Response('# 问题陈述', {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/markdown',
+            'Content-Disposition': 'attachment; filename="problem-statement.md"',
+          },
+        });
+      }
+
+      if (url.endsWith('/api/jobs/job-002/presentation-session') && init?.method === 'POST') {
+        return jsonResponse({
+          jobId: 'job-002',
+          pptId: 'ppt-002',
+          token: 'sk-session-002',
+          subject: '绍兴贝斯美化工企业研究',
+          animation: true,
+          expiresAt: '2026-04-25T12:00:00.000Z',
+        });
+      }
+
+      throw new Error(`Unexpected skill-runtime url: ${url}`);
+    }) as FetchLike,
+  });
+
+  try {
+    const createResponse = await fetch(`${runtime.baseUrl}/api/external-skills/ext.problem_statement_pm/jobs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        requestText: '整理问题陈述',
+        model: 'deepseek-v4-pro',
+      }),
+    });
+    assert.equal(createResponse.status, 202);
+    const createdJob = (await createResponse.json()) as {
+      skillCode: string;
+      runtimeSkillName: string;
+      model: string;
+      status: string;
+    };
+    assert.equal(createdJob.skillCode, 'ext.problem_statement_pm');
+    assert.equal(createdJob.runtimeSkillName, 'problem-statement');
+    assert.equal(createdJob.model, 'deepseek-v4-pro');
+    assert.equal(createdJob.status, 'queued');
+
+    const jobResponse = await fetch(`${runtime.baseUrl}/api/external-skills/jobs/job-001`);
+    assert.equal(jobResponse.status, 200);
+    const jobPayload = (await jobResponse.json()) as {
+      skillCode: string;
+      finalText: string;
+      artifacts: Array<{ downloadPath: string }>;
+    };
+    assert.equal(jobPayload.skillCode, 'ext.problem_statement_pm');
+    assert.equal(jobPayload.finalText, '# 问题陈述');
+    assert.equal(
+      jobPayload.artifacts[0]?.downloadPath,
+      '/api/external-skills/jobs/job-001/artifacts/artifact-001',
+    );
+
+    const artifactResponse = await fetch(`${runtime.baseUrl}/api/external-skills/jobs/job-001/artifacts/artifact-001`);
+    assert.equal(artifactResponse.status, 200);
+    assert.equal(artifactResponse.headers.get('content-type'), 'text/markdown');
+    assert.equal(await artifactResponse.text(), '# 问题陈述');
+
+    const sessionResponse = await fetch(
+      `${runtime.baseUrl}/api/external-skills/jobs/job-002/presentation-session`,
+      {
+        method: 'POST',
+      },
+    );
+    assert.equal(sessionResponse.status, 200);
+    const sessionPayload = (await sessionResponse.json()) as {
+      pptId: string;
+      token: string;
+    };
+    assert.equal(sessionPayload.pptId, 'ppt-002');
+    assert.equal(sessionPayload.token, 'sk-session-002');
   } finally {
     runtime.server.close();
     await once(runtime.server, 'close');

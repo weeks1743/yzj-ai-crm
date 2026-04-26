@@ -8,6 +8,7 @@ import { useLocation } from '@umijs/max';
 import {
   Alert,
   Button,
+  Divider,
   Drawer,
   Empty,
   Form,
@@ -17,14 +18,20 @@ import {
   Select,
   Space,
   Tag,
+  Timeline,
   Typography,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { ProColumns } from '@ant-design/pro-components';
 import type {
+  EnterprisePptTemplateItem,
+  EnterprisePptTemplateListResponse,
   ExternalSkillCatalogItem,
+  ExternalSkillJobRequest,
+  ExternalSkillJobResponse,
   ImageGenerationRequest,
   ImageGenerationResponse,
+  SkillRuntimeModelName,
   WritebackPolicy,
 } from '@shared';
 import { writebackPolicies } from '@shared';
@@ -166,6 +173,44 @@ const imageQualityOptions = [
   { label: 'high', value: 'high' },
 ];
 
+interface PresentationReadyEventData {
+  pptId?: string;
+  subject?: string;
+  templateId?: string | null;
+  coverUrl?: string | null;
+  animation?: boolean;
+  artifactId?: string;
+}
+
+interface SkillJobFormValues {
+  requestText: string;
+  model?: SkillRuntimeModelName;
+  attachmentsText?: string;
+  workingDirectory?: string;
+}
+
+function parseLineSeparatedPaths(value?: string): string[] | undefined {
+  const items = (value ?? '')
+    .split('\n')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
+function getPresentationReadyEvent(
+  job: ExternalSkillJobResponse | null,
+): PresentationReadyEventData | null {
+  if (!job) {
+    return null;
+  }
+
+  const event = [...job.events]
+    .reverse()
+    .find((item) => item.type === 'presentation_ready' && item.data && typeof item.data === 'object');
+
+  return event ? (event.data as PresentationReadyEventData) : null;
+}
+
 const SkillsCatalogPage = () => {
   const location = useLocation();
   const pageKey = (location.pathname.split('/').pop() ?? '') as keyof typeof pageMap;
@@ -179,7 +224,14 @@ const SkillsCatalogPage = () => {
   const [invokeError, setInvokeError] = useState<string | null>(null);
   const [lastRequest, setLastRequest] = useState<ImageGenerationRequest | null>(null);
   const [imageResult, setImageResult] = useState<ImageGenerationResponse | null>(null);
+  const [skillJobLoading, setSkillJobLoading] = useState(false);
+  const [skillJobError, setSkillJobError] = useState<string | null>(null);
+  const [lastSkillJobRequest, setLastSkillJobRequest] = useState<ExternalSkillJobRequest | null>(null);
+  const [skillJobResult, setSkillJobResult] = useState<ExternalSkillJobResponse | null>(null);
+  const [pptTemplateInfo, setPptTemplateInfo] = useState<EnterprisePptTemplateListResponse | null>(null);
+  const [pptTemplateError, setPptTemplateError] = useState<string | null>(null);
   const [imageForm] = Form.useForm<ImageGenerationRequest>();
+  const [skillJobForm] = Form.useForm<SkillJobFormValues>();
 
   useEffect(() => {
     if (!isExternalSkillsPage) {
@@ -205,6 +257,20 @@ const SkillsCatalogPage = () => {
       .finally(() => {
         if (!cancelled) {
           setLoading(false);
+        }
+      });
+
+    void requestJson<EnterprisePptTemplateListResponse>('/api/settings/ppt-templates')
+      .then((payload) => {
+        if (!cancelled) {
+          setPptTemplateInfo(payload);
+          setPptTemplateError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPptTemplateInfo(null);
+          setPptTemplateError(error instanceof Error ? error.message : '企业 PPT 模板信息加载失败');
         }
       });
 
@@ -243,11 +309,23 @@ const SkillsCatalogPage = () => {
     setInvokeError(null);
     setImageResult(null);
     setLastRequest(null);
+    setSkillJobError(null);
+    setLastSkillJobRequest(null);
+    setSkillJobResult(null);
     imageForm.resetFields();
+    skillJobForm.resetFields();
     imageForm.setFieldsValue({
       size: 'auto',
       quality: 'auto',
     });
+    if (isExternalSkillRecord(row) && row.debugMode === 'skill_job') {
+      skillJobForm.setFieldsValue({
+        model: row.debugConfig?.defaultModel,
+        requestText: '',
+        attachmentsText: '',
+        workingDirectory: '',
+      });
+    }
   };
 
   const columns = useMemo(
@@ -257,6 +335,11 @@ const SkillsCatalogPage = () => {
 
   const dataSource = isExternalSkillsPage ? externalSkills : pageMap['writeback-policies'].rows;
   const metrics = isExternalSkillsPage ? externalMetrics : pageMap['writeback-policies'].metrics;
+  const presentationReadyEvent = useMemo(
+    () => getPresentationReadyEvent(skillJobResult),
+    [skillJobResult],
+  );
+  const activePptTemplate = pptTemplateInfo?.activeTemplate ?? null;
 
   const handleInvokeImage = async (values: ImageGenerationRequest) => {
     setInvokeLoading(true);
@@ -280,6 +363,80 @@ const SkillsCatalogPage = () => {
     }
   };
 
+  const runSkillJob = async (payload: ExternalSkillJobRequest) => {
+    if (!current || !isExternalSkillRecord(current)) {
+      return;
+    }
+
+    setSkillJobLoading(true);
+    setSkillJobError(null);
+    setLastSkillJobRequest(payload);
+
+    try {
+      const result = await requestJson<ExternalSkillJobResponse>(
+        `/api/external-skills/${encodeURIComponent(current.skillCode)}/jobs`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+      setSkillJobResult(result);
+    } catch (error) {
+      setSkillJobResult(null);
+      setSkillJobError(error instanceof Error ? error.message : '调试提交失败');
+    } finally {
+      setSkillJobLoading(false);
+    }
+  };
+
+  const handleInvokeSkillJob = async (values: SkillJobFormValues) => {
+    const payload: ExternalSkillJobRequest = {
+      requestText: values.requestText.trim(),
+      model: values.model,
+      attachments: parseLineSeparatedPaths(values.attachmentsText),
+      workingDirectory: values.workingDirectory?.trim() || undefined,
+    };
+    await runSkillJob(payload);
+  };
+
+  useEffect(() => {
+    if (
+      !current
+      || !isExternalSkillRecord(current)
+      || current.debugMode !== 'skill_job'
+      || !skillJobResult
+      || (skillJobResult.status !== 'queued' && skillJobResult.status !== 'running')
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void requestJson<ExternalSkillJobResponse>(
+        `/api/external-skills/jobs/${encodeURIComponent(skillJobResult.jobId)}`,
+      )
+        .then((payload) => {
+          if (!cancelled) {
+            setSkillJobResult(payload);
+            setSkillJobError(null);
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setSkillJobError(error instanceof Error ? error.message : '调试结果加载失败');
+          }
+        });
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [current, skillJobResult]);
+
   return (
     <PageContainer title={config.title} subTitle={config.summary}>
       <Alert
@@ -288,7 +445,7 @@ const SkillsCatalogPage = () => {
         message={isExternalSkillsPage ? '真实目录 / 试运行台' : '目录 / 治理视图'}
         description={
           isExternalSkillsPage
-            ? '这里展示 ext.* 的真实目录状态；当前只对 ext.image_generate 开放后台试运行，其余能力继续按占位口径展示。'
+            ? '这里展示 ext.* 的真实目录状态；当前支持 ext.image_generate 专属试运行，以及 implementationType=skill 的统一 Job 调试。'
             : '这里保留的是对象写回策略治理视图，不直接承担执行控制。'
         }
       />
@@ -394,6 +551,19 @@ const SkillsCatalogPage = () => {
                     ))}
                   </Space>
                 </ProDescriptions.Item>
+                <ProDescriptions.Item label="缺失依赖">
+                  {current.missingDependencies && current.missingDependencies.length > 0 ? (
+                    <Space wrap>
+                      {current.missingDependencies.map((dependency) => (
+                        <Tag color="warning" key={dependency}>
+                          {dependency}
+                        </Tag>
+                      ))}
+                    </Space>
+                  ) : (
+                    '—'
+                  )}
+                </ProDescriptions.Item>
               </ProDescriptions>
 
               {current.skillCode === 'ext.image_generate' && current.supportsInvoke ? (
@@ -482,6 +652,237 @@ const SkillsCatalogPage = () => {
                     </Space>
                   ) : (
                     <Empty description={loading ? '正在加载目录...' : '尚未生成图片，填写 Prompt 后可在这里预览结果。'} />
+                  )}
+                </Space>
+              ) : current.debugMode === 'skill_job' && current.supportsInvoke ? (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Alert
+                    type={current.status === '运行中' ? 'success' : 'warning'}
+                    showIcon
+                    message="统一 Job 调试台"
+                    description={
+                      current.status === '运行中'
+                        ? '当前能力走独立 skill-runtime，支持提交调试请求、查看事件和下载 markdown 产物。'
+                        : '当前能力已挂到统一调试台，但底层 runtime 或依赖存在风险，提交时会返回可读错误。'
+                    }
+                  />
+
+                  {current.skillCode === 'ext.super_ppt' ? (
+                    pptTemplateError ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="企业模板状态暂不可读"
+                        description={pptTemplateError}
+                      />
+                    ) : activePptTemplate ? (
+                      <Alert
+                        type="success"
+                        showIcon
+                        message={`当前企业默认模板：${activePptTemplate.name}`}
+                        description={`templateId: ${activePptTemplate.templateId}。super-ppt 会始终使用该企业默认模板生成，本次调试不支持临时覆盖。当前保存提示词：${pptTemplateInfo?.defaultPrompt ?? '未读取到'}；实际生效提示词：${pptTemplateInfo?.effectivePrompt ?? '未读取到'}${pptTemplateInfo?.isFallbackApplied ? `。${pptTemplateInfo.fallbackReason ?? ''}` : ''}`}
+                      />
+                    ) : (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="当前没有启用企业模板"
+                        description={`本次 super-ppt 调试将回退到 Docmee 默认模板生成，不支持单次任务临时选模板。当前保存提示词：${pptTemplateInfo?.defaultPrompt ?? '未读取到'}；实际生效提示词：${pptTemplateInfo?.effectivePrompt ?? '未读取到'}${pptTemplateInfo?.isFallbackApplied ? `。${pptTemplateInfo.fallbackReason ?? ''}` : ''}`}
+                      />
+                    )
+                  ) : null}
+
+                  <Form<SkillJobFormValues>
+                    form={skillJobForm}
+                    layout="vertical"
+                    onFinish={handleInvokeSkillJob}
+                  >
+                    <Form.Item
+                      label="请求内容"
+                      name="requestText"
+                      rules={[{ required: true, message: '请输入调试请求内容' }]}
+                    >
+                      <TextArea
+                        rows={6}
+                        placeholder={
+                          current.debugConfig?.requestPlaceholder
+                          || '请输入要交给该 skill 处理的内容或目标。'
+                        }
+                      />
+                    </Form.Item>
+
+                    {(current.debugConfig?.supportedModels ?? []).length > 0 ? (
+                      <Form.Item label="模型" name="model">
+                        <Select
+                          options={(current.debugConfig?.supportedModels ?? []).map((model) => ({
+                            label: model,
+                            value: model,
+                          }))}
+                          placeholder="使用默认模型"
+                        />
+                      </Form.Item>
+                    ) : null}
+
+                    <Form.Item label="附件路径（可选，一行一个绝对路径）" name="attachmentsText">
+                      <TextArea
+                        rows={4}
+                        placeholder={
+                          current.skillCode === 'ext.super_ppt'
+                            ? '例如：\n/Users/weeks/Desktop/workspaces-yzj/yzj-ai-crm/tmp/绍兴贝斯美化工企业研究报告.md'
+                            : '例如：\n/abs/path/input.md\n/abs/path/context.txt'
+                        }
+                      />
+                    </Form.Item>
+
+                    <Form.Item label="工作目录（可选，绝对路径）" name="workingDirectory">
+                      <Input placeholder="/abs/path/working-directory" />
+                    </Form.Item>
+
+                    <Space>
+                      <Button type="primary" htmlType="submit" loading={skillJobLoading}>
+                        提交调试
+                      </Button>
+                      {lastSkillJobRequest ? (
+                        <Button
+                          disabled={skillJobLoading}
+                          onClick={() => {
+                            void runSkillJob(lastSkillJobRequest);
+                          }}
+                        >
+                          重试上次请求
+                        </Button>
+                      ) : null}
+                    </Space>
+                  </Form>
+
+                  {skillJobError ? (
+                    <Alert type="error" showIcon message="调试执行失败" description={skillJobError} />
+                  ) : null}
+
+                  {skillJobResult ? (
+                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                      <Alert
+                        type={
+                          skillJobResult.status === 'succeeded'
+                            ? 'success'
+                            : skillJobResult.status === 'failed'
+                              ? 'error'
+                              : 'info'
+                        }
+                        showIcon
+                        message={`Job 状态：${skillJobResult.status}`}
+                        description={`Job ID: ${skillJobResult.jobId}`}
+                      />
+
+                      <ProDescriptions<ExternalSkillJobResponse> column={1} dataSource={skillJobResult}>
+                        <ProDescriptions.Item label="技能编码">{skillJobResult.skillCode}</ProDescriptions.Item>
+                        <ProDescriptions.Item label="Runtime Skill">
+                          {skillJobResult.runtimeSkillName}
+                        </ProDescriptions.Item>
+                        <ProDescriptions.Item label="模型">
+                          {skillJobResult.model ?? '无需模型'}
+                        </ProDescriptions.Item>
+                        <ProDescriptions.Item label="创建时间">{skillJobResult.createdAt}</ProDescriptions.Item>
+                        <ProDescriptions.Item label="更新时间">{skillJobResult.updatedAt}</ProDescriptions.Item>
+                      </ProDescriptions>
+
+                      <div>
+                        <Typography.Title level={5}>最终文本</Typography.Title>
+                        {skillJobResult.finalText ? (
+                          <div
+                            style={{
+                              whiteSpace: 'pre-wrap',
+                              background: '#fafafa',
+                              border: '1px solid #f0f0f0',
+                              borderRadius: 8,
+                              padding: 12,
+                            }}
+                          >
+                            {skillJobResult.finalText}
+                          </div>
+                        ) : (
+                          <Empty description="当前尚未产出 finalText。" />
+                        )}
+                      </div>
+
+                      <div>
+                        <Typography.Title level={5}>产物</Typography.Title>
+                        {skillJobResult.artifacts.length > 0 ? (
+                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            {presentationReadyEvent?.pptId ? (
+                              <Alert
+                                type="success"
+                                showIcon
+                                message={`PPT 已就绪：${presentationReadyEvent.subject || presentationReadyEvent.pptId}`}
+                                description={
+                                  <Space wrap>
+                                    <Typography.Text type="secondary">
+                                      pptId: {presentationReadyEvent.pptId}
+                                    </Typography.Text>
+                                    <Button
+                                      type="primary"
+                                      onClick={() => {
+                                        window.open(
+                                          `/super-ppt-editor.html?jobId=${encodeURIComponent(skillJobResult.jobId)}`,
+                                          '_blank',
+                                          'noopener,noreferrer',
+                                        );
+                                      }}
+                                    >
+                                      独立打开编辑器
+                                    </Button>
+                                  </Space>
+                                }
+                              />
+                            ) : null}
+                            {skillJobResult.artifacts.map((artifact) => (
+                              <Space key={artifact.artifactId} wrap>
+                                <Typography.Text>{artifact.fileName}</Typography.Text>
+                                <Tag>{artifact.mimeType}</Tag>
+                                <Typography.Text type="secondary">
+                                  {artifact.byteSize} bytes
+                                </Typography.Text>
+                                <Button type="link" href={artifact.downloadPath} target="_blank">
+                                  下载
+                                </Button>
+                              </Space>
+                            ))}
+                          </Space>
+                        ) : (
+                          <Empty description="当前没有产物。" />
+                        )}
+                      </div>
+
+                      <Divider style={{ margin: '8px 0' }} />
+
+                      <div>
+                        <Typography.Title level={5}>事件时间线</Typography.Title>
+                        {skillJobResult.events.length > 0 ? (
+                          <Timeline
+                            items={skillJobResult.events.map((event) => ({
+                              color:
+                                event.type === 'error'
+                                  ? 'red'
+                                  : event.type === 'artifact' || event.type === 'presentation_ready'
+                                    ? 'green'
+                                    : 'blue',
+                              children: (
+                                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                                  <Typography.Text>{event.message}</Typography.Text>
+                                  <Typography.Text type="secondary">
+                                    {event.createdAt} · {event.type}
+                                  </Typography.Text>
+                                </Space>
+                              ),
+                            }))}
+                          />
+                        ) : (
+                          <Empty description="当前没有事件日志。" />
+                        )}
+                      </div>
+                    </Space>
+                  ) : (
+                    <Empty description="尚未提交调试请求，执行后会在这里展示状态、事件和产物。" />
                   )}
                 </Space>
               ) : (

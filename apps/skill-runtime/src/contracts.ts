@@ -38,6 +38,11 @@ export interface AppConfig {
     apiKey: string | null;
     webSearchModel: string;
   };
+  docmee: {
+    baseUrl: string;
+    apiKey: string | null;
+    editorTokenHours: number;
+  };
   meta: {
     configSource: '.env';
     envFilePath: string;
@@ -89,9 +94,11 @@ export interface ModelDescriptor {
 export interface CreateJobRequest {
   skillName?: string;
   requestText?: string;
-  model?: SupportedDeepseekModel;
+  model?: string;
   attachments?: string[];
   workingDirectory?: string;
+  templateId?: string;
+  presentationPrompt?: string;
 }
 
 export interface JobEvent {
@@ -106,7 +113,8 @@ export interface JobEvent {
     | 'deck_planned'
     | 'deck_rendered'
     | 'qa_report'
-    | 'previews_rendered';
+    | 'previews_rendered'
+    | 'presentation_ready';
   message: string;
   data?: unknown;
   createdAt: string;
@@ -125,7 +133,7 @@ export interface JobArtifact {
 export interface JobResponse {
   jobId: string;
   skillName: string;
-  model: SupportedDeepseekModel;
+  model: string | null;
   status: JobStatus;
   finalText: string | null;
   events: JobEvent[];
@@ -138,10 +146,12 @@ export interface JobResponse {
 export interface StoredJobRecord {
   jobId: string;
   skillName: string;
-  model: SupportedDeepseekModel;
+  model: string | null;
   requestText: string;
   attachments: string[];
   workingDirectory: string | null;
+  templateId: string | null;
+  presentationPrompt: string | null;
   status: JobStatus;
   finalText: string | null;
   error: ApiErrorResponse | null;
@@ -240,4 +250,13 @@ export interface WebFetchExtractResult {
   plainText: string;
   links: Array<{ text: string; url: string }>;
   fetchedAt: string;
+}
+
+export interface PresentationSessionResponse {
+  jobId: string;
+  pptId: string;
+  token: string;
+  subject: string;
+  animation: boolean;
+  expiresAt: string;
 }

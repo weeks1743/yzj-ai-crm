@@ -123,7 +123,7 @@ flowchart TD
 - `ext.web_search`
 - `ext.web_fetch_extract`
 - `ext.audio_transcribe`
-- `ext.presentation_generate`
+- `ext.super_ppt`
 
 ### 外部技能 provider 策略
 
@@ -142,7 +142,7 @@ flowchart TD
 - `ext.company_research_pm -> mock_provider`
 - `ext.web_search -> mock_provider`
 - `ext.web_fetch_extract -> mock_provider`
-- `ext.presentation_generate -> mock_provider`
+- `ext.super_ppt -> docmee-v2`
 
 ### 为什么要这样做
 

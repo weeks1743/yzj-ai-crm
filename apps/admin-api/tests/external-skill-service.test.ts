@@ -14,20 +14,277 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
-test('ExternalSkillService lists image skill as alert when api key is missing', () => {
+test('ExternalSkillService lists image skill as alert when api key is missing', async () => {
   const service = new ExternalSkillService({
     config: createTestConfig({
       imageApiKey: null,
     }),
+    fetchImpl: (async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/skills')) {
+        return jsonResponse([]);
+      }
+      if (url.endsWith('/api/models')) {
+        return jsonResponse([
+          { name: 'deepseek-v4-flash', label: 'deepseek-v4-flash', isDefault: true },
+          { name: 'deepseek-v4-pro', label: 'deepseek-v4-pro', isDefault: false },
+        ]);
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as FetchLike,
   });
 
-  const skills = service.listSkills();
+  const skills = await service.listSkills();
   const imageSkill = skills.find((item) => item.skillCode === 'ext.image_generate');
 
   assert.ok(imageSkill);
   assert.equal(imageSkill.status, '告警中');
   assert.equal(imageSkill.implementationType, 'http_request');
   assert.equal(imageSkill.supportsInvoke, true);
+  assert.equal(imageSkill.debugMode, 'image_generate');
+});
+
+test('ExternalSkillService merges runtime skills into external skill catalog', async () => {
+  const service = new ExternalSkillService({
+    config: createTestConfig({
+      imageApiKey: 'image-api-key',
+    }),
+    fetchImpl: (async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/skills')) {
+        return jsonResponse([
+          {
+            skillName: 'company-research',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY', 'env:ARK_API_KEY'],
+            missingDependencies: [],
+            summary: 'company summary',
+          },
+          {
+            skillName: 'jobs-to-be-done',
+            status: 'blocked',
+            supportsInvoke: false,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY'],
+            missingDependencies: ['env:DEEPSEEK_API_KEY'],
+            summary: 'jtbd summary',
+          },
+          {
+            skillName: 'super-ppt',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DOCMEE_API_KEY'],
+            missingDependencies: [],
+            summary: 'super-ppt summary',
+          },
+        ]);
+      }
+      if (url.endsWith('/api/models')) {
+        return jsonResponse([
+          { name: 'deepseek-v4-flash', label: 'deepseek-v4-flash', isDefault: true },
+          { name: 'deepseek-v4-pro', label: 'deepseek-v4-pro', isDefault: false },
+        ]);
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as FetchLike,
+  });
+
+  const skills = await service.listSkills();
+  const companySkill = skills.find((item) => item.skillCode === 'ext.company_research_pm');
+  const jtbdSkill = skills.find((item) => item.skillCode === 'ext.jobs_to_be_done_pm');
+  const superPptSkill = skills.find((item) => item.skillCode === 'ext.super_ppt');
+
+  assert.ok(companySkill);
+  assert.equal(companySkill.status, '运行中');
+  assert.equal(companySkill.implementationType, 'skill');
+  assert.equal(companySkill.supportsInvoke, true);
+  assert.equal(companySkill.runtimeSkillName, 'company-research');
+  assert.equal(companySkill.debugMode, 'skill_job');
+  assert.equal(companySkill.debugConfig?.defaultModel, 'deepseek-v4-flash');
+
+  assert.ok(jtbdSkill);
+  assert.equal(jtbdSkill.status, '告警中');
+  assert.deepEqual(jtbdSkill.missingDependencies, ['env:DEEPSEEK_API_KEY']);
+  assert.match(jtbdSkill.summary, /缺少依赖/);
+
+  assert.ok(superPptSkill);
+  assert.equal(superPptSkill.status, '运行中');
+  assert.equal(superPptSkill.provider, 'docmee-v2');
+  assert.equal(superPptSkill.model, null);
+  assert.equal(superPptSkill.debugConfig?.artifactKind, 'presentation');
+  assert.deepEqual(superPptSkill.debugConfig?.supportedModels, []);
+});
+
+test('ExternalSkillService forwards runtime jobs and rewrites artifact download paths', async () => {
+  let receivedTemplateId: string | undefined;
+  const service = new ExternalSkillService({
+    config: createTestConfig(),
+    enterprisePptTemplateResolver: {
+      getActiveTemplate: () => ({
+        templateId: 'tpl-enterprise-001',
+        name: '金蝶企业模板',
+        sourceFileName: 'kingdee.pptx',
+        isActive: true,
+        createdAt: '2026-04-25T09:00:00.000Z',
+        updatedAt: '2026-04-25T09:00:00.000Z',
+      }),
+      getDefaultPrompt: () => '企业默认 super-ppt 提示词',
+    },
+    fetchImpl: (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/jobs') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body ?? '{}')) as { templateId?: string };
+        receivedTemplateId = body.templateId;
+        return jsonResponse({
+          jobId: 'job-001',
+          skillName: 'problem-statement',
+          model: 'deepseek-v4-flash',
+          status: 'queued',
+          finalText: null,
+          events: [],
+          artifacts: [],
+          error: null,
+          createdAt: '2026-04-25T10:00:00.000Z',
+          updatedAt: '2026-04-25T10:00:00.000Z',
+        }, 202);
+      }
+      if (url.endsWith('/api/jobs/job-001')) {
+        return jsonResponse({
+          jobId: 'job-001',
+          skillName: 'problem-statement',
+          model: 'deepseek-v4-flash',
+          status: 'succeeded',
+          finalText: 'done',
+          events: [
+            {
+              id: 'evt-1',
+              type: 'status',
+              message: 'Job 已完成',
+              createdAt: '2026-04-25T10:01:00.000Z',
+            },
+          ],
+          artifacts: [
+            {
+              artifactId: 'artifact-001',
+              jobId: 'job-001',
+              fileName: 'problem-statement.md',
+              mimeType: 'text/markdown',
+              byteSize: 128,
+              createdAt: '2026-04-25T10:01:00.000Z',
+              downloadPath: '/api/jobs/job-001/artifacts/artifact-001',
+            },
+          ],
+          error: null,
+          createdAt: '2026-04-25T10:00:00.000Z',
+          updatedAt: '2026-04-25T10:01:00.000Z',
+        });
+      }
+      if (url.endsWith('/api/jobs/job-001/artifacts/artifact-001')) {
+        return new Response('# problem statement', {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/markdown',
+            'Content-Disposition': 'attachment; filename="problem-statement.md"',
+          },
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as FetchLike,
+  });
+
+  const created = await service.createSkillJob('ext.problem_statement_pm', {
+    requestText: '整理问题陈述',
+  });
+  assert.equal(created.skillCode, 'ext.problem_statement_pm');
+  assert.equal(created.runtimeSkillName, 'problem-statement');
+
+  const job = await service.getSkillJob('job-001');
+  assert.equal(job.status, 'succeeded');
+  assert.equal(job.artifacts[0]?.downloadPath, '/api/external-skills/jobs/job-001/artifacts/artifact-001');
+
+  const artifact = await service.getSkillJobArtifact('job-001', 'artifact-001');
+  assert.equal(artifact.artifact.fileName, 'problem-statement.md');
+  assert.equal(artifact.content.toString('utf8'), '# problem statement');
+  assert.equal(receivedTemplateId, undefined);
+});
+
+test('ExternalSkillService injects active enterprise template for ext.super_ppt jobs', async () => {
+  let receivedTemplateId: string | undefined;
+  let receivedPresentationPrompt: string | undefined;
+  const service = new ExternalSkillService({
+    config: createTestConfig(),
+    enterprisePptTemplateResolver: {
+      getActiveTemplate: () => ({
+        templateId: 'tpl-enterprise-001',
+        name: '金蝶企业模板',
+        sourceFileName: 'kingdee.pptx',
+        isActive: true,
+        createdAt: '2026-04-25T09:00:00.000Z',
+        updatedAt: '2026-04-25T09:00:00.000Z',
+      }),
+      getDefaultPrompt: () => '你是一位拥有10年以上科技行业经验的顶级PPT设计师和解决方案专家，擅长将复杂的技术概念转化为清晰、专业、具有说服力的演示内容。请根据我提供的主题和核心内容，生成一份高质量的科技行业PPT',
+      getEffectivePrompt: () => '请基于完整材料生成专业科技行业管理层汇报PPT',
+    },
+    fetchImpl: (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/jobs') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body ?? '{}')) as {
+          templateId?: string;
+          presentationPrompt?: string;
+        };
+        receivedTemplateId = body.templateId;
+        receivedPresentationPrompt = body.presentationPrompt;
+        return jsonResponse({
+          jobId: 'job-super-ppt-001',
+          skillName: 'super-ppt',
+          model: null,
+          status: 'queued',
+          finalText: null,
+          events: [],
+          artifacts: [],
+          error: null,
+          createdAt: '2026-04-25T10:00:00.000Z',
+          updatedAt: '2026-04-25T10:00:00.000Z',
+        }, 202);
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as FetchLike,
+  });
+
+  const created = await service.createSkillJob('ext.super_ppt', {
+    requestText: '请基于附件生成研究汇报',
+    attachments: ['/tmp/input.md'],
+  });
+
+  assert.equal(created.skillCode, 'ext.super_ppt');
+  assert.equal(created.runtimeSkillName, 'super-ppt');
+  assert.equal(receivedTemplateId, 'tpl-enterprise-001');
+  assert.equal(receivedPresentationPrompt, '请基于完整材料生成专业科技行业管理层汇报PPT');
+});
+
+test('ExternalSkillService forwards presentation session creation', async () => {
+  const service = new ExternalSkillService({
+    config: createTestConfig(),
+    fetchImpl: (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/jobs/job-001/presentation-session') && init?.method === 'POST') {
+        return jsonResponse({
+          jobId: 'job-001',
+          pptId: 'ppt-001',
+          token: 'sk-session-001',
+          subject: '绍兴贝斯美化工企业研究',
+          animation: true,
+          expiresAt: '2026-04-25T12:00:00.000Z',
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as FetchLike,
+  });
+
+  const session = await service.createPresentationSession('job-001');
+  assert.equal(session.pptId, 'ppt-001');
+  assert.equal(session.token, 'sk-session-001');
 });
 
 test('ExternalSkillService rejects image generation when api key is missing', async () => {

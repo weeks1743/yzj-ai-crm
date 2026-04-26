@@ -7,6 +7,7 @@ export default defineConfig({
   npmClient: 'pnpm',
   publicPath: '/',
   esbuildMinifyIIFE: true,
+  mfsu: false,
   routes,
   alias: {
     '@': join(__dirname, '../src'),

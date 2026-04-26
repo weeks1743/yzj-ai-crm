@@ -36,6 +36,8 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.equal(config.yzj.approval.fileSecret, 'approval-file-secret');
   assert.equal(config.shadow.dictionarySource, 'manual_json');
   assert.equal(config.server.port, 3001);
+  assert.equal(config.docmee.baseUrl, 'https://open.docmee.cn');
+  assert.equal(config.docmee.apiKey, null);
   assert.match(config.storage.sqlitePath, /\.local\/admin-api\.sqlite$/);
   assert.match(config.shadow.dictionaryJsonPath, /\.local\/shadow-dictionaries\.json$/);
   assert.match(config.shadow.skillOutputDir, /skills\/shadow$/);
@@ -43,6 +45,7 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.equal(config.external.image.apiKey, null);
   assert.equal(config.external.image.model, 'gpt-image-2');
   assert.equal(config.external.image.timeoutMs, 60000);
+  assert.equal(config.external.skillRuntime.baseUrl, 'http://127.0.0.1:3012');
 });
 
 test('loadAppConfig throws when required env is missing', () => {

@@ -13,6 +13,9 @@ interface TestConfigOptions {
   imageApiKey?: string | null;
   imageModel?: string;
   imageTimeoutMs?: number;
+  skillRuntimeBaseUrl?: string;
+  docmeeBaseUrl?: string;
+  docmeeApiKey?: string | null;
 }
 
 export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
@@ -70,6 +73,10 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
     server: {
       port: 3001,
     },
+    docmee: {
+      baseUrl: options.docmeeBaseUrl ?? 'https://open.docmee.cn',
+      apiKey: options.docmeeApiKey ?? 'test-docmee-key',
+    },
     storage: {
       sqlitePath: ':memory:',
     },
@@ -79,6 +86,9 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
         apiKey: options.imageApiKey ?? null,
         model: options.imageModel ?? 'gpt-image-2',
         timeoutMs: options.imageTimeoutMs ?? 60000,
+      },
+      skillRuntime: {
+        baseUrl: options.skillRuntimeBaseUrl ?? 'http://127.0.0.1:3012',
       },
     },
     meta: {

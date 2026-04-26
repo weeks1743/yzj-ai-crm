@@ -7,17 +7,18 @@ import type {
   JobResponse,
   JobStatus,
   StoredJobRecord,
-  SupportedDeepseekModel,
 } from './contracts.js';
 import { NotFoundError } from './errors.js';
 
 interface JobRow {
   job_id: string;
   skill_name: string;
-  model: SupportedDeepseekModel;
+  model: string;
   request_text: string;
   attachments_json: string;
   working_directory: string | null;
+  template_id: string | null;
+  presentation_prompt: string | null;
   status: JobStatus;
   final_text: string | null;
   error_json: string | null;
@@ -50,10 +51,12 @@ function mapJob(row: JobRow): StoredJobRecord {
   return {
     jobId: row.job_id,
     skillName: row.skill_name,
-    model: row.model,
+    model: row.model.trim() ? row.model : null,
     requestText: row.request_text,
     attachments: JSON.parse(row.attachments_json) as string[],
     workingDirectory: row.working_directory,
+    templateId: row.template_id,
+    presentationPrompt: row.presentation_prompt,
     status: row.status,
     finalText: row.final_text,
     error: row.error_json ? (JSON.parse(row.error_json) as ApiErrorResponse) : null,
@@ -92,10 +95,12 @@ export class JobRepository {
 
   createJob(input: {
     skillName: string;
-    model: SupportedDeepseekModel;
+    model: string | null;
     requestText: string;
     attachments: string[];
     workingDirectory: string | null;
+    templateId: string | null;
+    presentationPrompt: string | null;
   }): StoredJobRecord {
     const now = new Date().toISOString();
     const jobId = randomUUID();
@@ -109,19 +114,23 @@ export class JobRepository {
             request_text,
             attachments_json,
             working_directory,
+            template_id,
+            presentation_prompt,
             status,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
         `,
       )
       .run(
         jobId,
         input.skillName,
-        input.model,
+        input.model ?? '',
         input.requestText,
         JSON.stringify(input.attachments),
         input.workingDirectory,
+        input.templateId,
+        input.presentationPrompt,
         now,
         now,
       );

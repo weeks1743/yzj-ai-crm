@@ -4,6 +4,17 @@ import { loadAppConfig } from './config.js';
 import { openDatabase } from './database.js';
 import { DeepSeekChatCompletionClient } from './deepseek-client.js';
 import { probeDependencies } from './dependency-probe.js';
+import {
+  DocmeeClient,
+  type DocmeeAiLayoutResponse,
+  type DocmeeApiTokenResponse,
+  type DocmeeContentResponse,
+  type DocmeeConvertResultResponse,
+  type DocmeeCreateTaskResponse,
+  type DocmeeLatestDataResponse,
+  type DocmeeOptionsResponse,
+  type DocmeePresentationInfo,
+} from './docmee-client.js';
 import { JobRepository } from './job-repository.js';
 import { loadSkillsFromDirectories } from './skill-loader.js';
 import { SkillCatalogService } from './skill-catalog-service.js';
@@ -30,6 +41,59 @@ class DisabledWebSearchClient implements WebSearchClient {
   }
 }
 
+class DisabledDocmeeClient extends DocmeeClient {
+  constructor() {
+    super({
+      baseUrl: 'https://open.docmee.cn',
+      apiKey: 'disabled',
+    });
+  }
+
+  override options(_token?: string): Promise<DocmeeOptionsResponse> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法执行 super-ppt');
+  }
+
+  override createTask(): Promise<DocmeeCreateTaskResponse> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法执行 super-ppt');
+  }
+
+  override generateContent(): Promise<DocmeeContentResponse> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法执行 super-ppt');
+  }
+
+  override updateContent(): Promise<DocmeeContentResponse> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法执行 super-ppt');
+  }
+
+  override generatePptxByAi(): Promise<DocmeeAiLayoutResponse> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法执行 super-ppt');
+  }
+
+  override generatePptx(): Promise<DocmeePresentationInfo> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法执行 super-ppt');
+  }
+
+  override latestData(): Promise<DocmeeLatestDataResponse> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法执行 super-ppt');
+  }
+
+  override getConvertResult(): Promise<DocmeeConvertResultResponse> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法执行 super-ppt');
+  }
+
+  override createApiToken(): Promise<DocmeeApiTokenResponse> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法创建 super-ppt 编辑会话');
+  }
+
+  override downloadPptx(): Promise<DocmeePresentationInfo> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法下载 super-ppt');
+  }
+
+  override downloadPptxBinary(): Promise<{ file: Buffer; metadata: DocmeePresentationInfo }> {
+    throw new ConfigError('DOCMEE_API_KEY 未配置，无法下载 super-ppt');
+  }
+}
+
 const config = loadAppConfig();
 const database = openDatabase(config.storage.sqlitePath);
 const repository = new JobRepository(database);
@@ -53,12 +117,20 @@ const webSearchClient: WebSearchClient = config.ark.apiKey
     })
   : new DisabledWebSearchClient();
 
+const docmeeClient: DocmeeClient = config.docmee.apiKey
+  ? new DocmeeClient({
+      baseUrl: config.docmee.baseUrl,
+      apiKey: config.docmee.apiKey,
+    })
+  : new DisabledDocmeeClient();
+
 const executor = new SkillExecutor({
   config,
   repository,
   artifactStore,
   chatClient,
   webSearchClient,
+  docmeeClient,
 });
 
 const service = new SkillRuntimeService({
@@ -67,6 +139,7 @@ const service = new SkillRuntimeService({
   repository,
   artifactStore,
   executor,
+  docmeeClient,
 });
 
 const server = createSkillRuntimeServer({

@@ -371,6 +371,31 @@ function createReadSkillFileTool(): RuntimeTool {
   };
 }
 
+function createWriteTextArtifactTool(): RuntimeTool {
+  return {
+    name: 'write_text_artifact',
+    description: 'Persist the final markdown report as a downloadable artifact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileName: { type: 'string' },
+        content: { type: 'string' },
+        mimeType: { type: 'string' },
+      },
+      required: ['fileName', 'content'],
+      additionalProperties: false,
+    },
+    async execute(rawArgs, context) {
+      const args = expectObject(rawArgs);
+      const fileName = expectString(args, 'fileName');
+      const content = expectString(args, 'content');
+      const mimeType = optionalString(args, 'mimeType') || 'text/markdown';
+      const artifact = context.publishTextArtifact(fileName, content, mimeType);
+      return artifact;
+    },
+  };
+}
+
 function createReadSourceFileTool(): RuntimeTool {
   return {
     name: 'read_source_file',
@@ -955,28 +980,15 @@ export function createCompanyResearchTools(): RuntimeTool[] {
         return fetchAndExtract(url, context.fetchImpl);
       },
     },
-    {
-      name: 'write_text_artifact',
-      description: 'Persist the final markdown report as a downloadable artifact.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          fileName: { type: 'string' },
-          content: { type: 'string' },
-          mimeType: { type: 'string' },
-        },
-        required: ['fileName', 'content'],
-        additionalProperties: false,
-      },
-      async execute(rawArgs, context) {
-        const args = expectObject(rawArgs);
-        const fileName = expectString(args, 'fileName');
-        const content = expectString(args, 'content');
-        const mimeType = optionalString(args, 'mimeType') || 'text/markdown';
-        const artifact = context.publishTextArtifact(fileName, content, mimeType);
-        return artifact;
-      },
-    },
+    createWriteTextArtifactTool(),
+  ];
+}
+
+export function createGenericTextTools(): RuntimeTool[] {
+  return [
+    createReadSkillFileTool(),
+    createReadSourceFileTool(),
+    createWriteTextArtifactTool(),
   ];
 }
 

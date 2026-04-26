@@ -309,8 +309,33 @@ export type ExternalSkillImplementationType =
   | 'mcp'
   | 'skill'
   | 'placeholder';
+export type ExternalSkillDebugMode = 'none' | 'image_generate' | 'skill_job';
+export type ExternalSkillDebugArtifactKind = 'image' | 'markdown' | 'presentation';
+export type SkillRuntimeModelName = 'deepseek-v4-pro' | 'deepseek-v4-flash';
 export type ImageGenerationSize = 'auto' | '1024x1024' | '1536x1024' | '1024x1536';
 export type ImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high';
+export type ExternalSkillJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+export type ExternalSkillJobEventType =
+  | 'status'
+  | 'message'
+  | 'tool_call'
+  | 'tool_result'
+  | 'artifact'
+  | 'error'
+  | 'deck_planned'
+  | 'deck_rendered'
+  | 'qa_report'
+  | 'previews_rendered'
+  | 'presentation_ready';
+
+export interface ExternalSkillDebugConfig {
+  defaultModel?: SkillRuntimeModelName | null;
+  supportedModels?: SkillRuntimeModelName[];
+  supportsAttachments?: boolean;
+  supportsWorkingDirectory?: boolean;
+  requestPlaceholder?: string;
+  artifactKind?: ExternalSkillDebugArtifactKind;
+}
 
 export interface ExternalSkillCatalogItem {
   id: string;
@@ -323,8 +348,12 @@ export interface ExternalSkillCatalogItem {
   status: ExternalSkillStatus;
   implementationType: ExternalSkillImplementationType;
   supportsInvoke: boolean;
+  runtimeSkillName?: string;
+  debugMode: ExternalSkillDebugMode;
+  debugConfig?: ExternalSkillDebugConfig;
   provider?: string | null;
   model?: string | null;
+  missingDependencies?: string[];
   owner: string;
   sla: string;
   summary: string;
@@ -346,6 +375,86 @@ export interface ImageGenerationResponse {
   mimeType: string;
   latencyMs: number;
   generatedAt: string;
+}
+
+export interface ExternalSkillJobRequest {
+  requestText: string;
+  model?: SkillRuntimeModelName;
+  attachments?: string[];
+  workingDirectory?: string;
+  presentationPrompt?: string;
+}
+
+export interface ExternalSkillJobArtifact {
+  artifactId: string;
+  jobId: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: string;
+  downloadPath: string;
+}
+
+export interface ExternalSkillJobEvent {
+  id: string;
+  type: ExternalSkillJobEventType;
+  message: string;
+  data?: unknown;
+  createdAt: string;
+}
+
+export interface ExternalSkillJobResponse {
+  jobId: string;
+  skillCode: string;
+  runtimeSkillName: string;
+  model: string | null;
+  status: ExternalSkillJobStatus;
+  finalText: string | null;
+  events: ExternalSkillJobEvent[];
+  artifacts: ExternalSkillJobArtifact[];
+  error: ApiErrorResponse | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExternalSkillPresentationSessionResponse {
+  jobId: string;
+  pptId: string;
+  token: string;
+  subject: string;
+  animation: boolean;
+  expiresAt: string;
+}
+
+export interface EnterprisePptTemplateItem {
+  templateId: string;
+  name: string;
+  sourceFileName: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EnterprisePptTemplateListResponse {
+  items: EnterprisePptTemplateItem[];
+  activeTemplate: EnterprisePptTemplateItem | null;
+  defaultPrompt: string;
+  effectivePrompt: string;
+  promptMaxLength: number;
+  isFallbackApplied: boolean;
+  fallbackReason: string | null;
+}
+
+export interface EnterprisePptTemplateUploadResponse {
+  item: EnterprisePptTemplateItem;
+}
+
+export interface EnterprisePptTemplatePromptResponse {
+  defaultPrompt: string;
+  effectivePrompt: string;
+  promptMaxLength: number;
+  isFallbackApplied: boolean;
+  fallbackReason: string | null;
 }
 
 export type SceneAssemblyKey = 'scene.audio_import' | 'scene.visit_prepare';
