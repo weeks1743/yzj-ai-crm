@@ -10,9 +10,13 @@ import {
 
 export const sceneOrder = [
   assistantScenes.chat,
-  assistantScenes['audio-import'],
-  assistantScenes['company-research'],
-  assistantScenes['visit-prepare'],
+  assistantScenes['post-visit-loop'],
+  assistantScenes['customer-analysis'],
+  assistantScenes['conversation-understanding'],
+  assistantScenes['needs-todo-analysis'],
+  assistantScenes['problem-statement'],
+  assistantScenes['value-positioning'],
+  assistantScenes['solution-expert-enablement'],
   assistantScenes.tasks,
 ];
 
@@ -21,11 +25,12 @@ export function getSceneByPath(pathname: string) {
 }
 
 export function buildPromptGroups(scene = assistantScenes.chat) {
+  const isHome = scene.key === 'chat';
   return {
     hotTopics: [
       {
         key: `${scene.key}-hot`,
-        label: '热门话题',
+        label: isHome ? '快速闭环入口' : '常见问题',
         children: scene.hotTopics.map((item, index) => ({
           key: item.key,
           description: item.title,
@@ -45,7 +50,7 @@ export function buildPromptGroups(scene = assistantScenes.chat) {
     guides: [
       {
         key: `${scene.key}-guide`,
-        label: '场景指南',
+        label: isHome ? '工作台原则' : '场景指南',
         children: scene.guides.map((item) => ({
           key: item.key,
           label: item.title,

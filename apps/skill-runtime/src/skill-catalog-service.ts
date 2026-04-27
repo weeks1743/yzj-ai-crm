@@ -8,58 +8,32 @@ import { getDependencyDetail } from './dependency-probe.js';
 
 const EXECUTABLE_SKILLS = new Set([
   'company-research',
-  'customer-journey-map',
-  'jobs-to-be-done',
+  'visit-conversation-understanding',
+  'customer-needs-todo-analysis',
   'problem-statement',
-  'saas-revenue-growth-metrics',
+  'customer-value-positioning',
   'super-ppt',
-  'pptx',
 ]);
-const EXPLICIT_UNSUPPORTED_SKILLS = new Set(['docx', 'xlsx', 'pdf']);
 
 const SKILL_DEPENDENCIES: Record<string, string[]> = {
   'company-research': [
     'env:DEEPSEEK_API_KEY',
     'env:ARK_API_KEY',
   ],
-  'customer-journey-map': [
+  'visit-conversation-understanding': [
     'env:DEEPSEEK_API_KEY',
   ],
-  'jobs-to-be-done': [
+  'customer-needs-todo-analysis': [
     'env:DEEPSEEK_API_KEY',
   ],
   'problem-statement': [
     'env:DEEPSEEK_API_KEY',
   ],
-  'saas-revenue-growth-metrics': [
+  'customer-value-positioning': [
     'env:DEEPSEEK_API_KEY',
   ],
   'super-ppt': [
     'env:DOCMEE_API_KEY',
-  ],
-  pptx: [
-    'env:DEEPSEEK_API_KEY',
-    'command:python3',
-    'command:markitdown',
-    'command:soffice',
-    'command:pdftoppm',
-    'python_module:markitdown',
-    'python_module:PIL',
-    'python_module:pptx',
-    'python_module:defusedxml',
-  ],
-  docx: [
-    'command:python3',
-    'command:soffice',
-    'command:pdftoppm',
-  ],
-  xlsx: [
-    'command:python3',
-    'command:soffice',
-    'python_module:openpyxl',
-  ],
-  pdf: [
-    'command:python3',
   ],
 };
 
@@ -73,33 +47,12 @@ function resolveAllowedTools(skill: LoadedSkill): string[] {
   }
 
   if (
-    skill.skillName === 'customer-journey-map'
-    || skill.skillName === 'jobs-to-be-done'
+    skill.skillName === 'visit-conversation-understanding'
+    || skill.skillName === 'customer-needs-todo-analysis'
     || skill.skillName === 'problem-statement'
-    || skill.skillName === 'saas-revenue-growth-metrics'
+    || skill.skillName === 'customer-value-positioning'
   ) {
     return ['read_skill_file', 'read_source_file', 'write_text_artifact'];
-  }
-
-  if (skill.skillName === 'pptx') {
-    return [
-      'read_source_file',
-      'pptx_plan_deck',
-      'pptx_render_deck',
-      'pptx_quality_check',
-      'pptx_render_previews',
-      'pptx_extract_text',
-      'pptx_thumbnail',
-      'office_unpack',
-      'office_pack',
-      'pptx_clean',
-      'pptx_add_slide',
-      'office_convert_pdf',
-      'pdf_to_image',
-      'read_workspace_file',
-      'write_workspace_file',
-      'read_skill_file',
-    ];
   }
 
   if (skill.skillName === 'super-ppt') {
@@ -134,7 +87,7 @@ function resolveStatus(
     };
   }
 
-  if (EXPLICIT_UNSUPPORTED_SKILLS.has(skillName) || !EXECUTABLE_SKILLS.has(skillName)) {
+  if (!EXECUTABLE_SKILLS.has(skillName)) {
     return {
       status: 'unsupported_yet',
       requiredDependencies,

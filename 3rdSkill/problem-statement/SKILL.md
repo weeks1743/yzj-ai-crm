@@ -64,7 +64,7 @@ Use `template.md` for the full fill-in structure.
 ### Step 1: Gather User Context
 Before drafting, ensure you have:
 - **User interviews or research:** Direct quotes, observed behaviors, pain points
-- **Jobs-to-be-Done insights:** What users are "hiring" your product to do (reference `skills/jobs-to-be-done/SKILL.md`)
+- **Outcome insights:** What users are trying to achieve, what blocks them, and why it matters
 - **Persona clarity:** Who specifically experiences this problem (reference `skills/proto-persona/SKILL.md`)
 - **Constraints data:** Geographic, tech, time, demographic limitations
 
@@ -222,7 +222,6 @@ Mini example excerpt:
 ## References
 
 ### Related Skills
-- `skills/jobs-to-be-done/SKILL.md` — Informs the "Trying to" and "But" sections
 - `skills/proto-persona/SKILL.md` — Defines the "I am" persona
 - `skills/positioning-statement/SKILL.md` — Problem statement informs positioning
 - `skills/user-story/SKILL.md` — Problem statement guides story prioritization
@@ -243,4 +242,4 @@ Mini example excerpt:
 **Skill type:** Component
 **Suggested filename:** `problem-statement.md`
 **Suggested placement:** `/skills/components/`
-**Dependencies:** References `skills/jobs-to-be-done/SKILL.md`, `skills/proto-persona/SKILL.md`
+**Dependencies:** References `skills/proto-persona/SKILL.md`

@@ -6,9 +6,45 @@
 
 - `AI销售助手` 的对话层应该如何组织
 - Main Agent、Tool Registry、Meta Tools、确定性守卫分别负责什么
-- 核心场景能力与公司分析外部技能如何在对话层被调起
-- 外部技能如公司分析、联网搜索、转写、PPT 生成如何纳入编排
+- 复合场景与分析场景如何在对话层被调起
+- slash 命令如何作为统一入口语法出现
 - 如何避免上层 Agent 被底层数据库选型绑死
+
+## 0.4.3 对话入口补充
+
+自 `0.4.3` 起，用户 AI 端的工作台改成“双入口”：
+
+### 1. 快速闭环入口
+
+- `/拜访后闭环 星海精工股份拜访.mp3`
+
+用于承接：
+
+- mp3 录音
+- 拜访纪要
+- 已发生的拜访结果
+
+它命中的是复合场景：
+
+- `scene.post_visit_loop`
+
+### 2. 分步分析入口
+
+用于逐步访问 5 个分析场景：
+
+- `/客户分析`
+- `/拜访会话理解`
+- `/客户需求工作待办分析`
+- `/问题陈述`
+- `/客户价值定位`
+
+这里的 slash 命令只是：
+
+- 对话层的统一入口语法
+
+而不是：
+
+- 新的技能类型
 
 ## 对话层目标
 
@@ -16,9 +52,8 @@
 
 - 录入客户、联系人、商机、跟进记录
 - 查询客户、商机与历史跟进
-- 导入录音并创建商机跟进记录
-- 分析目标公司
-- 准备拜访材料
+- 通过拜访后闭环收口一段 mp3 或纪要
+- 分步完成客户分析、会话理解、需求待办、问题陈述和价值定位
 
 因此，对话层不应只是问答接口，而是系统的主入口。
 
@@ -101,14 +136,20 @@ flowchart TD
 
 例如：
 
-- `scene.audio_import`
-- `scene.visit_prepare`
+- `scene.post_visit_loop`
+- `scene.customer_analysis`
+- `scene.conversation_understanding`
+- `scene.needs_todo_analysis`
+- `scene.problem_statement`
+- `scene.value_positioning`
+- `scene.solution_expert_enablement`
 
 其中：
 
-- `scene.audio_import` 是单一场景技能
-- 首次拜访、已有客户首次拜访、多次拜访不是三个技能
-- 它们只是 `scene.audio_import` 在不同上下文成熟度下的内部处理分支
+- `scene.post_visit_loop` 是复合场景
+- `scene.solution_expert_enablement` 是方案推进阶段的复合场景
+- 中间 5 个是分析场景
+- 这些分析场景既能被 slash 单独访问，也能被复合场景自动组装
 
 当前不纳入：
 

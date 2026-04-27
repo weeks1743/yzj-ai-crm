@@ -392,7 +392,7 @@ You'll know these interviews are successful if:
 ### Related Skills
 - `problem-statement.md` — Use interview insights to frame problem statement
 - `proto-persona.md` — Define interview target segment
-- `jobs-to-be-done.md` — JTBD methodology for interviews
+- `customer-needs-todo-analysis.md` — Helps continue from raw interview notes into concrete action items
 
 ### External Frameworks
 - Rob Fitzpatrick, *The Mom Test* (2013) — How to ask good questions without biasing answers
@@ -407,4 +407,4 @@ You'll know these interviews are successful if:
 **Skill type:** Interactive
 **Suggested filename:** `discovery-interview-prep.md`
 **Suggested placement:** `/skills/interactive/`
-**Dependencies:** Uses `problem-statement.md`, `proto-persona.md`, `jobs-to-be-done.md`
+**Dependencies:** Uses `problem-statement.md`, `proto-persona.md`

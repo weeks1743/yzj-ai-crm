@@ -505,9 +505,17 @@ export interface EnterprisePptTemplatePromptResponse {
   fallbackReason: string | null;
 }
 
-export type SceneAssemblyKey = 'scene.audio_import' | 'scene.visit_prepare';
+export type SceneAssemblyKey =
+  | 'scene.post_visit_loop'
+  | 'scene.customer_analysis'
+  | 'scene.conversation_understanding'
+  | 'scene.needs_todo_analysis'
+  | 'scene.problem_statement'
+  | 'scene.value_positioning'
+  | 'scene.solution_expert_enablement';
 export type SceneAssemblyStatus = '待组装' | '依赖缺口' | '能力风险';
 export type SceneAssemblyDependencyStatus = 'available' | 'gap' | 'risk';
+export type SceneAssemblyCategory = '复合场景' | '分析场景';
 
 export interface SceneRecordSkillDependency {
   skillName: string;
@@ -523,9 +531,15 @@ export interface SceneExternalDependency {
 export interface SceneAssemblyDraft {
   key: SceneAssemblyKey;
   label: string;
+  category: SceneAssemblyCategory;
+  salesStage: string;
   businessGoal: string;
   entityAnchor: string;
   summary: string;
+  triggerEntries: string[];
+  upstreamAssets: string[];
+  outputs: string[];
+  orchestrationChain: string[];
   recordSkillDependencies: SceneRecordSkillDependency[];
   externalSkillDependencies: SceneExternalDependency[];
   boundaries: {
@@ -552,9 +566,15 @@ export interface SceneAssemblyDependency {
 export interface SceneAssemblyResolvedView {
   key: SceneAssemblyKey;
   label: string;
+  category: SceneAssemblyCategory;
+  salesStage: string;
   businessGoal: string;
   entityAnchor: string;
   summary: string;
+  triggerEntries: string[];
+  upstreamAssets: string[];
+  outputs: string[];
+  orchestrationChain: string[];
   status: SceneAssemblyStatus;
   recordSkillDependencies: SceneAssemblyDependency[];
   externalSkillDependencies: SceneAssemblyDependency[];
@@ -777,7 +797,16 @@ export interface AssistantTaskCard {
 }
 
 export interface AssistantScene {
-  key: 'chat' | 'audio-import' | 'company-research' | 'visit-prepare' | 'tasks';
+  key:
+    | 'chat'
+    | 'post-visit-loop'
+    | 'customer-analysis'
+    | 'conversation-understanding'
+    | 'needs-todo-analysis'
+    | 'problem-statement'
+    | 'value-positioning'
+    | 'solution-expert-enablement'
+    | 'tasks';
   route: string;
   title: string;
   subtitle: string;

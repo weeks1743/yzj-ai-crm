@@ -1256,8 +1256,7 @@ test('GET /api/skills reports blocked and unsupported_yet skills', async () => {
       artifactDir: join(tempRoot, 'artifacts'),
     }),
     dependencySnapshot: createDependencySnapshot({
-      'command:markitdown': false,
-      'python_module:openpyxl': false,
+      'env:DOCMEE_API_KEY': false,
     }),
     chatClient: new QueueChatClient([]),
     webSearchClient: new StubWebSearchClient({}),
@@ -1267,8 +1266,8 @@ test('GET /api/skills reports blocked and unsupported_yet skills', async () => {
     const response = await fetch(`${harness.baseUrl}/api/skills`);
     assert.equal(response.status, 200);
     const skills = await response.json();
-    assert.equal(skills.find((item: any) => item.skillName === 'pptx')?.status, 'blocked');
-    assert.equal(skills.find((item: any) => item.skillName === 'docx')?.status, 'unsupported_yet');
+    assert.equal(skills.find((item: any) => item.skillName === 'super-ppt')?.status, 'blocked');
+    assert.equal(skills.find((item: any) => item.skillName === 'discovery-interview-prep')?.status, 'unsupported_yet');
   } finally {
     await harness.close();
   }

@@ -62,12 +62,12 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
             summary: 'company summary',
           },
           {
-            skillName: 'jobs-to-be-done',
+            skillName: 'customer-needs-todo-analysis',
             status: 'blocked',
             supportsInvoke: false,
             requiredDependencies: ['env:DEEPSEEK_API_KEY'],
             missingDependencies: ['env:DEEPSEEK_API_KEY'],
-            summary: 'jtbd summary',
+            summary: 'needs todo summary',
           },
           {
             skillName: 'super-ppt',
@@ -91,7 +91,7 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
 
   const skills = await service.listSkills();
   const companySkill = skills.find((item) => item.skillCode === 'ext.company_research_pm');
-  const jtbdSkill = skills.find((item) => item.skillCode === 'ext.jobs_to_be_done_pm');
+  const needsTodoSkill = skills.find((item) => item.skillCode === 'ext.customer_needs_todo_analysis');
   const superPptSkill = skills.find((item) => item.skillCode === 'ext.super_ppt');
 
   assert.ok(companySkill);
@@ -102,10 +102,10 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
   assert.equal(companySkill.debugMode, 'skill_job');
   assert.equal(companySkill.debugConfig?.defaultModel, 'deepseek-v4-flash');
 
-  assert.ok(jtbdSkill);
-  assert.equal(jtbdSkill.status, '告警中');
-  assert.deepEqual(jtbdSkill.missingDependencies, ['env:DEEPSEEK_API_KEY']);
-  assert.match(jtbdSkill.summary, /缺少依赖/);
+  assert.ok(needsTodoSkill);
+  assert.equal(needsTodoSkill.status, '告警中');
+  assert.deepEqual(needsTodoSkill.missingDependencies, ['env:DEEPSEEK_API_KEY']);
+  assert.match(needsTodoSkill.summary, /缺少依赖/);
 
   assert.ok(superPptSkill);
   assert.equal(superPptSkill.status, '运行中');

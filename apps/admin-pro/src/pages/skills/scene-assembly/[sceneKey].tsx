@@ -2,18 +2,37 @@ import {
   PageContainer,
   ProCard,
   ProTable,
-  StatisticCard,
 } from '@ant-design/pro-components';
-import { useParams } from '@umijs/max';
-import { Alert, Button, List, Result, Space, Tag } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { history, useParams } from '@umijs/max';
+import {
+  Alert,
+  Button,
+  Descriptions,
+  Empty,
+  Result,
+  Space,
+  Steps,
+  Tag,
+  Tabs,
+  Typography,
+} from 'antd';
+import { useEffect, useState } from 'react';
 import type { ProColumns } from '@ant-design/pro-components';
-import type { SceneAssemblyDependency, SceneAssemblyKey, SceneAssemblyResolvedView } from '@shared';
+import type {
+  SceneAssemblyDependency,
+  SceneAssemblyKey,
+  SceneAssemblyResolvedView,
+} from '@shared';
 import { sceneAssemblyDrafts } from '@shared';
 import {
   fetchResolvedSceneAssemblyViews,
+  getSalesStageColor,
   getSceneAssemblyStatusColor,
+  salesStageMeta,
+  salesStageOrder,
 } from '../shared';
+
+const { Paragraph, Text } = Typography;
 
 function isSceneAssemblyKey(value: string | undefined): value is SceneAssemblyKey {
   if (!value) {
@@ -23,15 +42,81 @@ function isSceneAssemblyKey(value: string | undefined): value is SceneAssemblyKe
   return sceneAssemblyDrafts.some((item) => item.key === value);
 }
 
+function formatSceneStatus(status: SceneAssemblyResolvedView['status']) {
+  if (status === '待组装') {
+    return '已可用';
+  }
+
+  return status;
+}
+
+function formatDependencyStatus(status: SceneAssemblyDependency['status']) {
+  switch (status) {
+    case 'available':
+      return '已接入';
+    case 'gap':
+      return '缺失';
+    case 'risk':
+      return '风险';
+  }
+}
+
+function getDependencyStatusColor(status: SceneAssemblyDependency['status']) {
+  switch (status) {
+    case 'available':
+      return 'success';
+    case 'gap':
+      return 'error';
+    case 'risk':
+      return 'warning';
+  }
+}
+
+function renderTagGroup(items: string[], color?: string) {
+  return (
+    <Space wrap size={[6, 8]}>
+      {items.map((item) => (
+        <Tag key={item} color={color}>
+          {item}
+        </Tag>
+      ))}
+    </Space>
+  );
+}
+
+function renderBulletList(items: string[]) {
+  return (
+    <ul style={{ margin: 0, paddingLeft: 18 }}>
+      {items.map((item) => (
+        <li key={item} style={{ marginBottom: 6 }}>
+          <Text type="secondary">{item}</Text>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 const recordDependencyColumns: ProColumns<SceneAssemblyDependency>[] = [
-  { title: '技能编码', dataIndex: 'code', width: 220 },
-  { title: '对象能力', dataIndex: 'label', width: 180 },
+  {
+    title: '对象能力',
+    dataIndex: 'label',
+    width: 200,
+    ellipsis: true,
+  },
+  {
+    title: '技能编码',
+    dataIndex: 'code',
+    width: 220,
+    ellipsis: true,
+  },
   {
     title: '状态',
     dataIndex: 'status',
     width: 100,
     render: (_, record) => (
-      <Tag color={record.status === 'available' ? 'success' : 'error'}>{record.status}</Tag>
+      <Tag color={getDependencyStatusColor(record.status)}>
+        {formatDependencyStatus(record.status)}
+      </Tag>
     ),
   },
   {
@@ -42,18 +127,34 @@ const recordDependencyColumns: ProColumns<SceneAssemblyDependency>[] = [
 ];
 
 const externalDependencyColumns: ProColumns<SceneAssemblyDependency>[] = [
-  { title: '技能编码', dataIndex: 'code', width: 220 },
-  { title: '外部能力', dataIndex: 'label', width: 180 },
+  {
+    title: '外部供给',
+    dataIndex: 'label',
+    width: 220,
+    ellipsis: true,
+  },
+  {
+    title: '技能编码',
+    dataIndex: 'code',
+    width: 220,
+    ellipsis: true,
+  },
+  {
+    title: '负责人',
+    dataIndex: 'owner',
+    width: 120,
+    render: (_, record) => record.owner ?? '-',
+  },
   {
     title: '状态',
     dataIndex: 'status',
     width: 100,
     render: (_, record) => (
-      <Tag color={record.status === 'available' ? 'success' : 'warning'}>{record.status}</Tag>
+      <Tag color={getDependencyStatusColor(record.status)}>
+        {formatDependencyStatus(record.status)}
+      </Tag>
     ),
   },
-  { title: '负责人', dataIndex: 'owner', width: 120, render: (_, record) => record.owner ?? '-' },
-  { title: '路由', dataIndex: 'route', width: 220, render: (_, record) => record.route ?? '-' },
   {
     title: '说明',
     dataIndex: 'reason',
@@ -93,7 +194,7 @@ const SceneAssemblyDetailPage = () => {
           return;
         }
 
-        setErrorMessage(error instanceof Error ? error.message : '场景详情加载失败');
+        setErrorMessage(error instanceof Error ? error.message : '场景技能详情加载失败');
       } finally {
         if (alive) {
           setLoading(false);
@@ -108,180 +209,251 @@ const SceneAssemblyDetailPage = () => {
     };
   }, [sceneKey]);
 
-  const metrics = useMemo(() => {
-    if (!scene) {
-      return [];
-    }
-
-    const availableRecordCount = scene.recordSkillDependencies.filter(
-      (item) => item.status === 'available',
-    ).length;
-    const availableExternalCount = scene.externalSkillDependencies.filter(
-      (item) => item.status === 'available',
-    ).length;
-
-    return [
-      {
-        label: '对象能力依赖',
-        value: `${availableRecordCount} / ${scene.recordSkillDependencies.length}`,
-        helper: 'shadow.* 对象能力覆盖度',
-      },
-      {
-        label: '外部技能依赖',
-        value: `${availableExternalCount} / ${scene.externalSkillDependencies.length}`,
-        helper: 'ext.* 依赖覆盖度',
-      },
-      {
-        label: '主要缺口数',
-        value: `${scene.gaps.length}`,
-        helper: '需要后续补齐的依赖项',
-      },
-      {
-        label: '总体状态',
-        value: scene.status,
-        helper: '当前仅为准备态，不进入正式编排',
-      },
-    ];
-  }, [scene]);
-
   if (!sceneKey) {
-    return <Result status="404" title="场景组装详情不存在" />;
+    return <Result status="404" title="场景技能详情不存在" />;
   }
 
   if (!loading && !errorMessage && !scene) {
-    return <Result status="404" title="未找到对应场景草案" />;
+    return <Empty description="未找到对应场景技能" />;
   }
 
   return (
     <PageContainer
-      title={scene?.label ?? '场景组装详情'}
-      subTitle={scene?.businessGoal ?? '查看场景依赖矩阵、编排边界与缺口清单。'}
+      title={scene?.label ?? '场景技能详情'}
+      subTitle={scene?.businessGoal ?? '查看当前场景的真实入口、业务链路和供给关系。'}
       extra={[
+        <Button key="back" onClick={() => history.push('/skills/scene-assembly')}>
+          返回清单
+        </Button>,
         <Button key="reload" onClick={() => window.location.reload()}>
           重新加载
         </Button>,
       ]}
     >
-      <Alert
-        type={errorMessage ? 'warning' : 'info'}
-        showIcon
-        message="只读场景治理"
-        description={
-          errorMessage
-            ? `场景详情加载失败：${errorMessage}`
-            : '此页只负责表达依赖关系和编排边界，真正的 scene.* 实现与保存发布不在本轮范围内。'
-        }
-      />
+      {errorMessage ? (
+        <Alert
+          showIcon
+          type="warning"
+          message="详情加载异常"
+          description={errorMessage}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       {scene ? (
-        <>
-          <Space wrap size={16} style={{ width: '100%', marginTop: 16 }}>
-            {metrics.map((item) => (
-              <StatisticCard
-                key={item.label}
-                style={{ minWidth: 250 }}
-                statistic={{
-                  title: item.label,
-                  value: item.value,
-                  description: item.helper,
-                }}
-              />
-            ))}
-          </Space>
-
-          <ProCard style={{ marginTop: 16 }}>
-            <Space wrap size={12}>
-              <Tag color={getSceneAssemblyStatusColor(scene.status)}>{scene.status}</Tag>
-              <Tag>{scene.key}</Tag>
-              <Tag color="blue">{scene.entityAnchor}</Tag>
-            </Space>
-            <div style={{ marginTop: 12 }}>{scene.summary}</div>
+        <Space direction="vertical" size={16} style={{ width: '100%', marginTop: 16 }}>
+          <ProCard bordered loading={loading}>
+            <Descriptions
+              size="small"
+              column={{ xs: 1, md: 2, xl: 4 }}
+              items={[
+                {
+                  key: 'category',
+                  label: '场景类别',
+                  children: (
+                    <Tag color={scene.category === '复合场景' ? 'purple' : 'blue'}>
+                      {scene.category}
+                    </Tag>
+                  ),
+                },
+                {
+                  key: 'stage',
+                  label: '适用阶段',
+                  children: (
+                    <Tag color={getSalesStageColor(scene.salesStage)}>
+                      {scene.salesStage}
+                    </Tag>
+                  ),
+                },
+                {
+                  key: 'status',
+                  label: '当前状态',
+                  children: (
+                    <Tag color={getSceneAssemblyStatusColor(scene.status)}>
+                      {formatSceneStatus(scene.status)}
+                    </Tag>
+                  ),
+                },
+                {
+                  key: 'anchor',
+                  label: '业务锚点',
+                  children: scene.entityAnchor,
+                },
+                {
+                  key: 'recordCount',
+                  label: '记录系统技能',
+                  children: `${scene.recordSkillDependencies.length} 个`,
+                },
+                {
+                  key: 'externalCount',
+                  label: '外部供给',
+                  children: `${scene.externalSkillDependencies.length} 个`,
+                },
+                {
+                  key: 'upstreamCount',
+                  label: '上游资产',
+                  children: `${scene.upstreamAssets.length} 项`,
+                },
+                {
+                  key: 'outputCount',
+                  label: '标准输出',
+                  children: `${scene.outputs.length} 项`,
+                },
+              ]}
+            />
           </ProCard>
 
-          <ProCard title="依赖矩阵" style={{ marginTop: 16 }} loading={loading}>
-            <ProCard
-              title="对象能力依赖"
-              type="inner"
-              style={{ marginBottom: 16 }}
-            >
-              <ProTable<SceneAssemblyDependency>
-                rowKey="code"
-                search={false}
-                toolBarRender={false}
-                pagination={false}
-                columns={recordDependencyColumns}
-                dataSource={scene.recordSkillDependencies}
-              />
-            </ProCard>
-            <ProCard title="外部技能依赖" type="inner">
-              <ProTable<SceneAssemblyDependency>
-                rowKey="code"
-                search={false}
-                toolBarRender={false}
-                pagination={false}
-                columns={externalDependencyColumns}
-                dataSource={scene.externalSkillDependencies}
-              />
-            </ProCard>
-          </ProCard>
+          <Tabs
+            items={[
+              {
+                key: 'overview',
+                label: '场景总览',
+                children: (
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <ProCard title="场景定位" bordered>
+                      <Paragraph style={{ marginBottom: 16 }}>{scene.summary}</Paragraph>
+                      <Descriptions
+                        size="small"
+                        column={{ xs: 1, xl: 2 }}
+                        items={[
+                          {
+                            key: 'goal',
+                            label: '业务目标',
+                            children: scene.businessGoal,
+                          },
+                          {
+                            key: 'anchorDetail',
+                            label: '记录系统锚点',
+                            children: scene.entityAnchor,
+                          },
+                        ]}
+                      />
+                    </ProCard>
 
-          <ProCard title="编排边界" style={{ marginTop: 16 }} loading={loading}>
-            <ProCard gutter={[16, 16]} wrap ghost>
-              <ProCard colSpan={{ xs: 24, xl: 12 }} title="场景负责什么">
-                <List
-                  size="small"
-                  dataSource={scene.boundaries.scene}
-                  renderItem={(item) => <List.Item>{item}</List.Item>}
-                />
-              </ProCard>
-              <ProCard colSpan={{ xs: 24, xl: 12 }} title="交给 shadow.* 的步骤">
-                <List
-                  size="small"
-                  dataSource={scene.boundaries.shadow}
-                  renderItem={(item) => <List.Item>{item}</List.Item>}
-                />
-              </ProCard>
-              <ProCard colSpan={{ xs: 24, xl: 12 }} title="交给 ext.* 的步骤">
-                <List
-                  size="small"
-                  dataSource={scene.boundaries.external}
-                  renderItem={(item) => <List.Item>{item}</List.Item>}
-                />
-              </ProCard>
-              <ProCard colSpan={{ xs: 24, xl: 12 }} title="写回确认边界">
-                <List
-                  size="small"
-                  dataSource={scene.boundaries.writeback}
-                  renderItem={(item) => <List.Item>{item}</List.Item>}
-                />
-              </ProCard>
-            </ProCard>
-          </ProCard>
+                    <ProCard title="销售链路位置" bordered>
+                      <Steps
+                        size="small"
+                        direction="vertical"
+                        current={Math.max(salesStageOrder.indexOf(scene.salesStage as (typeof salesStageOrder)[number]), 0)}
+                        items={salesStageOrder.map((stageName) => ({
+                          title: stageName,
+                          description:
+                            stageName === scene.salesStage
+                              ? `${scene.label}：${salesStageMeta[stageName]?.focus ?? ''}`
+                              : undefined,
+                        }))}
+                      />
+                    </ProCard>
 
-          <ProCard title="缺口清单" style={{ marginTop: 16 }} loading={loading}>
-            {scene.gaps.length === 0 ? (
-              <Alert
-                type="success"
-                showIcon
-                message="当前依赖已齐"
-                description="依赖关系已满足，但场景仍停留在准备态，后续还需要正式编排实现。"
-              />
-            ) : (
-              <List
-                bordered
-                dataSource={[
-                  ...scene.recordSkillDependencies
-                    .filter((item) => item.status === 'gap')
-                    .map((item) => `${item.code}: ${item.reason ?? '对象能力缺失'}`),
-                  ...scene.externalSkillDependencies
-                    .filter((item) => item.status === 'risk')
-                    .map((item) => `${item.code}: ${item.reason ?? '外部技能存在风险'}`),
-                ]}
-                renderItem={(item) => <List.Item>{item}</List.Item>}
-              />
-            )}
-          </ProCard>
-        </>
+                    <ProCard title="入口、输入与产出" bordered>
+                      <Descriptions
+                        bordered
+                        size="small"
+                        column={1}
+                        items={[
+                          {
+                            key: 'triggers',
+                            label: '触发入口',
+                            children: renderTagGroup(scene.triggerEntries, 'blue'),
+                          },
+                          {
+                            key: 'upstream',
+                            label: '上游资产',
+                            children: renderTagGroup(scene.upstreamAssets),
+                          },
+                          {
+                            key: 'outputs',
+                            label: '标准输出',
+                            children: renderTagGroup(scene.outputs, 'green'),
+                          },
+                        ]}
+                      />
+                    </ProCard>
+
+                    <ProCard title="标准业务链路" bordered>
+                      <Steps
+                        size="small"
+                        direction="vertical"
+                        current={Math.max(scene.orchestrationChain.length - 1, 0)}
+                        items={scene.orchestrationChain.map((item) => ({
+                          title: item,
+                        }))}
+                      />
+                    </ProCard>
+                  </Space>
+                ),
+              },
+              {
+                key: 'dependencies',
+                label: `供给关系 (${scene.recordSkillDependencies.length + scene.externalSkillDependencies.length})`,
+                children: (
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <ProCard title={`记录系统技能 (${scene.recordSkillDependencies.length})`} bordered>
+                      <ProTable<SceneAssemblyDependency>
+                        rowKey="code"
+                        search={false}
+                        options={false}
+                        toolBarRender={false}
+                        pagination={false}
+                        columns={recordDependencyColumns}
+                        dataSource={scene.recordSkillDependencies}
+                        scroll={{ x: 920 }}
+                      />
+                    </ProCard>
+
+                    <ProCard title={`外部供给 (${scene.externalSkillDependencies.length})`} bordered>
+                      <ProTable<SceneAssemblyDependency>
+                        rowKey="code"
+                        search={false}
+                        options={false}
+                        toolBarRender={false}
+                        pagination={false}
+                        columns={externalDependencyColumns}
+                        dataSource={scene.externalSkillDependencies}
+                        scroll={{ x: 980 }}
+                      />
+                    </ProCard>
+                  </Space>
+                ),
+              },
+              {
+                key: 'boundaries',
+                label: '边界与写回',
+                children: (
+                  <ProCard title="边界说明" bordered>
+                    <Descriptions
+                      bordered
+                      size="small"
+                      column={1}
+                      items={[
+                        {
+                          key: 'sceneBoundary',
+                          label: '场景职责',
+                          children: renderBulletList(scene.boundaries.scene),
+                        },
+                        {
+                          key: 'shadowBoundary',
+                          label: '记录系统边界',
+                          children: renderBulletList(scene.boundaries.shadow),
+                        },
+                        {
+                          key: 'externalBoundary',
+                          label: '外部供给边界',
+                          children: renderBulletList(scene.boundaries.external),
+                        },
+                        {
+                          key: 'writebackBoundary',
+                          label: '写回边界',
+                          children: renderBulletList(scene.boundaries.writeback),
+                        },
+                      ]}
+                    />
+                  </ProCard>
+                ),
+              },
+            ]}
+          />
+        </Space>
       ) : null}
     </PageContainer>
   );

@@ -34,6 +34,167 @@ export const shadowOperationLabels: Record<ShadowSkillOperation, string> = {
   delete: '删除',
 };
 
+export const salesStageOrder = [
+  '拜访前准备',
+  '拜访后收口',
+  '拜访后第一步',
+  '需求澄清',
+  '方案澄清',
+  '方案推进',
+] as const;
+
+export const salesPhaseOrder = [
+  '拜访前准备',
+  '拜访后收口',
+  '拜访后分析',
+  '方案推进',
+] as const;
+
+export const salesStageMeta: Record<string, {
+  indexLabel: string;
+  focus: string;
+  helper: string;
+  color: string;
+}> = {
+  拜访前准备: {
+    indexLabel: '阶段 1',
+    focus: '先看清客户、关系人和商机背景，再决定怎么拜访。',
+    helper: '重点输出客户画像、关键关系人与拜访切入点。',
+    color: 'blue',
+  },
+  拜访后收口: {
+    indexLabel: '阶段 2',
+    focus: '围绕录音或纪要，把客户、商机、跟进记录和分析动作串成闭环。',
+    helper: '重点处理客户锚定、商机补齐和跟进记录沉淀。',
+    color: 'cyan',
+  },
+  拜访后第一步: {
+    indexLabel: '阶段 3',
+    focus: '先把会话事实、承诺事项和风险信号读清楚。',
+    helper: '重点沉淀可复用的会话理解结果。',
+    color: 'geekblue',
+  },
+  需求澄清: {
+    indexLabel: '阶段 4',
+    focus: '把会话内容拆成客户需求、客户侧待办和我方待办。',
+    helper: '重点回答谁要做什么、什么时候做。',
+    color: 'gold',
+  },
+  方案澄清: {
+    indexLabel: '阶段 5',
+    focus: '把散落问题统一成问题定义，并进一步收束成客户价值表达。',
+    helper: '重点统一背景、约束、影响范围、优先级以及价值表达口径。',
+    color: 'orange',
+  },
+  方案推进: {
+    indexLabel: '阶段 6',
+    focus: '基于客户诉求与价值定位，组织公司内部方案、案例和专家资源推进下一轮动作。',
+    helper: '重点形成候选方案、案例引用、专家协同和推进支持包。',
+    color: 'green',
+  },
+};
+
+export const salesPhaseMeta: Record<string, {
+  indexLabel: string;
+  focus: string;
+  helper: string;
+  color: string;
+  stageNames: string[];
+}> = {
+  拜访前准备: {
+    indexLabel: '阶段 1',
+    focus: '先看清客户、关系人和商机背景，再决定怎么拜访。',
+    helper: '对应客户分析等拜访前场景。',
+    color: 'blue',
+    stageNames: ['拜访前准备'],
+  },
+  拜访后收口: {
+    indexLabel: '阶段 2',
+    focus: '围绕录音或纪要，把客户、商机、跟进记录和分析动作先收进一个闭环。',
+    helper: '对应拜访后闭环这类复合场景。',
+    color: 'cyan',
+    stageNames: ['拜访后收口'],
+  },
+  拜访后分析: {
+    indexLabel: '阶段 3',
+    focus: '本质都是拜访后的分析加工：先理解会话，再拆需求，统一问题定义，并形成价值表达。',
+    helper: '合并承载拜访会话理解、需求待办分析、问题陈述、客户价值定位四个分析场景。',
+    color: 'geekblue',
+    stageNames: ['拜访后第一步', '需求澄清', '方案澄清'],
+  },
+  方案推进: {
+    indexLabel: '阶段 4',
+    focus: '围绕客户诉求和价值定位去匹配公司内部方案、案例和专家支持，推动下一轮方案动作。',
+    helper: '对应方案匹配与专家协同这类真正往前推进的复合场景。',
+    color: 'green',
+    stageNames: ['方案推进'],
+  },
+};
+
+export function getSalesPhaseByStage(stageName: string): string {
+  return Object.entries(salesPhaseMeta).find(([, meta]) => meta.stageNames.includes(stageName))?.[0] ?? stageName;
+}
+
+export function getOrderedSalesPhases(stageNames: string[]): string[] {
+  const uniquePhaseNames = Array.from(new Set(stageNames.map((stageName) => getSalesPhaseByStage(stageName))));
+  return uniquePhaseNames.sort((left, right) => {
+    const leftIndex = salesPhaseOrder.indexOf(left as (typeof salesPhaseOrder)[number]);
+    const rightIndex = salesPhaseOrder.indexOf(right as (typeof salesPhaseOrder)[number]);
+
+    if (leftIndex === -1 && rightIndex === -1) {
+      return left.localeCompare(right);
+    }
+
+    if (leftIndex === -1) {
+      return 1;
+    }
+
+    if (rightIndex === -1) {
+      return -1;
+    }
+
+    return leftIndex - rightIndex;
+  });
+}
+
+export function getSalesPhaseColor(phaseName: string): string {
+  return salesPhaseMeta[phaseName]?.color ?? 'default';
+}
+
+export function getOrderedSalesStages(stageNames: string[]): string[] {
+  const uniqueStageNames = Array.from(new Set(stageNames));
+  return uniqueStageNames.sort((left, right) => {
+    const leftIndex = salesStageOrder.indexOf(left as (typeof salesStageOrder)[number]);
+    const rightIndex = salesStageOrder.indexOf(right as (typeof salesStageOrder)[number]);
+
+    if (leftIndex === -1 && rightIndex === -1) {
+      return left.localeCompare(right);
+    }
+
+    if (leftIndex === -1) {
+      return 1;
+    }
+
+    if (rightIndex === -1) {
+      return -1;
+    }
+
+    return leftIndex - rightIndex;
+  });
+}
+
+export function sortSceneAssemblyViewsBySalesStage<T extends { salesStage: string }>(items: T[]): T[] {
+  const orderedStageNames = getOrderedSalesStages(items.map((item) => item.salesStage));
+  return [...items].sort(
+    (left, right) =>
+      orderedStageNames.indexOf(left.salesStage) - orderedStageNames.indexOf(right.salesStage),
+  );
+}
+
+export function getSalesStageColor(stageName: string): string {
+  return salesStageMeta[stageName]?.color ?? 'default';
+}
+
 export function sortShadowObjects<T extends { objectKey: ShadowObjectKey }>(items: T[]): T[] {
   return [...items].sort(
     (left, right) =>
@@ -253,9 +414,15 @@ export function resolveSceneAssemblyViews(params: {
     return {
       key: draft.key,
       label: draft.label,
+      category: draft.category,
+      salesStage: draft.salesStage,
       businessGoal: draft.businessGoal,
       entityAnchor: draft.entityAnchor,
       summary: draft.summary,
+      triggerEntries: draft.triggerEntries,
+      upstreamAssets: draft.upstreamAssets,
+      outputs: draft.outputs,
+      orchestrationChain: draft.orchestrationChain,
       status: hasRecordSkillGap ? '依赖缺口' : hasExternalRisk ? '能力风险' : '待组装',
       recordSkillDependencies,
       externalSkillDependencies,

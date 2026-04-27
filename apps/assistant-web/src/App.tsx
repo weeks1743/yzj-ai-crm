@@ -4,8 +4,6 @@ import {
   CloudUploadOutlined,
   CompassOutlined,
   CopyOutlined,
-  DeleteOutlined,
-  EditOutlined,
   EllipsisOutlined,
   FileSearchOutlined,
   GlobalOutlined,
@@ -54,7 +52,6 @@ import {
 } from 'antd';
 import type { GetProp } from 'antd';
 import { createStyles } from 'antd-style';
-import dayjs from 'dayjs';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -78,23 +75,30 @@ import { buildPromptGroups, getSceneByPath, sceneOrder } from './scene-meta';
 import { useMarkdownTheme } from './use-markdown-theme';
 import brandLogo from '@shared/assets/logo.png';
 
-const { Paragraph, Text, Title } = Typography;
+const { Paragraph, Text } = Typography;
 
 const HOME_CONVERSATION_KEY = 'conv-home';
 
 const sceneIconMap: Record<string, React.ReactNode> = {
-  'audio-import': <ScheduleOutlined />,
-  'company-research': <FileSearchOutlined />,
-  'visit-prepare': <ProductOutlined />,
+  'post-visit-loop': <CloudUploadOutlined />,
+  'customer-analysis': <FileSearchOutlined />,
+  'conversation-understanding': <RobotOutlined />,
+  'needs-todo-analysis': <ScheduleOutlined />,
+  'problem-statement': <GlobalOutlined />,
+  'value-positioning': <ProductOutlined />,
+  'solution-expert-enablement': <ShareAltOutlined />,
   tasks: <BarsOutlined />,
   chat: <CompassOutlined />,
 };
 
 const senderShortcutIcons = [
-  <ScheduleOutlined />,
-  <ProductOutlined />,
+  <CloudUploadOutlined />,
   <FileSearchOutlined />,
-  <CompassOutlined />,
+  <RobotOutlined />,
+  <GlobalOutlined />,
+  <ProductOutlined />,
+  <ShareAltOutlined />,
+  <FileSearchOutlined />,
 ];
 
 const promptGroupStyles = {
@@ -333,9 +337,18 @@ function buildSceneEntryPrompts() {
   return [
     {
       key: 'scene-entry',
-      label: '场景技能入口',
+      label: '销售主链路',
       children: sceneOrder
-        .filter((item) => item.key !== 'chat')
+        .filter((item) =>
+          [
+            'customer-analysis',
+            'conversation-understanding',
+            'needs-todo-analysis',
+            'problem-statement',
+            'value-positioning',
+            'solution-expert-enablement',
+          ].includes(item.key),
+        )
         .map((item) => ({
           key: `scene-${item.key}`,
           label: item.title,
@@ -355,20 +368,55 @@ function buildSenderPrompts(scene = assistantScenes.chat) {
   })) satisfies GetProp<typeof Prompts, 'items'>;
 }
 
+function getSceneSlashCommand(sceneKey: string) {
+  switch (sceneKey) {
+    case 'post-visit-loop':
+      return '/拜访后闭环';
+    case 'customer-analysis':
+      return '/客户分析';
+    case 'conversation-understanding':
+      return '/拜访会话理解';
+    case 'needs-todo-analysis':
+      return '/客户需求工作待办分析';
+    case 'problem-statement':
+      return '/问题陈述';
+    case 'value-positioning':
+      return '/客户价值定位';
+    case 'solution-expert-enablement':
+      return '/方案匹配与专家协同';
+    case 'tasks':
+      return '/我的任务';
+    default:
+      return '/';
+  }
+}
+
 function getSceneSourceTags(sceneKey: string) {
-  if (sceneKey === 'audio-import') {
-    return ['客户上下文', '商机上下文', '跟进记录草稿', '录音附件'];
+  if (sceneKey === 'post-visit-loop') {
+    return ['mp3 录音', '客户上下文', '商机上下文', '跟进记录草稿'];
   }
-  if (sceneKey === 'company-research') {
-    return ['外部检索', '研究快照', '来源引用'];
+  if (sceneKey === 'customer-analysis') {
+    return ['客户主数据', '联系人', '商机盘点', '公司研究供给'];
   }
-  if (sceneKey === 'visit-prepare') {
-    return visitBriefs[0].sourceMix;
+  if (sceneKey === 'conversation-understanding') {
+    return ['录音转写', '拜访纪要', '跟进记录', '风险信号'];
+  }
+  if (sceneKey === 'needs-todo-analysis') {
+    return ['会话理解结果', '需求清单', '客户侧待办', '我方待办'];
+  }
+  if (sceneKey === 'problem-statement') {
+    return ['问题背景', '约束条件', '影响范围', '优先级'];
+  }
+  if (sceneKey === 'value-positioning') {
+    return ['客户问题', '价值主张', '推进话术', '下一步建议'];
+  }
+  if (sceneKey === 'solution-expert-enablement') {
+    return ['客户诉求', '候选方案', '匹配案例', '协同专家'];
   }
   if (sceneKey === 'tasks') {
     return ['traceId', 'taskId', '资产结果', '写回状态'];
   }
-  return ['对话上下文', 'shadow.* 对象能力', '场景技能', '外部技能'];
+  return ['slash 命令', '场景技能', 'shadow.* 对象能力', 'ext.* 外部技能'];
 }
 
 function MessageFooter({
@@ -520,7 +568,7 @@ function SceneDebugDrawer({ open, onClose, scene }: { open: boolean; onClose: ()
         );
 
   const assetContent = (() => {
-    if (scene.key === 'audio-import') {
+    if (scene.key === 'post-visit-loop' || scene.key === 'conversation-understanding') {
       return (
         <List
           dataSource={audioImportTasks}
@@ -542,7 +590,7 @@ function SceneDebugDrawer({ open, onClose, scene }: { open: boolean; onClose: ()
         />
       );
     }
-    if (scene.key === 'company-research') {
+    if (scene.key === 'customer-analysis') {
       return (
         <List
           dataSource={researchSnapshots}
@@ -557,7 +605,7 @@ function SceneDebugDrawer({ open, onClose, scene }: { open: boolean; onClose: ()
         />
       );
     }
-    if (scene.key === 'visit-prepare') {
+    if (scene.key === 'value-positioning' || scene.key === 'solution-expert-enablement') {
       return (
         <List
           dataSource={visitBriefs}
@@ -618,7 +666,14 @@ function SceneDebugDrawer({ open, onClose, scene }: { open: boolean; onClose: ()
               <>
                 <Card className={styles.drawerCard} title="当前场景">
                   <Space orientation="vertical" size={8}>
-                    <Text strong>{scene.title}</Text>
+                    <Space wrap>
+                      <Text strong>{scene.title}</Text>
+                      {scene.key !== 'chat' ? (
+                        <Tag color="purple">命中 {getSceneSlashCommand(scene.key)}</Tag>
+                      ) : (
+                        <Tag color="blue">slash 命令已启用</Tag>
+                      )}
+                    </Space>
                     <Text type="secondary">{scene.subtitle}</Text>
                     <Paragraph style={{ marginBottom: 0 }}>{scene.description}</Paragraph>
                   </Space>
@@ -740,10 +795,10 @@ function AssistantWorkspace() {
   const homeConversation = useMemo(
     () => ({
       key: HOME_CONVERSATION_KEY,
-      label: '新对话',
+      label: 'AI 销售工作台',
       route: '/chat',
-      group: '今天',
-      lastMessage: '从这里发起新的销售任务。',
+      group: '总览',
+      lastMessage: '从这里选择“拜访后闭环”或按销售主链路逐步推进。',
       updatedAt: '刚刚',
       scene: 'chat',
     }),
@@ -770,8 +825,6 @@ function AssistantWorkspace() {
     conversations,
     activeConversationKey,
     setActiveConversationKey,
-    addConversation,
-    setConversations,
   } = useXConversations({
     defaultConversations: baseConversations,
     defaultActiveConversationKey: getConversationKeyByRoute(location.pathname),
@@ -978,7 +1031,7 @@ function AssistantWorkspace() {
         </div>
       </div>
       <Conversations
-        creation={{ onClick: onCreateConversation, label: '新对话' }}
+        creation={{ onClick: onCreateConversation, label: '返回工作台' }}
         items={conversations.map(({ key, label, ...other }) => ({
           key,
           label: key === activeConversationKey ? `[当前]${label}` : label,
@@ -998,39 +1051,7 @@ function AssistantWorkspace() {
         }}
         groupable
         styles={{ item: { padding: '0 8px' } }}
-        menu={(conversation) => {
-          if (conversation.key === HOME_CONVERSATION_KEY) {
-            return undefined;
-          }
-
-          return {
-            items: [
-              {
-                label: '重命名',
-                key: 'rename',
-                icon: <EditOutlined />,
-                onClick: () => {
-                  messageApi.info('重命名将在后续迭代补齐。');
-                },
-              },
-              {
-                label: '删除',
-                key: 'delete',
-                icon: <DeleteOutlined />,
-                danger: true,
-                onClick: () => {
-                  const nextList = conversations.filter((item) => item.key !== conversation.key);
-                  setConversations(nextList);
-                  if (conversation.key === activeConversationKey) {
-                    const fallback = nextList[0] ?? homeConversation;
-                    setActiveConversationKey(fallback.key);
-                    navigate(fallback.route);
-                  }
-                },
-              },
-            ],
-          };
-        }}
+        menu={() => undefined}
       />
 
       <div className={styles.sideFooter}>
@@ -1149,7 +1170,14 @@ function AssistantWorkspace() {
           {chatSide}
           <div className={styles.chat}>
             <div className={styles.chatToolbar}>
-              {scene.key !== 'chat' ? <Tag color="blue">{scene.title}</Tag> : null}
+              {scene.key !== 'chat' ? (
+                <>
+                  <Tag color="blue">{scene.title}</Tag>
+                  <Tag color="purple">命中 {getSceneSlashCommand(scene.key)}</Tag>
+                </>
+              ) : (
+                <Tag color="cyan">slash 命令入口</Tag>
+              )}
               <Button
                 type="text"
                 icon={<BugOutlined />}
@@ -1177,9 +1205,13 @@ function App() {
     <Routes>
       <Route path="/" element={<Navigate to="/chat" replace />} />
       <Route path="/chat" element={<AssistantWorkspace />} />
-      <Route path="/chat/audio-import" element={<AssistantWorkspace />} />
-      <Route path="/chat/company-research" element={<AssistantWorkspace />} />
-      <Route path="/chat/visit-prepare" element={<AssistantWorkspace />} />
+      <Route path="/chat/post-visit-loop" element={<AssistantWorkspace />} />
+      <Route path="/chat/customer-analysis" element={<AssistantWorkspace />} />
+      <Route path="/chat/conversation-understanding" element={<AssistantWorkspace />} />
+      <Route path="/chat/needs-todo-analysis" element={<AssistantWorkspace />} />
+      <Route path="/chat/problem-statement" element={<AssistantWorkspace />} />
+      <Route path="/chat/value-positioning" element={<AssistantWorkspace />} />
+      <Route path="/chat/solution-expert-enablement" element={<AssistantWorkspace />} />
       <Route path="/chat/tasks" element={<AssistantWorkspace />} />
     </Routes>
   );

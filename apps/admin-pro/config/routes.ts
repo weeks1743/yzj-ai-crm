@@ -105,7 +105,7 @@ export default [
         component: './skills/record-skills/[objectKey]',
       },
       {
-        name: '场景组装准备',
+        name: '场景技能',
         path: '/skills/scene-assembly',
         icon: 'deploymentUnit',
         component: './skills/scene-assembly/index',

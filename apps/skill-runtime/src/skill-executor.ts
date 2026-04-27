@@ -42,10 +42,10 @@ import {
 } from './super-ppt-docmee.js';
 
 const GENERIC_TEXT_SKILLS = new Set([
-  'customer-journey-map',
-  'jobs-to-be-done',
+  'visit-conversation-understanding',
+  'customer-needs-todo-analysis',
   'problem-statement',
-  'saas-revenue-growth-metrics',
+  'customer-value-positioning',
 ]);
 const SUPER_PPT_SKILL = 'super-ppt';
 const SUPER_PPT_OFFICIAL_FLOW_TIMEOUT_MS = 600_000;

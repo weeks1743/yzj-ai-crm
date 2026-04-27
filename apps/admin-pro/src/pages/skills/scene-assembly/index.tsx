@@ -1,93 +1,125 @@
 import {
   PageContainer,
+  ProCard,
   ProTable,
-  StatisticCard,
 } from '@ant-design/pro-components';
 import { Link } from '@umijs/max';
-import { Alert, Button, Result, Space, Tag } from 'antd';
+import {
+  Drawer,
+  Alert,
+  Button,
+  Segmented,
+  Select,
+  Space,
+  Steps,
+  Tag,
+  Typography,
+} from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { ProColumns } from '@ant-design/pro-components';
-import type { SceneAssemblyResolvedView } from '@shared';
+import type {
+  SceneAssemblyCategory,
+  SceneAssemblyResolvedView,
+} from '@shared';
 import {
   fetchResolvedSceneAssemblyViews,
+  getOrderedSalesPhases,
+  getSalesPhaseByStage,
+  getSalesPhaseColor,
   getSceneAssemblyStatusColor,
+  salesPhaseMeta,
+  sortSceneAssemblyViewsBySalesStage,
 } from '../shared';
+
+const { Paragraph, Text } = Typography;
+
+type SceneFilter = '全部' | SceneAssemblyCategory;
+type StageFilter = '全部阶段' | string;
+
+function formatSceneStatus(status: SceneAssemblyResolvedView['status']) {
+  if (status === '待组装') {
+    return '已可用';
+  }
+
+  return status;
+}
+
+function renderCompactTags(values: string[], color?: string) {
+  return (
+    <Space wrap size={[4, 6]}>
+      {values.slice(0, 2).map((item) => (
+        <Tag key={item} color={color}>
+          {item}
+        </Tag>
+      ))}
+      {values.length > 2 ? <Tag>+{values.length - 2}</Tag> : null}
+    </Space>
+  );
+}
 
 const columns: ProColumns<SceneAssemblyResolvedView>[] = [
   {
-    title: '场景名',
+    title: '场景技能',
     dataIndex: 'label',
-    width: 220,
+    width: 320,
     render: (_, record) => (
-      <Link to={`/skills/scene-assembly/${record.key}`} prefetch>
-        {record.label}
-      </Link>
+      <Space direction="vertical" size={6}>
+        <Space wrap size={[6, 6]}>
+          <Link to={`/skills/scene-assembly/${record.key}`}>{record.label}</Link>
+          <Tag color={record.category === '复合场景' ? 'purple' : 'blue'}>
+            {record.category}
+          </Tag>
+        </Space>
+        <Text type="secondary" ellipsis={{ tooltip: record.businessGoal }}>
+          {record.businessGoal}
+        </Text>
+      </Space>
     ),
   },
   {
-    title: '业务目标',
-    dataIndex: 'businessGoal',
+    title: '适用阶段',
+    dataIndex: 'salesStage',
+    width: 120,
     ellipsis: true,
   },
   {
-    title: '实体锚点',
+    title: '业务锚点',
     dataIndex: 'entityAnchor',
     width: 180,
+    ellipsis: true,
   },
   {
-    title: '对象能力依赖',
-    dataIndex: 'recordSkillDependencies',
-    width: 180,
-    render: (_, record) => {
-      const availableCount = record.recordSkillDependencies.filter(
-        (item) => item.status === 'available',
-      ).length;
-
-      return `${availableCount} / ${record.recordSkillDependencies.length}`;
-    },
-  },
-  {
-    title: '外部技能依赖',
-    dataIndex: 'externalSkillDependencies',
-    width: 180,
-    render: (_, record) => {
-      const availableCount = record.externalSkillDependencies.filter(
-        (item) => item.status === 'available',
-      ).length;
-
-      return `${availableCount} / ${record.externalSkillDependencies.length}`;
-    },
-  },
-  {
-    title: '当前状态',
-    dataIndex: 'status',
-    width: 120,
+    title: '主要入口',
+    dataIndex: 'triggerEntries',
+    width: 260,
     render: (_, record) => (
-      <Tag color={getSceneAssemblyStatusColor(record.status)}>{record.status}</Tag>
+      <Text ellipsis={{ tooltip: record.triggerEntries[0] }}>
+        {record.triggerEntries[0]}
+      </Text>
     ),
   },
   {
-    title: '主要缺口',
-    dataIndex: 'gaps',
-    render: (_, record) =>
-      record.gaps.length > 0 ? (
-        <Space wrap>
-          {record.gaps.map((gap) => (
-            <Tag key={gap} color="warning">
-              {gap}
-            </Tag>
-          ))}
-        </Space>
-      ) : (
-        <Tag color="success">依赖已齐</Tag>
-      ),
+    title: '核心输出',
+    dataIndex: 'outputs',
+    width: 220,
+    render: (_, record) => renderCompactTags(record.outputs),
+  },
+  {
+    title: '状态',
+    dataIndex: 'status',
+    width: 110,
+    render: (_, record) => (
+      <Tag color={getSceneAssemblyStatusColor(record.status)}>
+        {formatSceneStatus(record.status)}
+      </Tag>
+    ),
   },
   {
     title: '操作',
     valueType: 'option',
-    width: 120,
+    width: 100,
     render: (_, record) => [
-      <Link key="detail" to={`/skills/scene-assembly/${record.key}`} prefetch>
+      <Link key="detail" to={`/skills/scene-assembly/${record.key}`}>
         查看详情
       </Link>,
     ],
@@ -98,7 +130,9 @@ const SceneAssemblyPage = () => {
   const [rows, setRows] = useState<SceneAssemblyResolvedView[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [realRecordSkillCount, setRealRecordSkillCount] = useState(0);
+  const [filter, setFilter] = useState<SceneFilter>('全部');
+  const [stageFilter, setStageFilter] = useState<StageFilter>('全部阶段');
+  const [previewSceneKey, setPreviewSceneKey] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -113,18 +147,13 @@ const SceneAssemblyPage = () => {
           return;
         }
 
-        setRows(result.views);
-        setRealRecordSkillCount(
-          Object.values(result.skillsByObject).reduce(
-            (sum, item) => sum + (item?.length ?? 0),
-            0,
-          ),
-        );
+        setRows(sortSceneAssemblyViewsBySalesStage(result.views));
       } catch (error) {
         if (!alive) {
           return;
         }
-        setErrorMessage(error instanceof Error ? error.message : '场景组装准备页加载失败');
+
+        setErrorMessage(error instanceof Error ? error.message : '场景技能页加载失败');
       } finally {
         if (alive) {
           setLoading(false);
@@ -139,93 +168,376 @@ const SceneAssemblyPage = () => {
     };
   }, []);
 
-  const metrics = useMemo(() => {
-    const sceneDraftCount = rows.length;
-    const gapSceneCount = rows.filter((item) => item.status === '依赖缺口').length;
-    const externalRiskCount = rows.reduce(
-      (sum, item) =>
-        sum + item.externalSkillDependencies.filter((dependency) => dependency.status === 'risk').length,
-      0,
-    );
+  const categoryFilteredRows = useMemo(() => {
+    if (filter === '全部') {
+      return rows;
+    }
 
-    return [
-      {
-        label: '场景草案数',
-        value: `${sceneDraftCount}`,
-        helper: '当前固定场景草案',
-      },
-      {
-        label: '可用对象能力数',
-        value: `${realRecordSkillCount}`,
-        helper: '按真实 shadow 对象能力汇总',
-      },
-      {
-        label: '存在缺口的场景数',
-        value: `${gapSceneCount}`,
-        helper: '至少缺少一个必需 record skill',
-      },
-      {
-        label: '外部技能风险项数',
-        value: `${externalRiskCount}`,
-        helper: '来自外部能力目录的告警项',
-      },
-    ];
-  }, [realRecordSkillCount, rows]);
+    return rows.filter((item) => item.category === filter);
+  }, [filter, rows]);
+
+  const phaseSummaries = useMemo(
+    () =>
+      getOrderedSalesPhases(categoryFilteredRows.map((item) => item.salesStage)).map((phaseName) => {
+        const phaseRows = categoryFilteredRows.filter(
+          (item) => getSalesPhaseByStage(item.salesStage) === phaseName,
+        );
+        return {
+          phaseName,
+          rows: phaseRows,
+          meta: salesPhaseMeta[phaseName],
+        };
+      }),
+    [categoryFilteredRows],
+  );
+
+  const activePhaseName = useMemo(() => {
+    if (!phaseSummaries.length || stageFilter === '全部阶段') {
+      return undefined;
+    }
+
+    if (stageFilter !== '全部阶段' && phaseSummaries.some((item) => item.phaseName === stageFilter)) {
+      return stageFilter;
+    }
+  }, [phaseSummaries, stageFilter]);
+
+  const stageOptions = useMemo(
+    () => [
+      { label: '全部阶段', value: '全部阶段' },
+      ...phaseSummaries.map((item) => ({
+        label: `${item.phaseName} (${item.rows.length})`,
+        value: item.phaseName,
+      })),
+    ],
+    [phaseSummaries],
+  );
+
+  const filteredRows = useMemo(() => {
+    if (stageFilter === '全部阶段') {
+      return categoryFilteredRows;
+    }
+
+    return categoryFilteredRows.filter((item) => getSalesPhaseByStage(item.salesStage) === stageFilter);
+  }, [categoryFilteredRows, stageFilter]);
+
+  useEffect(() => {
+    if (
+      stageFilter !== '全部阶段'
+      && !phaseSummaries.some((item) => item.phaseName === stageFilter)
+    ) {
+      setStageFilter('全部阶段');
+    }
+  }, [stageFilter, phaseSummaries]);
+
+  const previewScene = useMemo(() => {
+    return filteredRows.find((item) => item.key === previewSceneKey) ?? null;
+  }, [filteredRows, previewSceneKey]);
+
+  const activePhaseSummary = useMemo(
+    () => phaseSummaries.find((item) => item.phaseName === activePhaseName) ?? null,
+    [activePhaseName, phaseSummaries],
+  );
 
   return (
     <PageContainer
-      title="场景组装准备"
-      subTitle="只读准备中心，用来显式查看 scene.* 对 shadow.* 与 ext.* 的依赖关系和当前缺口。"
+      title="场景技能"
+      subTitle="按销售主链路管理复合场景和分析场景，重点看入口、输出和供给关系。"
       extra={[
         <Button key="reload" onClick={() => window.location.reload()}>
           重新加载
         </Button>,
       ]}
     >
-      <Alert
-        type="info"
-        showIcon
-        message="准备中心定位"
-        description="本轮只做场景依赖可视化与治理准备，不做拖拽编排、保存、发布或执行。"
-      />
-
       {errorMessage ? (
-        <Result
-          status="warning"
-          title="场景组装准备页加载失败"
-          subTitle={errorMessage}
-          extra={
-            <Button type="primary" onClick={() => window.location.reload()}>
-              重新加载
-            </Button>
-          }
+        <Alert
+          style={{ marginBottom: 16 }}
+          type="warning"
+          showIcon
+          message="场景技能页加载失败"
+          description={errorMessage}
         />
       ) : null}
 
-      <Space wrap size={16} style={{ width: '100%', marginTop: 16 }}>
-        {metrics.map((item) => (
-          <StatisticCard
-            key={item.label}
-            style={{ minWidth: 250 }}
-            statistic={{
-              title: item.label,
-              value: item.value,
-              description: item.helper,
+      <ProCard
+        title="销售阶段地图"
+        style={{ marginBottom: 16 }}
+        extra={(
+          <Space wrap size={12}>
+            <Text type="secondary">按 CRM 客户生命周期方式查看不同销售阶段对应的场景技能</Text>
+            {stageFilter !== '全部阶段' ? (
+              <Button type="link" style={{ paddingInline: 0 }} onClick={() => setStageFilter('全部阶段')}>
+                查看全部阶段
+              </Button>
+            ) : null}
+          </Space>
+        )}
+      >
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+            width: '100%',
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(${Math.max(phaseSummaries.length, 1)}, minmax(0, 1fr))`,
+              gap: 0,
+              width: '100%',
+              overflow: 'hidden',
             }}
-          />
-        ))}
-      </Space>
+          >
+            {phaseSummaries.map((phaseItem, index) => {
+              const isActive = activePhaseName === phaseItem.phaseName;
+              const backgroundColor = isActive ? '#1677ff' : '#f5f5f5';
+              const borderColor = isActive ? '#1677ff' : '#d9d9d9';
+              const textColor = isActive ? '#ffffff' : 'rgba(0, 0, 0, 0.88)';
+
+              return (
+                <div
+                  key={phaseItem.phaseName}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setStageFilter(phaseItem.phaseName)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setStageFilter(phaseItem.phaseName);
+                    }
+                  }}
+                  style={{
+                    position: 'relative',
+                    minWidth: 0,
+                    height: 72,
+                    padding: '0 30px 0 18px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: backgroundColor,
+                    borderTop: `1px solid ${borderColor}`,
+                    borderBottom: `1px solid ${borderColor}`,
+                    borderLeft: index === 0 ? `1px solid ${borderColor}` : 'none',
+                    borderRadius:
+                      index === 0
+                        ? '10px 0 0 10px'
+                        : index === phaseSummaries.length - 1
+                          ? '0 10px 10px 0'
+                          : 0,
+                    cursor: 'pointer',
+                    zIndex: isActive ? 3 : phaseSummaries.length - index,
+                  }}
+                >
+                  {index < phaseSummaries.length - 1 ? (
+                    <div
+                      aria-hidden
+                      style={{
+                        position: 'absolute',
+                        right: -14,
+                        top: '50%',
+                        width: 28,
+                        height: 28,
+                        background: backgroundColor,
+                        borderTop: `1px solid ${borderColor}`,
+                        borderRight: `1px solid ${borderColor}`,
+                        transform: 'translateY(-50%) rotate(45deg)',
+                      }}
+                    />
+                  ) : null}
+
+                  <Text
+                    style={{
+                      color: textColor,
+                      fontSize: 15,
+                      fontWeight: 600,
+                    }}
+                    ellipsis
+                  >
+                    {phaseItem.phaseName}
+                  </Text>
+
+                  <Tag
+                    color={isActive ? 'rgba(255,255,255,0.18)' : getSalesPhaseColor(phaseItem.phaseName)}
+                    style={{
+                      color: isActive ? '#ffffff' : undefined,
+                      marginInlineEnd: 0,
+                      border: 'none',
+                    }}
+                  >
+                    {phaseItem.rows.length} 个
+                  </Tag>
+                </div>
+              );
+            })}
+          </div>
+
+          {activePhaseSummary ? (
+            <div
+              style={{
+                width: '100%',
+                padding: 20,
+                border: '1px solid #f0f0f0',
+                borderRadius: 12,
+                background: '#fafafa',
+                boxSizing: 'border-box',
+              }}
+            >
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Space wrap size={[8, 8]}>
+                  <Tag color={getSalesPhaseColor(activePhaseSummary.phaseName)}>
+                    {activePhaseSummary.meta?.indexLabel ?? '阶段'}
+                  </Tag>
+                  <Text strong style={{ fontSize: 16 }}>
+                    {activePhaseSummary.phaseName}
+                  </Text>
+                </Space>
+                <Paragraph style={{ marginBottom: 0 }}>
+                  {activePhaseSummary.meta?.focus ?? '查看当前阶段的关键目标。'}
+                </Paragraph>
+              </Space>
+            </div>
+          ) : null}
+        </div>
+      </ProCard>
 
       <ProTable<SceneAssemblyResolvedView>
-        style={{ marginTop: 16 }}
         rowKey="key"
         loading={loading}
-        columns={columns}
-        dataSource={rows}
+        headerTitle={stageFilter === '全部阶段' ? '场景清单' : `${stageFilter} 场景清单`}
+        columns={[
+          ...columns.slice(0, columns.length - 1),
+          {
+            title: '操作',
+            valueType: 'option',
+            width: 140,
+            fixed: 'right',
+            render: (_, record) => [
+              <Button
+                key="preview"
+                type="link"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setPreviewSceneKey(record.key);
+                }}
+                style={{ paddingInline: 0 }}
+              >
+                预览
+              </Button>,
+              <Link key="detail" to={`/skills/scene-assembly/${record.key}`}>
+                详情
+              </Link>,
+            ],
+          },
+        ]}
+        dataSource={filteredRows}
         search={false}
-        toolBarRender={false}
         pagination={false}
+        toolBarRender={() => [
+          <Space key="scene-toolbar" wrap size={12}>
+            <Segmented<SceneFilter>
+              value={filter}
+              onChange={setFilter}
+              options={['全部', '复合场景', '分析场景']}
+            />
+            <Select<StageFilter>
+              value={stageFilter}
+              onChange={setStageFilter}
+              options={stageOptions}
+              style={{ width: 240 }}
+            />
+          </Space>,
+        ]}
+        options={false}
+        cardBordered
+        scroll={{ x: 1280 }}
+        onRow={(record) => ({
+          onClick: () => setPreviewSceneKey(record.key),
+        })}
       />
+
+      <Drawer
+        title="当前场景预览"
+        width={520}
+        open={Boolean(previewScene)}
+        onClose={() => setPreviewSceneKey(null)}
+        destroyOnClose={false}
+      >
+        {previewScene ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <div>
+              <Space wrap size={[8, 8]}>
+                <Tag color={previewScene.category === '复合场景' ? 'purple' : 'blue'}>
+                  {previewScene.category}
+                </Tag>
+                <Tag color="cyan">{previewScene.salesStage}</Tag>
+                <Tag color={getSceneAssemblyStatusColor(previewScene.status)}>
+                  {formatSceneStatus(previewScene.status)}
+                </Tag>
+              </Space>
+              <Paragraph style={{ marginTop: 12, marginBottom: 8 }}>
+                <Text strong>{previewScene.label}</Text>
+              </Paragraph>
+              <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                {previewScene.summary}
+              </Paragraph>
+            </div>
+
+            <div>
+              <Text strong>真实入口</Text>
+              <div style={{ marginTop: 8 }}>
+                {renderCompactTags(previewScene.triggerEntries, 'blue')}
+              </div>
+            </div>
+
+            <div>
+              <Text strong>业务链路</Text>
+              <div style={{ marginTop: 12 }}>
+                <Steps
+                  size="small"
+                  direction="vertical"
+                  current={Math.max(previewScene.orchestrationChain.length - 2, 0)}
+                  items={previewScene.orchestrationChain.map((item) => ({
+                    title: item,
+                  }))}
+                />
+              </div>
+            </div>
+
+            <div>
+              <Text strong>标准输出</Text>
+              <div style={{ marginTop: 8 }}>
+                {renderCompactTags(previewScene.outputs)}
+              </div>
+            </div>
+
+            <div>
+              <Text strong>主要外部供给</Text>
+              <div style={{ marginTop: 8 }}>
+                {renderCompactTags(
+                  previewScene.externalSkillDependencies.map((item) => item.label),
+                  'gold',
+                )}
+              </div>
+            </div>
+
+            <div>
+              <Text strong>写回边界</Text>
+              <ul style={{ margin: '8px 0 0 18px', padding: 0 }}>
+                {previewScene.boundaries.writeback.map((item) => (
+                  <li key={item} style={{ marginBottom: 4 }}>
+                    <Text type="secondary">{item}</Text>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div>
+              <Link to={`/skills/scene-assembly/${previewScene.key}`}>打开完整详情</Link>
+            </div>
+          </Space>
+        ) : null}
+      </Drawer>
     </PageContainer>
   );
 };
