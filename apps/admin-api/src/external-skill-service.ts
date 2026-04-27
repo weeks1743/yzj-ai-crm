@@ -6,6 +6,9 @@ import type {
   ExternalSkillJobArtifact,
   ExternalSkillJobRequest,
   ExternalSkillJobResponse,
+  ExternalSkillPresentationSessionCloseRequest,
+  ExternalSkillPresentationSessionHeartbeatRequest,
+  ExternalSkillPresentationSessionOpenRequest,
   FetchLike,
   ImageGenerationQuality,
   ImageGenerationRequest,
@@ -536,8 +539,25 @@ export class ExternalSkillService {
     return this.transformRuntimeJob(await this.skillRuntimeClient.getJob(jobId));
   }
 
-  createPresentationSession(jobId: string) {
-    return this.skillRuntimeClient.createPresentationSession(jobId);
+  createPresentationSession(
+    jobId: string,
+    options?: {
+      forceRefresh?: boolean;
+    },
+  ) {
+    return this.skillRuntimeClient.createPresentationSession(jobId, options);
+  }
+
+  openPresentationSession(jobId: string, input: ExternalSkillPresentationSessionOpenRequest) {
+    return this.skillRuntimeClient.openPresentationSession(jobId, input);
+  }
+
+  heartbeatPresentationSession(jobId: string, input: ExternalSkillPresentationSessionHeartbeatRequest) {
+    return this.skillRuntimeClient.heartbeatPresentationSession(jobId, input);
+  }
+
+  closePresentationSession(jobId: string, input: ExternalSkillPresentationSessionCloseRequest) {
+    return this.skillRuntimeClient.closePresentationSession(jobId, input);
   }
 
   async getSkillJobArtifact(jobId: string, artifactId: string): Promise<{

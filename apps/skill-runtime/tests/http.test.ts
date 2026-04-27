@@ -296,6 +296,8 @@ test('POST /api/jobs runs super-ppt without model and creates presentation sessi
   }> = [];
   let receivedGeneratePptxByAiTemplateId: string | null = null;
   const receivedTokenLimits: number[] = [];
+  const receivedTokenUids: string[] = [];
+  let issuedDocmeeTokenIndex = 0;
   const harness = await createRuntimeHarness({
     config: createTestConfig({
       rootDir: tempRoot,
@@ -429,15 +431,18 @@ test('POST /api/jobs runs super-ppt without model and creates presentation sessi
       }
 
       if (url === 'https://docmee.example/api/user/createApiToken' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body ?? '{}')) as { limit?: number };
+        const body = JSON.parse(String(init.body ?? '{}')) as { limit?: number; uid?: string };
         if (typeof body.limit === 'number') {
           receivedTokenLimits.push(body.limit);
+        }
+        if (typeof body.uid === 'string') {
+          receivedTokenUids.push(body.uid);
         }
         return new Response(JSON.stringify({
           code: 0,
           message: 'ok',
           data: {
-            token: 'sk-session-001',
+            token: `sk-session-${String(++issuedDocmeeTokenIndex).padStart(3, '0')}`,
             expireTime: 3600,
           },
         }), { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
@@ -494,15 +499,152 @@ test('POST /api/jobs runs super-ppt without model and creates presentation sessi
       ),
     );
 
-    const sessionResponse = await fetch(`${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session`, {
+    const sessionResponse = await fetch(`${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session/open`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        clientId: 'client-a',
+        clientLabel: 'Chrome · client-a',
+      }),
     });
     assert.equal(sessionResponse.status, 200);
     const session = await sessionResponse.json();
+    assert.equal(session.status, 'ok');
     assert.equal(session.pptId, 'ppt-001');
-    assert.equal(session.token, 'sk-session-001');
+    assert.equal(session.token, 'sk-session-002');
     assert.equal(session.subject, '绍兴贝斯美化工股份有限公司企业研究');
-    assert.deepEqual(receivedTokenLimits, [50, 200]);
+    assert.equal(session.clientId, 'client-a');
+
+    const cachedSessionResponse = await fetch(`${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session/open`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        clientId: 'client-a',
+        clientLabel: 'Chrome · client-a',
+      }),
+    });
+    assert.equal(cachedSessionResponse.status, 200);
+    const cachedSession = await cachedSessionResponse.json();
+    assert.equal(cachedSession.token, 'sk-session-002');
+
+    const conflictSessionResponse = await fetch(
+      `${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session/open`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          clientId: 'client-b',
+          clientLabel: 'Codex Browser · client-b',
+        }),
+      },
+    );
+    assert.equal(conflictSessionResponse.status, 409);
+    const conflictPayload = await conflictSessionResponse.json();
+    assert.equal(conflictPayload.code, 'PRESENTATION_SESSION_CONFLICT');
+    assert.equal(conflictPayload.canTakeover, true);
+    assert.equal(conflictPayload.holder.clientId, 'client-a');
+
+    const heartbeatResponse = await fetch(
+      `${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session/heartbeat`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          clientId: 'client-a',
+          clientLabel: 'Chrome · client-a',
+        }),
+      },
+    );
+    assert.equal(heartbeatResponse.status, 200);
+    const heartbeatPayload = await heartbeatResponse.json();
+    assert.equal(heartbeatPayload.status, 'ok');
+    assert.equal(heartbeatPayload.clientId, 'client-a');
+
+    const takeoverSessionResponse = await fetch(
+      `${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session/open`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          clientId: 'client-b',
+          clientLabel: 'Codex Browser · client-b',
+          takeover: true,
+        }),
+      },
+    );
+    assert.equal(takeoverSessionResponse.status, 200);
+    const takeoverSession = await takeoverSessionResponse.json();
+    assert.equal(takeoverSession.token, 'sk-session-003');
+    assert.equal(takeoverSession.clientId, 'client-b');
+
+    const takenOverHeartbeatResponse = await fetch(
+      `${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session/heartbeat`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          clientId: 'client-a',
+          clientLabel: 'Chrome · client-a',
+        }),
+      },
+    );
+    assert.equal(takenOverHeartbeatResponse.status, 409);
+    const takenOverHeartbeatPayload = await takenOverHeartbeatResponse.json();
+    assert.equal(takenOverHeartbeatPayload.code, 'PRESENTATION_SESSION_TAKEN_OVER');
+    assert.equal(takenOverHeartbeatPayload.holder.clientId, 'client-b');
+
+    const closeResponse = await fetch(
+      `${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session/close`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          clientId: 'client-b',
+        }),
+      },
+    );
+    assert.equal(closeResponse.status, 200);
+    const closePayload = await closeResponse.json();
+    assert.equal(closePayload.status, 'closed');
+    assert.equal(closePayload.released, true);
+
+    const reopenedSessionResponse = await fetch(
+      `${harness.baseUrl}/api/jobs/${createdJob.jobId}/presentation-session/open`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          clientId: 'client-c',
+          clientLabel: 'Chrome · client-c',
+        }),
+      },
+    );
+    assert.equal(reopenedSessionResponse.status, 200);
+    const reopenedSession = await reopenedSessionResponse.json();
+    assert.equal(reopenedSession.token, 'sk-session-004');
+
+    assert.deepEqual(receivedTokenLimits, [50, 200, 200, 200]);
+    assert.equal(receivedTokenUids.length, 4);
+    assert.equal(receivedTokenUids[0], receivedTokenUids[1]);
+    assert.equal(receivedTokenUids[1], receivedTokenUids[2]);
+    assert.equal(receivedTokenUids[2], receivedTokenUids[3]);
+    assert.match(receivedTokenUids[0] || '', /^sp-[a-z0-9]+$/);
   } finally {
     await harness.close();
   }

@@ -36,6 +36,7 @@ import type {
 } from '@shared';
 import { writebackPolicies } from '@shared';
 import { requestJson } from '@/utils/request';
+import { getSuperPptEditorUrl } from '@/utils/superPptEditor';
 
 const { Paragraph } = Typography;
 const { TextArea } = Input;
@@ -823,7 +824,7 @@ const SkillsCatalogPage = () => {
                                       type="primary"
                                       onClick={() => {
                                         window.open(
-                                          `/super-ppt-editor.html?jobId=${encodeURIComponent(skillJobResult.jobId)}`,
+                                          getSuperPptEditorUrl(skillJobResult.jobId),
                                           '_blank',
                                           'noopener,noreferrer',
                                         );

@@ -6,6 +6,7 @@ import {
   extractDocmeeMarkdownCandidate,
   extractDocmeeStatusCandidate,
 } from '../src/docmee-client.js';
+import { createSuperPptDocmeeUid } from '../src/super-ppt-docmee.js';
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -338,6 +339,16 @@ test('DocmeeClient repairs markdown-decorated keys in JSON outline results', asy
       },
     ],
   });
+});
+
+test('createSuperPptDocmeeUid is deterministic for the same job seed', () => {
+  const uidA = createSuperPptDocmeeUid('d2edb9b0-9962-4b84-ac5f-47ead7c05596');
+  const uidB = createSuperPptDocmeeUid('d2edb9b0-9962-4b84-ac5f-47ead7c05596');
+  const uidC = createSuperPptDocmeeUid('job-002');
+
+  assert.equal(uidA, uidB);
+  assert.notEqual(uidA, uidC);
+  assert.match(uidA, /^sp-[a-z0-9]+$/);
 });
 
 test('Docmee payload helpers extract markdown, html, and status from nested structures', () => {

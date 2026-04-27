@@ -3,248 +3,63 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>super-ppt 独立编辑器</title>
-    <script src="/docmee/docmee-ui-sdk-iframe.min.js"></script>
+    <title>super-ppt 编辑器跳转中</title>
     <style>
-      :root {
-        color-scheme: light;
-        font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
+      html,
       body {
         margin: 0;
-        width: 100vw;
-        height: 100vh;
-        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
         background: #f5f7fa;
         color: #1f1f1f;
       }
 
-      .floating-bar {
-        position: fixed;
-        top: 16px;
-        right: 16px;
-        z-index: 30;
-        display: flex;
-        align-items: center;
-        gap: 16px;
-        padding: 10px 12px;
-        border: 1px solid rgba(15, 23, 42, 0.08);
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.92);
-        box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
-        backdrop-filter: blur(14px);
+      body {
+        display: grid;
+        place-items: center;
       }
 
-      .meta {
-        color: #8c8c8c;
-        font-size: 12px;
-        line-height: 1.5;
+      .card {
+        width: min(480px, calc(100vw - 40px));
+        padding: 28px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 20px 48px rgba(15, 23, 42, 0.12);
+        text-align: center;
       }
 
-      .button {
-        height: 34px;
-        padding: 0 14px;
-        border: 1px solid #d9d9d9;
-        border-radius: 8px;
-        background: #fff;
-        cursor: pointer;
-        color: #1f1f1f;
+      h1 {
+        margin: 0 0 12px;
+        font-size: 22px;
       }
 
-      .button:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-
-      .status {
-        position: fixed;
-        top: 16px;
-        left: 16px;
-        z-index: 35;
-        max-width: min(560px, calc(100vw - 32px));
-        padding: 14px 16px;
-        border-radius: 10px;
-        font-size: 14px;
-        line-height: 1.6;
-        box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
-      }
-
-      .status.info {
-        background: #e6f4ff;
-        color: #0958d9;
-        border: 1px solid #bae0ff;
-      }
-
-      .status.error {
-        background: #fff2f0;
-        color: #cf1322;
-        border: 1px solid #ffccc7;
-      }
-
-      #container {
-        position: fixed;
-        inset: 0;
-        width: 100vw;
-        height: 100vh;
-        overflow: hidden;
-      }
-
-      #status.hidden {
-        display: none;
+      p {
+        margin: 0;
+        color: #595959;
+        line-height: 1.75;
       }
     </style>
   </head>
   <body>
-    <div class="floating-bar" id="floatingBar">
-      <span class="meta" id="sessionMeta">正在创建 Docmee 编辑会话...</span>
-      <button class="button" id="refreshButton" type="button">刷新 Token</button>
-      <button class="button" id="closeButton" type="button">关闭页面</button>
+    <div class="card">
+      <h1>正在跳转到独立 PPT 编辑器</h1>
+      <p id="message">如果没有自动跳转，请检查 `super-ppt-editor` 服务是否已启动。</p>
     </div>
-
-    <div class="status info" id="status">正在创建 Docmee 编辑会话...</div>
-    <div id="container"></div>
-
     <script>
-      const params = new URLSearchParams(window.location.search);
-      const jobId = (params.get('jobId') || '').trim();
-      const sessionMetaNode = document.getElementById('sessionMeta');
-      const statusNode = document.getElementById('status');
-      const containerNode = document.getElementById('container');
-      const refreshButton = document.getElementById('refreshButton');
-      const closeButton = document.getElementById('closeButton');
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var jobId = (params.get('jobId') || '').trim();
+        var target = new URL(window.location.protocol + '//' + window.location.hostname + ':8001/');
 
-      let docmeeUI = null;
-      let currentSession = null;
-
-      function setStatus(message, kind) {
-        statusNode.textContent = message;
-        statusNode.className = `status ${kind || 'info'}`;
-        statusNode.classList.remove('hidden');
-      }
-
-      function hideStatus() {
-        statusNode.classList.add('hidden');
-      }
-
-      function syncHeader(session) {
-        const subject = session && session.subject ? session.subject : 'super-ppt 独立编辑器';
-        document.title = subject;
-        sessionMetaNode.textContent = session
-          ? `jobId: ${session.jobId} | pptId: ${session.pptId} | Token 过期时间：${session.expiresAt}`
-          : `jobId: ${jobId || '-'} | 正在创建 Docmee 编辑会话...`;
-      }
-
-      async function fetchSession() {
         if (!jobId) {
-          throw new Error('缺少 jobId，无法创建 Docmee 编辑会话。');
-        }
-
-        const response = await fetch(
-          `/api/external-skills/jobs/${encodeURIComponent(jobId)}/presentation-session`,
-          {
-            method: 'POST',
-            headers: {
-              Accept: 'application/json',
-            },
-          },
-        );
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(payload.message || 'Docmee 编辑会话创建失败');
-        }
-        return payload;
-      }
-
-      async function refreshToken(updateExisting) {
-        refreshButton.disabled = true;
-        try {
-          const session = await fetchSession();
-          currentSession = session;
-          syncHeader(session);
-          if (updateExisting && docmeeUI && session.token) {
-            docmeeUI.updateToken(session.token);
-            setStatus('Docmee Token 已刷新。', 'info');
-            window.setTimeout(hideStatus, 1200);
-          }
-          return session;
-        } finally {
-          refreshButton.disabled = false;
-        }
-      }
-
-      function buildEditor(session) {
-        if (!window.DocmeeUI) {
-          throw new Error('Docmee SDK 未成功加载');
-        }
-
-        hideStatus();
-        syncHeader(session);
-
-        docmeeUI = new window.DocmeeUI({
-          pptId: session.pptId,
-          token: session.token,
-          animation: Boolean(session.animation),
-          container: containerNode,
-          page: 'editor',
-          lang: 'zh',
-          mode: 'light',
-          isMobile: window.innerWidth < 768,
-          background: '#f5f7fa',
-          padding: '0px',
-          onMessage(message) {
-            if (message.type === 'beforeDownload') {
-              const subject = message.data && message.data.subject ? message.data.subject : session.subject;
-              return `PPT_${subject}.pptx`;
-            }
-
-            if (message.type === 'invalid-token') {
-              setStatus('Docmee Token 已失效，正在自动刷新...', 'info');
-              void refreshToken(true).catch((error) => {
-                setStatus(error instanceof Error ? error.message : 'Docmee Token 刷新失败', 'error');
-              });
-            }
-
-            return undefined;
-          },
-        });
-      }
-
-      async function boot() {
-        if (!jobId) {
-          setStatus('缺少 jobId，请从 super-ppt 调试结果页重新打开独立编辑器。', 'error');
-          syncHeader(null);
+          document.getElementById('message').textContent = '缺少 jobId，请从 super-ppt 调试结果页重新打开独立编辑器。';
           return;
         }
 
-        setStatus('正在创建 Docmee 编辑会话...', 'info');
-        syncHeader(null);
-
-        try {
-          const session = await refreshToken(false);
-          buildEditor(session);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : '独立编辑器初始化失败';
-          setStatus(message, 'error');
-          syncHeader(null);
-        }
-      }
-
-      refreshButton.addEventListener('click', () => {
-        void refreshToken(Boolean(docmeeUI)).catch((error) => {
-          setStatus(error instanceof Error ? error.message : 'Docmee Token 刷新失败', 'error');
-        });
-      });
-
-      closeButton.addEventListener('click', () => {
-        window.close();
-      });
-
-      void boot();
+        target.searchParams.set('jobId', jobId);
+        window.location.replace(target.toString());
+      })();
     </script>
   </body>
 </html>

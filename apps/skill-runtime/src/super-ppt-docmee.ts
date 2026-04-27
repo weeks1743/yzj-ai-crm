@@ -48,20 +48,20 @@ export function resolveSuperPptPrompt(prompt: string | null | undefined): Resolv
   };
 }
 
-function createDocmeeRuntimeUid(purpose: string): string {
-  const compactPurpose = purpose
+export function createSuperPptDocmeeUid(seed: string): string {
+  const compactSeed = seed
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '')
-    .slice(-10) || 'job';
-  return `sp-${compactPurpose}-${Date.now().toString(36).slice(-8)}`;
+    .slice(0, 48) || 'job';
+  return `sp-${compactSeed}`;
 }
 
 export async function createSuperPptRuntimeToken(
   docmeeClient: DocmeeClient,
-  purpose: string,
+  seed: string,
 ): Promise<string> {
   const payload = await docmeeClient.createApiToken({
-    uid: createDocmeeRuntimeUid(purpose),
+    uid: createSuperPptDocmeeUid(seed),
     limit: DOCMEE_RUNTIME_TOKEN_LIMIT,
     timeOfHours: DOCMEE_RUNTIME_TOKEN_HOURS,
   });

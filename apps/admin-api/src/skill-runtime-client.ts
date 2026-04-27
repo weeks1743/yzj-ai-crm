@@ -1,5 +1,11 @@
 import type {
   ExternalSkillJobRequest,
+  ExternalSkillPresentationSessionCloseRequest,
+  ExternalSkillPresentationSessionCloseResponse,
+  ExternalSkillPresentationSessionConflictResponse,
+  ExternalSkillPresentationSessionHeartbeatRequest,
+  ExternalSkillPresentationSessionHeartbeatResponse,
+  ExternalSkillPresentationSessionOpenRequest,
   ExternalSkillPresentationSessionResponse,
   FetchLike,
   SkillRuntimeModelName,
@@ -62,6 +68,11 @@ interface SkillRuntimeArtifactPayload {
   fileName: string;
   mimeType: string;
   content: Buffer;
+}
+
+interface JsonResponse<T> {
+  statusCode: number;
+  payload: T;
 }
 
 function trimTrailingSlash(value: string): string {
@@ -149,6 +160,24 @@ export class SkillRuntimeClient {
     return payload as T;
   }
 
+  private async fetchJsonResponse<T>(pathname: string, init?: RequestInit): Promise<JsonResponse<T>> {
+    let response: Response;
+
+    try {
+      response = await this.fetchImpl(this.resolveUrl(pathname), init);
+    } catch (error) {
+      throw new ServiceUnavailableError('SKILL Runtime 服务当前不可达，请检查服务是否已启动', {
+        baseUrl: this.options.baseUrl,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return {
+      statusCode: response.status,
+      payload: await readJsonOrText(response) as T,
+    };
+  }
+
   listModels(): Promise<SkillRuntimeModelDescriptor[]> {
     return this.fetchJson<SkillRuntimeModelDescriptor[]>('/api/models');
   }
@@ -179,11 +208,65 @@ export class SkillRuntimeClient {
     return this.fetchJson<SkillRuntimeJobResponse>(`/api/jobs/${encodeURIComponent(jobId)}`);
   }
 
-  createPresentationSession(jobId: string): Promise<ExternalSkillPresentationSessionResponse> {
+  createPresentationSession(
+    jobId: string,
+    options?: {
+      forceRefresh?: boolean;
+    },
+  ): Promise<ExternalSkillPresentationSessionResponse> {
+    const refreshSuffix = options?.forceRefresh ? '?refresh=1' : '';
     return this.fetchJson<ExternalSkillPresentationSessionResponse>(
-      `/api/jobs/${encodeURIComponent(jobId)}/presentation-session`,
+      `/api/jobs/${encodeURIComponent(jobId)}/presentation-session${refreshSuffix}`,
       {
         method: 'POST',
+      },
+    );
+  }
+
+  openPresentationSession(
+    jobId: string,
+    input: ExternalSkillPresentationSessionOpenRequest,
+  ): Promise<JsonResponse<ExternalSkillPresentationSessionResponse | ExternalSkillPresentationSessionConflictResponse | ApiErrorResponse>> {
+    return this.fetchJsonResponse(
+      `/api/jobs/${encodeURIComponent(jobId)}/presentation-session/open`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
+  heartbeatPresentationSession(
+    jobId: string,
+    input: ExternalSkillPresentationSessionHeartbeatRequest,
+  ): Promise<JsonResponse<ExternalSkillPresentationSessionHeartbeatResponse | ExternalSkillPresentationSessionConflictResponse | ApiErrorResponse>> {
+    return this.fetchJsonResponse(
+      `/api/jobs/${encodeURIComponent(jobId)}/presentation-session/heartbeat`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
+  closePresentationSession(
+    jobId: string,
+    input: ExternalSkillPresentationSessionCloseRequest,
+  ): Promise<JsonResponse<ExternalSkillPresentationSessionCloseResponse | ApiErrorResponse>> {
+    return this.fetchJsonResponse(
+      `/api/jobs/${encodeURIComponent(jobId)}/presentation-session/close`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(input),
       },
     );
   }

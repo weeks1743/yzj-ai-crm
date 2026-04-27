@@ -77,7 +77,25 @@
   - `audience = 大众`
   - `lang = zh（简体中文）`
 - 若 AIL 真正超时或报错，当前正式行为是直接失败，不再回退到 Markdown-only 兜底链路
+- `super-ppt` 生成态 token 与编辑态 token 现已复用同一 Docmee `uid`
+  - 修复编辑器中“保存 PPT / 导出 PPT 报 `1003 无权限访问`”的问题
+  - 原因是 Docmee `createApiToken` 的 `uid` 参与数据隔离，生成与编辑若使用不同 `uid`，会被视作不同数据归属
 - 运行 metadata 与 `presentation_ready` 事件会显式记录最终命中的 `docmeeFlow`
+
+### 5. 独立编辑器服务化与会话接管
+
+- 原先挂在 `admin-pro/public/super-ppt-editor.html` 下的编辑页已改为跳转壳
+- 新增独立服务 `apps/super-ppt-editor`，默认端口为 `8001`
+- 新编辑器通过独立端口承载 Docmee iframe，并由本地服务代理 `admin-api` 的编辑会话接口
+- `skill-runtime` 已新增单活租约接口：
+  - `presentation-session/open`
+  - `presentation-session/heartbeat`
+  - `presentation-session/close`
+- 同一 `jobId` 的 PPT 编辑会话当前固定为“单活接管”：
+  - 同 client 重入时复用原 token
+  - 不同 client 并发打开时默认返回占用冲突
+  - 显式 takeover 后重新 mint token，并让旧窗口在下次心跳时收到“已被接管”提示
+- 本轮的修复重点不再是继续在 `admin-pro` 页面内兜 token，而是把 Docmee 编辑器从后台壳中拆出，减少多窗口互相顶掉 token 导致的 `1003 无权限访问`
 
 ## Live 验证
 
@@ -145,9 +163,17 @@
   - `pnpm --filter @yzj-ai-crm/admin-api test`
   - `pnpm --filter @yzj-ai-crm/admin-api build`
   - `pnpm --filter @yzj-ai-crm/admin-pro build`
+  - `pnpm --filter @yzj-ai-crm/super-ppt-editor build`
 
 ## 未完成项
 
 - 仍需继续确认 Docmee 官方 JSON AIL 分支在长时任务下的最终收口条件
 - 若后续确认 `generatePptxByAi` 的完整终态或官方推荐的 HTML -> PPT 收口方式，仍可继续优化当前“布局完成后再生成最终 Markdown/PPT”的闭环
 - `super-ppt` v1 仍只支持单个 Markdown 附件
+- 截至 `2026-04-27`，独立 `super-ppt-editor` 已完成拆分、单活会话与诊断埋点，但 Docmee 编辑器内“保存 PPT / 导出 PPT”仍可能返回 `1003 无权限访问`
+- 当前本地排查已确认：
+  - 编辑页可正常 `mounted`
+  - `beforeDownload` 可触发
+  - 运行时 token 直接调用 Docmee `downloadPptx` 接口可成功
+  - 但 Docmee iframe 最终保存/导出链路仍会在其服务端权限校验阶段报 `1003`
+- 该问题更像 Docmee 侧的 `uid / userId / 文档归属` 口径差异，需联系官方技术支持继续协查；本轮代码先按“问题未彻底解决，但已沉淀独立服务、租约控制与诊断信息”收口

@@ -1,0 +1,16 @@
+{
+  "name": "@yzj-ai-crm/super-ppt-editor",
+  "private": true,
+  "version": "0.4.2",
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../node_modules/.pnpm/tsx@*/node_modules/tsx/dist/cli.mjs watch src/server.ts",
+    "build": "node ../../node_modules/.pnpm/typescript@*/node_modules/typescript/bin/tsc -p tsconfig.build.json",
+    "start": "node dist/server.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3"
+  }
+}

@@ -253,10 +253,50 @@ export interface WebFetchExtractResult {
 }
 
 export interface PresentationSessionResponse {
+  status: 'ok';
   jobId: string;
   pptId: string;
   token: string;
   subject: string;
   animation: boolean;
   expiresAt: string;
+  leaseExpireAt: string;
+  clientId: string;
+}
+
+export interface PresentationSessionRequest {
+  clientId?: string;
+  clientLabel?: string;
+  takeover?: boolean;
+}
+
+export interface PresentationSessionHeartbeatRequest {
+  clientId?: string;
+  clientLabel?: string;
+}
+
+export interface PresentationSessionHeartbeatResponse {
+  status: 'ok';
+  jobId: string;
+  clientId: string;
+  expiresAt: string;
+  leaseExpireAt: string;
+}
+
+export interface PresentationSessionCloseRequest {
+  clientId?: string;
+}
+
+export interface PresentationSessionCloseResponse {
+  status: 'closed';
+  jobId: string;
+  clientId: string;
+  released: boolean;
+}
+
+export interface PresentationSessionHolder {
+  clientId: string;
+  clientLabel: string;
+  lastActiveAt: string;
+  leaseExpireAt: string;
 }

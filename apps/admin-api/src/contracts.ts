@@ -181,6 +181,7 @@ export interface ApiErrorResponse {
   code: string;
   message: string;
   runId?: string;
+  details?: unknown;
 }
 
 export interface ExternalSkillCatalogItem {
@@ -264,12 +265,60 @@ export interface ExternalSkillJobResponse {
 }
 
 export interface ExternalSkillPresentationSessionResponse {
+  status: 'ok';
   jobId: string;
   pptId: string;
   token: string;
   subject: string;
   animation: boolean;
   expiresAt: string;
+  leaseExpireAt: string;
+  clientId: string;
+}
+
+export interface ExternalSkillPresentationSessionHolder {
+  clientId: string;
+  clientLabel: string;
+  lastActiveAt: string;
+  leaseExpireAt: string;
+}
+
+export interface ExternalSkillPresentationSessionOpenRequest {
+  clientId?: string;
+  clientLabel?: string;
+  takeover?: boolean;
+}
+
+export interface ExternalSkillPresentationSessionHeartbeatRequest {
+  clientId?: string;
+  clientLabel?: string;
+}
+
+export interface ExternalSkillPresentationSessionHeartbeatResponse {
+  status: 'ok';
+  jobId: string;
+  clientId: string;
+  expiresAt: string;
+  leaseExpireAt: string;
+}
+
+export interface ExternalSkillPresentationSessionCloseRequest {
+  clientId?: string;
+}
+
+export interface ExternalSkillPresentationSessionCloseResponse {
+  status: 'closed';
+  jobId: string;
+  clientId: string;
+  released: boolean;
+}
+
+export interface ExternalSkillPresentationSessionConflictResponse {
+  code: 'PRESENTATION_SESSION_CONFLICT' | 'PRESENTATION_SESSION_TAKEN_OVER' | 'PRESENTATION_SESSION_EXPIRED';
+  message: string;
+  holder?: ExternalSkillPresentationSessionHolder;
+  leaseExpireAt?: string;
+  canTakeover?: boolean;
 }
 
 export interface EnterprisePptTemplateItem {

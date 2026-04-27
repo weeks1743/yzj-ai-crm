@@ -1,5 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { ApiErrorResponse, CreateJobRequest } from './contracts.js';
+import type {
+  ApiErrorResponse,
+  CreateJobRequest,
+  PresentationSessionCloseRequest,
+  PresentationSessionHeartbeatRequest,
+  PresentationSessionRequest,
+} from './contracts.js';
 import { AppError, BadRequestError } from './errors.js';
 import { SkillRuntimeService } from './skill-runtime-service.js';
 
@@ -19,11 +25,18 @@ function writeJson(
 
 function writeError(response: ServerResponse, error: unknown): void {
   if (error instanceof AppError) {
-    writeJson(response, error.statusCode, {
+    const payload: Record<string, unknown> = {
       code: error.code,
       message: error.message,
-      details: error.details,
-    } satisfies ApiErrorResponse);
+    };
+    if (error.details !== undefined) {
+      if (error.details && typeof error.details === 'object' && !Array.isArray(error.details)) {
+        Object.assign(payload, error.details as Record<string, unknown>);
+      } else {
+        payload.details = error.details;
+      }
+    }
+    writeJson(response, error.statusCode, payload);
     return;
   }
 
@@ -99,8 +112,38 @@ export function createSkillRuntimeServer(options: {
           return;
         }
 
+        if (method === 'POST' && parts.length === 5 && parts[3] === 'presentation-session') {
+          const operation = parts[4];
+          if (operation === 'open') {
+            const payload = await readJsonBody<PresentationSessionRequest>(request);
+            writeJson(response, 200, await options.service.openPresentationSession(jobId, payload));
+            return;
+          }
+          if (operation === 'heartbeat') {
+            const payload = await readJsonBody<PresentationSessionHeartbeatRequest>(request);
+            writeJson(response, 200, await options.service.heartbeatPresentationSession(jobId, payload));
+            return;
+          }
+          if (operation === 'close') {
+            const payload = await readJsonBody<PresentationSessionCloseRequest>(request);
+            writeJson(response, 200, await options.service.closePresentationSession(jobId, payload));
+            return;
+          }
+        }
+
         if (method === 'POST' && parts.length === 4 && parts[3] === 'presentation-session') {
-          writeJson(response, 200, await options.service.createPresentationSession(jobId));
+          const payload = await readJsonBody<PresentationSessionRequest>(request);
+          if (payload.clientId?.trim()) {
+            writeJson(response, 200, await options.service.openPresentationSession(jobId, payload));
+            return;
+          }
+          writeJson(
+            response,
+            200,
+            await options.service.createPresentationSession(jobId, {
+              forceRefresh: ['1', 'true'].includes(url.searchParams.get('refresh') || ''),
+            }),
+          );
           return;
         }
 

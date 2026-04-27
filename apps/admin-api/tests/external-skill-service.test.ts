@@ -270,12 +270,15 @@ test('ExternalSkillService forwards presentation session creation', async () => 
       const url = String(input);
       if (url.endsWith('/api/jobs/job-001/presentation-session') && init?.method === 'POST') {
         return jsonResponse({
+          status: 'ok',
           jobId: 'job-001',
           pptId: 'ppt-001',
           token: 'sk-session-001',
           subject: '绍兴贝斯美化工企业研究',
           animation: true,
           expiresAt: '2026-04-25T12:00:00.000Z',
+          leaseExpireAt: '2026-04-25T11:31:30.000Z',
+          clientId: 'legacy-job-001',
         });
       }
       throw new Error(`Unexpected fetch url: ${url}`);
@@ -285,6 +288,95 @@ test('ExternalSkillService forwards presentation session creation', async () => 
   const session = await service.createPresentationSession('job-001');
   assert.equal(session.pptId, 'ppt-001');
   assert.equal(session.token, 'sk-session-001');
+});
+
+test('ExternalSkillService forwards forced presentation session refresh', async () => {
+  const service = new ExternalSkillService({
+    config: createTestConfig(),
+    fetchImpl: (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/jobs/job-001/presentation-session?refresh=1') && init?.method === 'POST') {
+        return jsonResponse({
+          status: 'ok',
+          jobId: 'job-001',
+          pptId: 'ppt-001',
+          token: 'sk-session-002',
+          subject: '绍兴贝斯美化工企业研究',
+          animation: true,
+          expiresAt: '2026-04-25T12:00:00.000Z',
+          leaseExpireAt: '2026-04-25T11:31:30.000Z',
+          clientId: 'legacy-job-001',
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as FetchLike,
+  });
+
+  const session = await service.createPresentationSession('job-001', {
+    forceRefresh: true,
+  });
+  assert.equal(session.pptId, 'ppt-001');
+  assert.equal(session.token, 'sk-session-002');
+});
+
+test('ExternalSkillService forwards open/heartbeat/close presentation session operations', async () => {
+  const service = new ExternalSkillService({
+    config: createTestConfig(),
+    fetchImpl: (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/jobs/job-001/presentation-session/open') && init?.method === 'POST') {
+        return jsonResponse({
+          status: 'ok',
+          jobId: 'job-001',
+          pptId: 'ppt-001',
+          token: 'sk-session-003',
+          subject: '绍兴贝斯美化工企业研究',
+          animation: false,
+          expiresAt: '2026-04-25T12:00:00.000Z',
+          leaseExpireAt: '2026-04-25T11:31:30.000Z',
+          clientId: 'client-a',
+        });
+      }
+      if (url.endsWith('/api/jobs/job-001/presentation-session/heartbeat') && init?.method === 'POST') {
+        return jsonResponse({
+          status: 'ok',
+          jobId: 'job-001',
+          clientId: 'client-a',
+          expiresAt: '2026-04-25T12:00:00.000Z',
+          leaseExpireAt: '2026-04-25T11:31:30.000Z',
+        });
+      }
+      if (url.endsWith('/api/jobs/job-001/presentation-session/close') && init?.method === 'POST') {
+        return jsonResponse({
+          status: 'closed',
+          jobId: 'job-001',
+          clientId: 'client-a',
+          released: true,
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as FetchLike,
+  });
+
+  const opened = await service.openPresentationSession('job-001', {
+    clientId: 'client-a',
+    clientLabel: 'Chrome · client-a',
+  });
+  assert.equal(opened.statusCode, 200);
+  assert.equal((opened.payload as { token: string }).token, 'sk-session-003');
+
+  const heartbeat = await service.heartbeatPresentationSession('job-001', {
+    clientId: 'client-a',
+    clientLabel: 'Chrome · client-a',
+  });
+  assert.equal(heartbeat.statusCode, 200);
+  assert.equal((heartbeat.payload as { clientId: string }).clientId, 'client-a');
+
+  const closed = await service.closePresentationSession('job-001', {
+    clientId: 'client-a',
+  });
+  assert.equal(closed.statusCode, 200);
+  assert.equal((closed.payload as { released: boolean }).released, true);
 });
 
 test('ExternalSkillService rejects image generation when api key is missing', async () => {

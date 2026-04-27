@@ -6,6 +6,9 @@ import type {
   EnterprisePptTemplatePromptResponse,
   EnterprisePptTemplateUploadResponse,
   ExternalSkillJobRequest,
+  ExternalSkillPresentationSessionCloseRequest,
+  ExternalSkillPresentationSessionHeartbeatRequest,
+  ExternalSkillPresentationSessionOpenRequest,
   ImageGenerationRequest,
   ShadowObjectKey,
   ShadowPreviewDeleteInput,
@@ -306,8 +309,37 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
 
         if (method === 'POST' && parts.length === 5 && parts[2] === 'jobs' && parts[4] === 'presentation-session') {
           const jobId = decodeURIComponent(parts[3] ?? '');
-          writeJson(response, 200, await options.externalSkillService.createPresentationSession(jobId));
+          writeJson(
+            response,
+            200,
+            await options.externalSkillService.createPresentationSession(jobId, {
+              forceRefresh: ['1', 'true'].includes(url.searchParams.get('refresh') || ''),
+            }),
+          );
           return;
+        }
+
+        if (method === 'POST' && parts.length === 6 && parts[2] === 'jobs' && parts[4] === 'presentation-session') {
+          const jobId = decodeURIComponent(parts[3] ?? '');
+          const action = decodeURIComponent(parts[5] ?? '');
+          if (action === 'open') {
+            const payload = await readJsonBody<ExternalSkillPresentationSessionOpenRequest>(request);
+            const result = await options.externalSkillService.openPresentationSession(jobId, payload);
+            writeJson(response, result.statusCode, result.payload);
+            return;
+          }
+          if (action === 'heartbeat') {
+            const payload = await readJsonBody<ExternalSkillPresentationSessionHeartbeatRequest>(request);
+            const result = await options.externalSkillService.heartbeatPresentationSession(jobId, payload);
+            writeJson(response, result.statusCode, result.payload);
+            return;
+          }
+          if (action === 'close') {
+            const payload = await readJsonBody<ExternalSkillPresentationSessionCloseRequest>(request);
+            const result = await options.externalSkillService.closePresentationSession(jobId, payload);
+            writeJson(response, result.statusCode, result.payload);
+            return;
+          }
         }
 
         if (method === 'GET' && parts.length === 6 && parts[2] === 'jobs' && parts[4] === 'artifacts') {
