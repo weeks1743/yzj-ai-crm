@@ -16,23 +16,25 @@
     "Ta_1",
     "Ta_0",
     "At_0",
-    "Te_17",
-    "Te_16",
+    "opportunity_name",
     "Ra_6",
     "Te_5",
-    "Ra_5",
+    "sales_stage",
     "Te_1",
     "Te_0",
     "Ra_0",
     "Ra_1",
     "Te_9",
     "Te_8",
-    "Da_0",
+    "expected_close_date",
     "Te_7",
     "Te_6",
     "owner_open_id",
-    "Nu_1",
+    "opportunity_budget",
     "Nu_0"
+  ],
+  "derivedParams": [
+    "_S_TITLE"
   ],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "opportunity-update-preview",
@@ -79,5 +81,5 @@
   },
   "sourceObject": "opportunity",
   "sourceFormCodeId": "b1869173654e49fbac0b1fc6ad37e761",
-  "sourceVersion": "2026-04-24T08:59:16.425Z"
+  "sourceVersion": "2026-04-28T10:39:48.776Z"
 }

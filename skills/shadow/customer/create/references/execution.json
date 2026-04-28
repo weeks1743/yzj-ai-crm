@@ -6,9 +6,13 @@
       "mode": "create",
       "operatorOpenId": "{operatorOpenId}",
       "params": {
-        "linked_contact_form_inst_id": {
-          "formInstId": "{linked_contact_form_inst_id_formInstId}"
-        }
+        "contact_name": "{contact_name}",
+        "enabled_state": "{enabled_state}",
+        "customer_type": "普通客户",
+        "customer_status": "销售线索阶段",
+        "Ra_1": "已分配",
+        "customer_name": "{customer_name}",
+        "contact_phone": "{contact_phone}"
       }
     }
   },
@@ -25,19 +29,13 @@
       "data": [
         {
           "widgetValue": {
-            "Bd_1": [
-              {
-                "id": "{linked_contact_form_inst_id_formInstId}",
-                "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
-                "formDefId": "{linked_contact_form_inst_id_formDefId}",
-                "flowInstId": "",
-                "showName": "{linked_contact_form_inst_id_showName}",
-                "_S_TITLE": "{linked_contact_form_inst_id_showName}",
-                "_S_NAME": "{linked_contact_form_inst_id_showName}",
-                "_name_": "{linked_contact_form_inst_id_showName}",
-                "_S_SERIAL": "{linked_contact_form_inst_id__S_SERIAL}"
-              }
-            ]
+            "Te_5": "{contact_name}",
+            "_S_DISABLE": "{enabled_state}",
+            "Ra_3": "普通客户",
+            "Ra_0": "销售线索阶段",
+            "Ra_1": "已分配",
+            "_S_NAME": "{customer_name}",
+            "Nu_1": "{contact_phone}"
           }
         }
       ]
@@ -50,9 +48,13 @@
       "mode": "create",
       "operatorOpenId": "{operatorOpenId}",
       "params": {
-        "linked_contact_form_inst_id": {
-          "formInstId": "{linked_contact_form_inst_id_formInstId}"
-        }
+        "contact_name": "{contact_name}",
+        "enabled_state": "{enabled_state}",
+        "customer_type": "普通客户",
+        "customer_status": "销售线索阶段",
+        "Ra_1": "已分配",
+        "customer_name": "{customer_name}",
+        "contact_phone": "{contact_phone}"
       }
     }
   },
@@ -69,19 +71,13 @@
       "data": [
         {
           "widgetValue": {
-            "Bd_1": [
-              {
-                "id": "{linked_contact_form_inst_id_formInstId}",
-                "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
-                "formDefId": "{linked_contact_form_inst_id_formDefId}",
-                "flowInstId": "",
-                "showName": "{linked_contact_form_inst_id_showName}",
-                "_S_TITLE": "{linked_contact_form_inst_id_showName}",
-                "_S_NAME": "{linked_contact_form_inst_id_showName}",
-                "_name_": "{linked_contact_form_inst_id_showName}",
-                "_S_SERIAL": "{linked_contact_form_inst_id__S_SERIAL}"
-              }
-            ]
+            "Te_5": "{contact_name}",
+            "_S_DISABLE": "{enabled_state}",
+            "Ra_3": "普通客户",
+            "Ra_0": "销售线索阶段",
+            "Ra_1": "已分配",
+            "_S_NAME": "{customer_name}",
+            "Nu_1": "{contact_phone}"
           }
         }
       ]

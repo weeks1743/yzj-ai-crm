@@ -10,7 +10,7 @@
         "Bd_4": {
           "formInstId": "{Bd_4_formInstId}"
         },
-        "Te_4": "{Te_4}"
+        "Ra_2": "高层"
       }
     }
   },
@@ -41,7 +41,7 @@
                 "_S_SERIAL": "{Bd_4__S_SERIAL}"
               }
             ],
-            "Te_4": "{Te_4}"
+            "Ra_2": "高层"
           }
         }
       ]
@@ -58,7 +58,7 @@
         "Bd_4": {
           "formInstId": "{Bd_4_formInstId}"
         },
-        "Te_4": "{Te_4}"
+        "Ra_2": "高层"
       }
     }
   },
@@ -89,7 +89,7 @@
                 "_S_SERIAL": "{Bd_4__S_SERIAL}"
               }
             ],
-            "Te_4": "{Te_4}"
+            "Ra_2": "高层"
           }
         }
       ]

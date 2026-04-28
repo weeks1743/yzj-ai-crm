@@ -10,8 +10,8 @@ Use this bundle only for the `followup` object. It is generated from the current
 ## Snapshot
 
 - `formCodeId`: `0a618c5d806545b997f60e8461b3f504`
-- `source_version`: `2026-04-24T08:59:16.696Z`
-- `schema_hash`: `d55c4662f9ef053014f3e657f68f8028775db7ab1e4052fa09ec1aae0731f05a`
+- `source_version`: `2026-04-28T10:37:10.888Z`
+- `schema_hash`: `52e8c079bd1f567f8b31c0b1d092880264eadf215a694fdf03dadc97ddee5a9b`
 - `field_count`: `23`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -56,6 +56,7 @@ Use this bundle only for the `followup` object. It is generated from the current
 
 - Required params: (none)
 - Optional params: Te_4, Ra_2, Te_1, Te_0, Ra_0, Ra_1, Bd_4, linked_opportunity_form_inst_id, _S_APPLY, linked_customer_form_inst_id, Da_0, Da_1, owner_open_id, _S_SERIAL, _S_DATE, Ta_0, _S_DEPT, _S_TITLE
+- Derived params: (none)
 - Confirmation policy: `no_confirmation_required`
 - This is a read / preview skill and does not require write confirmation.
 
@@ -81,7 +82,7 @@ Use this bundle only for the `followup` object. It is generated from the current
 - Internal live API: `POST /api/shadow/objects/followup/execute/search`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.6.0`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

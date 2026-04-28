@@ -18,6 +18,7 @@ import { OrgSyncRepository } from '../src/org-sync-repository.js';
 import { OrgSyncService } from '../src/org-sync-service.js';
 import { ShadowMetadataRepository } from '../src/shadow-metadata-repository.js';
 import { ShadowMetadataService } from '../src/shadow-metadata-service.js';
+import type { ShadowInternalTemplateProvider } from '../src/shadow-template-providers.js';
 import { YzjClient } from '../src/yzj-client.js';
 import { createInMemoryDatabase, createTestConfig } from './test-helpers.js';
 
@@ -112,6 +113,33 @@ const CUSTOMER_WIDGET_MAP = {
       {
         key: 'customer-pending',
         value: '待跟进',
+      },
+    ],
+    displaylinkageVos: [
+      {
+        additional: {
+          targetList: [
+            {
+              label: '售后服务代表',
+              value: 'Ps_1',
+            },
+          ],
+          option: [
+            {
+              label: '活跃',
+              value: 'customer-active',
+            },
+          ],
+          state: {
+            label: '必填',
+            value: 'required',
+          },
+        },
+        behavior: {
+          Ps_1: {
+            state: 'required',
+          },
+        },
       },
     ],
   },
@@ -530,6 +558,209 @@ const FOLLOWUP_WIDGET_MAP = {
     title: '跟进定位',
     type: 'locationWidget',
     required: false,
+  },
+} satisfies Record<string, unknown>;
+
+const CUSTOMER_INTERNAL_WIDGET_MAP = {
+  _S_NAME: {
+    ...CUSTOMER_WIDGET_MAP._S_NAME,
+    required: true,
+    readOnly: true,
+    edit: true,
+    view: true,
+    placeholder: '请输入',
+    extendFieldMap: {
+      wordLimit: 200,
+    },
+  },
+  _S_DISABLE: {
+    ...CUSTOMER_WIDGET_MAP._S_DISABLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+    placeholder: '请选择',
+  },
+  _S_TITLE: {
+    ...CUSTOMER_WIDGET_MAP._S_TITLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: false,
+    systemDefault: '1',
+    placeholder: '标题自动生成',
+    extendFieldMap: {
+      titleEntity: {
+        kind: 'TITLE_DYNAMIC',
+        list: [
+          {
+            formItem: '_S_NAME',
+            kind: 'ITEM_FORM_ITEM',
+          },
+        ],
+      },
+      defaultTitle: true,
+    },
+  },
+  Nu_1: {
+    ...CUSTOMER_WIDGET_MAP.Nu_1,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ra_0: {
+    ...CUSTOMER_WIDGET_MAP.Ra_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ra_3: {
+    ...CUSTOMER_WIDGET_MAP.Ra_3,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+} satisfies Record<string, unknown>;
+
+const CONTACT_INTERNAL_WIDGET_MAP = {
+  _S_NAME: {
+    ...CONTACT_WIDGET_MAP._S_NAME,
+    required: true,
+    readOnly: true,
+    edit: true,
+    view: true,
+    placeholder: '请输入',
+  },
+  _S_TITLE: {
+    ...CONTACT_WIDGET_MAP._S_TITLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: false,
+    systemDefault: '1',
+    placeholder: '请输入',
+    extendFieldMap: {
+      titleEntity: {
+        kind: 'TITLE_DYNAMIC',
+        list: [
+          {
+            formItem: '_S_NAME',
+            kind: 'ITEM_FORM_ITEM',
+          },
+        ],
+      },
+      defaultTitle: true,
+    },
+  },
+  _S_ENCODE: {
+    ...CONTACT_WIDGET_MAP._S_ENCODE,
+    readOnly: true,
+    edit: false,
+  },
+} satisfies Record<string, unknown>;
+
+const OPPORTUNITY_INTERNAL_WIDGET_MAP = {
+  _S_NAME: {
+    ...OPPORTUNITY_WIDGET_MAP._S_NAME,
+    readOnly: true,
+    edit: false,
+  },
+  _S_TITLE: {
+    ...OPPORTUNITY_WIDGET_MAP._S_TITLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+    systemDefault: '1',
+    extendFieldMap: {
+      titleEntity: {
+        kind: 'TITLE_DEFAULT',
+        list: [
+          {
+            formItem: '_S_APPLY',
+            kind: 'ITEM_FORM_ITEM',
+          },
+          {
+            formItem: '的',
+            kind: 'ITEM_STRING',
+          },
+          {
+            formItem: '商机',
+            kind: 'ITEM_TEMPLATENAME',
+          },
+        ],
+      },
+      defaultTitle: true,
+    },
+  },
+  Te_0: {
+    ...OPPORTUNITY_WIDGET_MAP.Te_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+} satisfies Record<string, unknown>;
+
+const FOLLOWUP_INTERNAL_WIDGET_MAP = {
+  _S_TITLE: {
+    ...FOLLOWUP_WIDGET_MAP._S_TITLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+    systemDefault: '1',
+    extendFieldMap: {
+      titleEntity: {
+        kind: 'TITLE_DEFAULT',
+        list: [
+          {
+            formItem: '_S_APPLY',
+            kind: 'ITEM_FORM_ITEM',
+          },
+          {
+            formItem: '的',
+            kind: 'ITEM_STRING',
+          },
+          {
+            formItem: '商机跟进记录',
+            kind: 'ITEM_TEMPLATENAME',
+          },
+        ],
+      },
+      defaultTitle: true,
+    },
+  },
+  Te_0: {
+    ...FOLLOWUP_WIDGET_MAP.Te_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ps_0: {
+    ...FOLLOWUP_WIDGET_MAP.Ps_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ra_0: {
+    ...FOLLOWUP_WIDGET_MAP.Ra_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Bd_0: {
+    ...FOLLOWUP_WIDGET_MAP.Bd_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
   },
 } satisfies Record<string, unknown>;
 
@@ -1002,6 +1233,54 @@ class StubApprovalClient extends ApprovalClient {
   }
 }
 
+class StubInternalTemplateProvider implements ShadowInternalTemplateProvider {
+  async getTemplate(params: { formCodeId: string }) {
+    const templateByFormCodeId: Record<string, { formDefId: string; templateTitle: string; widgetMap: Record<string, unknown> }> = {
+      [CUSTOMER_FORM_CODE_ID]: {
+        formDefId: 'form-def-customer',
+        templateTitle: '客户',
+        widgetMap: CUSTOMER_INTERNAL_WIDGET_MAP,
+      },
+      [CONTACT_FORM_CODE_ID]: {
+        formDefId: 'form-def-contact',
+        templateTitle: '联系人',
+        widgetMap: CONTACT_INTERNAL_WIDGET_MAP,
+      },
+      [OPPORTUNITY_FORM_CODE_ID]: {
+        formDefId: 'form-def-opportunity',
+        templateTitle: '商机',
+        widgetMap: OPPORTUNITY_INTERNAL_WIDGET_MAP,
+      },
+      [FOLLOWUP_FORM_CODE_ID]: {
+        formDefId: 'form-def-followup',
+        templateTitle: '商机跟进记录',
+        widgetMap: FOLLOWUP_INTERNAL_WIDGET_MAP,
+      },
+    };
+    const template = templateByFormCodeId[params.formCodeId];
+    if (!template) {
+      return null;
+    }
+
+    return {
+      formCodeId: params.formCodeId,
+      formDefId: template.formDefId,
+      templateTitle: template.templateTitle,
+      payload: {
+        data: {
+          formTemplate: {
+            id: template.formDefId,
+            formTemplateId: template.formDefId,
+            title: template.templateTitle,
+            formWidgets: Object.values(template.widgetMap),
+          },
+        },
+      },
+      widgetMap: template.widgetMap as Record<string, any>,
+    };
+  }
+}
+
 class StubLightCloudClient extends LightCloudClient {
   constructor() {
     super({ baseUrl: 'https://stub.yzj.local' });
@@ -1304,6 +1583,7 @@ async function createTestServer(options: {
       approvalClient,
       fieldBoundWorkbookPath,
     }),
+    internalTemplateProvider: new StubInternalTemplateProvider(),
     now: () => new Date('2026-04-23T09:00:00.000Z'),
   });
 
@@ -1457,7 +1737,10 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       activationStatus: string;
     }>;
     assert.equal(objectsPayload.length, 4);
-    assert.equal(objectsPayload[0].objectKey, 'contact');
+    assert.deepEqual(
+      objectsPayload.map((item) => item.objectKey).sort(),
+      ['contact', 'customer', 'followup', 'opportunity'],
+    );
     assert.equal(
       objectsPayload.find((item) => item.objectKey === 'opportunity')?.activationStatus,
       'active',
@@ -1474,6 +1757,9 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     const refreshPayload = (await refreshResponse.json()) as {
       fields: Array<{
         fieldCode: string;
+        required: boolean;
+        requiredMode?: string;
+        requiredRules?: Array<{ description: string }>;
         semanticSlot?: string;
         linkCodeId?: string;
         enumBinding?: { resolutionStatus: string };
@@ -1488,6 +1774,12 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     assert.equal(
       refreshPayload.fields.find((field) => field.fieldCode === 'Ps_1')?.semanticSlot,
       'service_rep_open_id',
+    );
+    assert.equal(refreshPayload.fields.find((field) => field.fieldCode === 'Ps_1')?.required, false);
+    assert.equal(refreshPayload.fields.find((field) => field.fieldCode === 'Ps_1')?.requiredMode, 'conditional');
+    assert.match(
+      refreshPayload.fields.find((field) => field.fieldCode === 'Ps_1')?.requiredRules?.[0]?.description ?? '',
+      /客户状态/,
     );
     assert.equal(
       refreshPayload.fields.find((field) => field.fieldCode === 'Pw_0')?.semanticSlot,
@@ -1530,12 +1822,12 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     assert.ok(searchSkill?.optionalParams.includes('Te_0'));
     assert.ok(searchSkill?.optionalParams.includes('linked_contact_form_inst_id'));
     assert.ok(searchSkill?.optionalParams.includes('_S_DISABLE'));
-    assert.ok(searchSkill?.optionalParams.includes('Ra_0'));
+    assert.ok(searchSkill?.optionalParams.includes('customer_status'));
     assert.ok(searchSkill?.optionalParams.includes('Te_7'));
     assert.ok(searchSkill?.optionalParams.includes('Nu_1'));
     assert.ok(searchSkill?.optionalParams.includes('Nu_0'));
     assert.equal(searchSkill?.optionalParams.includes('customer_name'), false);
-    assert.equal(searchSkill?.optionalParams.includes('customer_status'), false);
+    assert.equal(searchSkill?.optionalParams.includes('Ra_0'), false);
     assert.equal(searchSkill?.optionalParams.includes('phone'), false);
     const searchSkillMarkdown = readFileSync(searchSkill?.skillPath ?? '', 'utf8');
     const searchSkillExecution = readFileSync(searchSkill?.referencePaths.execution ?? '', 'utf8');
@@ -1834,7 +2126,8 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     assert.equal(executeUpsertPayload.writeMode, 'update');
     assert.deepEqual(executeUpsertPayload.formInstIds, [CUSTOMER_FORM_INST_ID]);
     assert.equal(executeUpsertPayload.requestBody.data[0]?.formInstId, CUSTOMER_FORM_INST_ID);
-    assert.equal(executeUpsertPayload.requestBody.data[0]?.widgetValue.Te_0, '华东制造更新客户');
+    assert.equal(executeUpsertPayload.requestBody.data[0]?.widgetValue._S_NAME, '华东制造更新客户');
+    assert.equal(executeUpsertPayload.requestBody.data[0]?.widgetValue._S_TITLE, '华东制造更新客户');
     assert.equal(executeUpsertPayload.requestBody.data[0]?.widgetValue.Ra_3, 'EeFfGgHh');
     assert.equal(executeUpsertPayload.requestBody.data[0]?.widgetValue.Da_0, Date.parse('2026-04-23'));
     assert.deepEqual(executeUpsertPayload.requestBody.data[0]?.widgetValue.Ps_1, ['open-live-2']);
@@ -2005,7 +2298,8 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     };
     assert.equal(previewPayload.readyToSend, false);
     assert.deepEqual(previewPayload.missingRuntimeInputs, ['operatorOpenId']);
-    assert.equal(previewPayload.requestBody.data[0].widgetValue.Te_0, '华东制造样板客户');
+    assert.equal(previewPayload.requestBody.data[0].widgetValue._S_NAME, '华东制造样板客户');
+    assert.equal(previewPayload.requestBody.data[0].widgetValue._S_TITLE, '华东制造样板客户');
   } finally {
     runtime.server.close();
     await once(runtime.server, 'close');
@@ -2480,7 +2774,9 @@ test('HTTP shadow preview rejects unsupported followup widgets and preserves ext
           mode: 'create',
           operatorOpenId: 'oid-followup-2',
           params: {
-            Te_0: '完成现场回访并记录问题',
+            followup_record: '完成现场回访并记录问题',
+            followup_method: '电话',
+            owner_open_id: 'open-followup-2',
             linked_customer_form_inst_id: CUSTOMER_FORM_INST_ID,
             linked_opportunity_form_inst_id: OPPORTUNITY_FORM_INST_ID,
             Bd_4: ORDER_CHANGE_FORM_INST_ID,

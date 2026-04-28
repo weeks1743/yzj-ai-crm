@@ -9,20 +9,20 @@
     "form_inst_id"
   ],
   "optionalParams": [
-    "Te_4",
     "Ra_2",
-    "Te_1",
-    "Te_0",
     "Ra_0",
-    "Ra_1",
+    "followup_method",
     "Bd_4",
     "linked_opportunity_form_inst_id",
     "linked_customer_form_inst_id",
     "Da_0",
     "Da_1",
     "owner_open_id",
-    "Ta_0",
+    "followup_record",
     "At_0"
+  ],
+  "derivedParams": [
+    "_S_TITLE"
   ],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "followup-update-preview",
@@ -70,5 +70,5 @@
   },
   "sourceObject": "followup",
   "sourceFormCodeId": "0a618c5d806545b997f60e8461b3f504",
-  "sourceVersion": "2026-04-24T08:59:16.696Z"
+  "sourceVersion": "2026-04-28T10:37:10.888Z"
 }

@@ -178,12 +178,40 @@ export interface ShadowFieldRelationBindingView {
   displayCol: string | null;
 }
 
+export type ShadowFieldRequiredMode = 'required' | 'conditional' | 'optional';
+export type ShadowFieldWritePolicy = 'promptable' | 'derived' | 'read_only';
+export type ShadowTemplateSource = 'public_view_form_def' | 'internal_get_form_by_code_id';
+
+export interface ShadowFieldRequiredRuleView {
+  kind: 'static' | 'conditional';
+  sourceFieldCode?: string;
+  sourceLabel?: string;
+  optionLabels?: string[];
+  description: string;
+}
+
+export interface ShadowFieldProvenanceView {
+  sources: ShadowTemplateSource[];
+  truthSource: ShadowTemplateSource;
+}
+
 export interface ShadowStandardizedFieldView {
   fieldCode: string;
   label: string;
   widgetType: string;
   required: boolean;
+  requiredMode?: ShadowFieldRequiredMode;
+  requiredRules?: ShadowFieldRequiredRuleView[];
   readOnly: boolean;
+  edit: boolean;
+  view: boolean;
+  systemDefault?: string | null;
+  placeholder?: string | null;
+  writePolicy: ShadowFieldWritePolicy;
+  isSystemField: boolean;
+  provenance: ShadowFieldProvenanceView;
+  writeParameterKey?: string;
+  searchParameterKey?: string;
   multi: boolean;
   linkCodeId?: string | null;
   options: ShadowFieldOption[];
@@ -289,6 +317,7 @@ export interface ShadowSkillView {
   notWhenToUse: string;
   requiredParams: string[];
   optionalParams: string[];
+  derivedParams: string[];
   confirmationPolicy: string;
   outputCardType: string;
   interactionStrategy: ShadowSkillInteractionStrategyView;

@@ -10,7 +10,7 @@
   ],
   "optionalParams": [
     "linked_contact_form_inst_id",
-    "Te_5",
+    "contact_name",
     "Te_4",
     "Te_3",
     "Ta_4",
@@ -18,18 +18,19 @@
     "Ta_2",
     "Te_8",
     "last_followup_date",
-    "phone",
+    "office_phone",
     "Da_1",
     "Te_6",
     "Da_2",
     "owner_open_id",
     "service_rep_open_id",
+    "enabled_state",
     "district",
+    "_S_DEPT",
     "province",
     "Ra_10",
     "city",
     "Ta_1",
-    "Ta_0",
     "At_0",
     "Ra_6",
     "Ra_7",
@@ -38,8 +39,14 @@
     "customer_type",
     "customer_status",
     "Ra_1",
+    "customer_name",
     "industry",
-    "Ra_9"
+    "Ra_9",
+    "contact_phone",
+    "company_phone"
+  ],
+  "derivedParams": [
+    "_S_TITLE"
   ],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "customer-update-preview",
@@ -87,5 +94,5 @@
   },
   "sourceObject": "customer",
   "sourceFormCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
-  "sourceVersion": "2026-04-24T08:38:15.214Z"
+  "sourceVersion": "2026-04-28T10:37:09.782Z"
 }

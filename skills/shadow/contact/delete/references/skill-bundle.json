@@ -9,6 +9,7 @@
     "form_inst_ids"
   ],
   "optionalParams": [],
+  "derivedParams": [],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "contact-delete-preview",
   "interactionStrategy": {
@@ -43,5 +44,5 @@
   },
   "sourceObject": "contact",
   "sourceFormCodeId": "a3ccc61c75c34cb28a7113a311418080",
-  "sourceVersion": "2026-04-24T08:59:16.078Z"
+  "sourceVersion": "2026-04-28T10:37:10.165Z"
 }

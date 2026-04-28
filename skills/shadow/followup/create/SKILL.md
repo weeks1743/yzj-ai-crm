@@ -10,8 +10,8 @@ Use this bundle only for the `followup` object. It is generated from the current
 ## Snapshot
 
 - `formCodeId`: `0a618c5d806545b997f60e8461b3f504`
-- `source_version`: `2026-04-24T08:59:16.696Z`
-- `schema_hash`: `d55c4662f9ef053014f3e657f68f8028775db7ab1e4052fa09ec1aae0731f05a`
+- `source_version`: `2026-04-28T10:37:10.888Z`
+- `schema_hash`: `52e8c079bd1f567f8b31c0b1d092880264eadf215a694fdf03dadc97ddee5a9b`
 - `field_count`: `23`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -33,7 +33,7 @@ Use this bundle only for the `followup` object. It is generated from the current
 - 向用户展示将要写入的关键字段摘要，得到明确确认后才执行 live write。
 
 ### Parameter Collection
-- 追问时使用业务标签，例如 商机跟进记录关键字段，不要直接暴露 `codeId`。
+- 追问时使用业务标签，例如 followup_method (跟进方式)、linked_customer_form_inst_id (客户编号)、owner_open_id (跟进负责人) 等 4 项，不要直接暴露 `codeId`。
 - 允许用户分多轮补充信息，不要一次性索要全部可选字段。
 - 用户只给自然语言描述时，先保留原意图，再补齐必填和引用信息。
 - 当用户只说“关联松井客户/挂到某联系人”这类口语化关系时，先 search 关联对象拿到精确记录，再回填。
@@ -59,8 +59,9 @@ Use this bundle only for the `followup` object. It is generated from the current
 
 ## Input Rules
 
-- Required params: (none)
-- Optional params: Te_4, Ra_2, Te_1, Te_0, Ra_0, Ra_1, Bd_4, linked_opportunity_form_inst_id, linked_customer_form_inst_id, Da_0, Da_1, owner_open_id, Ta_0, At_0
+- Required params: followup_method, linked_customer_form_inst_id, owner_open_id, followup_record
+- Optional params: Ra_2, Ra_0, Bd_4, linked_opportunity_form_inst_id, Da_0, Da_1, At_0
+- Derived params: _S_TITLE
 - Confirmation policy: `required_before_write`
 - This write skill now exposes a live write API. Use preview first, then call live write only after explicit user confirmation.
 
@@ -70,6 +71,13 @@ Use this bundle only for the `followup` object. It is generated from the current
 - Relation field `Bd_4` maps to `Bd_4`; exact search uses `_S_SERIAL` as `_name_`, target `formCodeId` is `eea919bb0e69418698ff457e74cc1c2b`.
 - Relation field `linked_opportunity_form_inst_id` maps to `Bd_3`; exact search uses `_S_SERIAL` as `_name_`, target `formCodeId` is `b1869173654e49fbac0b1fc6ad37e761`.
 - Relation field `linked_customer_form_inst_id` maps to `Bd_0`; exact search uses `_S_ENCODE` as `_name_`, target `formCodeId` is `e2cfd2aef9bf4576a760aa1c6a557170`.
+
+## Field Audit
+
+- 模板必填（需用户补齐）: `followup_method` -> 跟进方式(`Ra_1`, radioWidget, source=internal_get_form_by_code_id), `linked_customer_form_inst_id` -> 客户编号(`Bd_0`, basicDataWidget, source=internal_get_form_by_code_id), `owner_open_id` -> 跟进负责人(`Ps_0`, personSelectWidget, source=internal_get_form_by_code_id), `followup_record` -> 跟进记录(`Ta_0`, textAreaWidget, source=internal_get_form_by_code_id)
+- 条件必填（preview 触发校验）: (none)
+- 自动派生（preview/live 自动生成）: `_S_TITLE` -> 标题(`_S_TITLE`, textWidget, source=internal_get_form_by_code_id)
+- 只读不暴露（用户输入会被阻断）: `Te_4` -> 商机名称(`Te_4`, textWidget, source=internal_get_form_by_code_id), `Te_1` -> 联系人姓名(`Te_1`, textWidget, source=internal_get_form_by_code_id), `Te_0` -> 客户名称(`Te_0`, textWidget, source=internal_get_form_by_code_id), `_S_APPLY` -> 提交人(`_S_APPLY`, personSelectWidget, source=internal_get_form_by_code_id), `Lo_0` -> 地理位置(`Lo_0`, locationWidget, source=internal_get_form_by_code_id), `De_0` -> 说明文字(`De_0`, describeWidget, source=internal_get_form_by_code_id), `De_1` -> 说明文字(`De_1`, describeWidget, source=internal_get_form_by_code_id), `De_2` -> 说明文字(`De_2`, describeWidget, source=internal_get_form_by_code_id), `_S_SERIAL` -> 跟进记录编号(`_S_SERIAL`, serialNumWidget, source=internal_get_form_by_code_id), `_S_DATE` -> 申请日期(`_S_DATE`, dateWidget, source=internal_get_form_by_code_id), `_S_DEPT` -> 所属部门(`_S_DEPT`, departmentSelectWidget, source=internal_get_form_by_code_id)
 
 ## Public Option Rules
 
@@ -83,7 +91,7 @@ Use this bundle only for the `followup` object. It is generated from the current
 - Internal live API: `POST /api/shadow/objects/followup/execute/upsert`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; live write is enabled and should only be used after explicit user confirmation.
+- This bundle is generated for phase `0.6.0`; live write is enabled and should only be used after explicit user confirmation.
 
 ## References
 

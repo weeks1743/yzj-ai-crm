@@ -10,8 +10,8 @@ Use this bundle only for the `contact` object. It is generated from the current 
 ## Snapshot
 
 - `formCodeId`: `a3ccc61c75c34cb28a7113a311418080`
-- `source_version`: `2026-04-24T08:59:16.078Z`
-- `schema_hash`: `7c459d4595458c31a6fe4dde23fa1ceb35d42e579beacf26a69be9260fc9985e`
+- `source_version`: `2026-04-28T10:37:10.165Z`
+- `schema_hash`: `100ee87c8e418ef11dcbdcada90a58602395208aec86b1374dfacf772cd3110a`
 - `field_count`: `29`
 - `resolved_public_option_fields`: `3`
 - `pending_public_option_fields`: `0`
@@ -57,6 +57,7 @@ Use this bundle only for the `contact` object. It is generated from the current 
 
 - Required params: (none)
 - Optional params: linked_customer_form_inst_id, _S_ORDER, _S_SERIAL, _S_DATE, Ta_1, Ta_0, _S_ENCODE, _S_TITLE, Te_5, Te_4, Te_3, Te_2, Te_1, Ra_0, Ra_1, _S_NAME, _S_APPLY, Da_0, _S_DISABLE, district, _S_DEPT, Nu_0, province, city
+- Derived params: (none)
 - Confirmation policy: `no_confirmation_required`
 - This is a read / preview skill and does not require write confirmation.
 
@@ -83,7 +84,7 @@ Use this bundle only for the `contact` object. It is generated from the current 
 - Internal live API: `POST /api/shadow/objects/contact/execute/search`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.6.0`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

@@ -5,26 +5,32 @@
   "description": "基于联系人模板标准化字段预演轻云联系人创建请求。",
   "whenToUse": "当用户明确要录入联系人、新建联系人或补录联系人时使用。",
   "notWhenToUse": "当用户只是查询联系人、分析联系人或未准备写入确认时不要使用。",
-  "requiredParams": [],
+  "requiredParams": [
+    "contact_name",
+    "enabled_state",
+    "mobile_phone"
+  ],
   "optionalParams": [
     "linked_customer_form_inst_id",
+    "_S_ORDER",
     "Ta_1",
     "Ta_0",
     "At_0",
-    "_S_ENCODE",
-    "_S_TITLE",
     "Te_5",
     "Te_4",
     "Te_3",
-    "phone",
+    "office_phone",
     "Te_1",
     "Ra_0",
     "Ra_1",
-    "_S_NAME",
     "Da_0",
     "district",
+    "_S_DEPT",
     "province",
     "city"
+  ],
+  "derivedParams": [
+    "_S_TITLE"
   ],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "contact-create-preview",
@@ -36,7 +42,7 @@
       "向用户展示将要写入的关键字段摘要，得到明确确认后才执行 live write。"
     ],
     "parameterCollectionPolicy": [
-      "追问时使用业务标签，例如 联系人关键字段，不要直接暴露 `codeId`。",
+      "追问时使用业务标签，例如 contact_name (联系人姓名)、enabled_state (启用状态)、mobile_phone (手机)，不要直接暴露 `codeId`。",
       "允许用户分多轮补充信息，不要一次性索要全部可选字段。",
       "用户只给自然语言描述时，先保留原意图，再补齐必填和引用信息。",
       "当用户只说“关联松井客户/挂到某联系人”这类口语化关系时，先 search 关联对象拿到精确记录，再回填。",
@@ -72,5 +78,5 @@
   },
   "sourceObject": "contact",
   "sourceFormCodeId": "a3ccc61c75c34cb28a7113a311418080",
-  "sourceVersion": "2026-04-24T08:59:16.078Z"
+  "sourceVersion": "2026-04-28T10:37:10.165Z"
 }

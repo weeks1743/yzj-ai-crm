@@ -10,8 +10,8 @@ Use this bundle only for the `followup` object. It is generated from the current
 ## Snapshot
 
 - `formCodeId`: `0a618c5d806545b997f60e8461b3f504`
-- `source_version`: `2026-04-24T08:59:16.696Z`
-- `schema_hash`: `d55c4662f9ef053014f3e657f68f8028775db7ab1e4052fa09ec1aae0731f05a`
+- `source_version`: `2026-04-28T10:37:10.888Z`
+- `schema_hash`: `52e8c079bd1f567f8b31c0b1d092880264eadf215a694fdf03dadc97ddee5a9b`
 - `field_count`: `23`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -52,6 +52,7 @@ Use this bundle only for the `followup` object. It is generated from the current
 
 - Required params: form_inst_ids
 - Optional params: (none)
+- Derived params: (none)
 - Confirmation policy: `required_before_write`
 - This write skill now exposes a live write API. Use preview first, then call live write only after explicit user confirmation.
 
@@ -69,7 +70,7 @@ Use this bundle only for the `followup` object. It is generated from the current
 - Internal live API: `POST /api/shadow/objects/followup/execute/delete`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchDelete?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchDelete?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; live write is enabled and should only be used after explicit user confirmation.
+- This bundle is generated for phase `0.6.0`; live write is enabled and should only be used after explicit user confirmation.
 
 ## References
 

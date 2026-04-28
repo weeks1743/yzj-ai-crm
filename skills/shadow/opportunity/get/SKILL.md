@@ -10,8 +10,8 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 ## Snapshot
 
 - `formCodeId`: `b1869173654e49fbac0b1fc6ad37e761`
-- `source_version`: `2026-04-24T08:59:16.425Z`
-- `schema_hash`: `b756c899b70ec303bda1afb5be00c376c22341eb62bf05be0b67d6a7c2315e39`
+- `source_version`: `2026-04-28T10:39:48.776Z`
+- `schema_hash`: `6a797384d8b4c6f40ec31bf11b2e38b081dd6a4f1e012e5b1d59a07f2229cb24`
 - `field_count`: `35`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -51,6 +51,7 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 
 - Required params: form_inst_id
 - Optional params: (none)
+- Derived params: (none)
 - Confirmation policy: `no_confirmation_required`
 - This is a read / preview skill and does not require write confirmation.
 - `form_inst_id` is mandatory. Do not guess it from customer names or fuzzy search results.
@@ -70,7 +71,7 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 - Internal live API: `POST /api/shadow/objects/opportunity/execute/get`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/list?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/list?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.6.0`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

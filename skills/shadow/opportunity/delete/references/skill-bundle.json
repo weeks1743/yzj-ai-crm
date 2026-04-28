@@ -9,6 +9,7 @@
     "form_inst_ids"
   ],
   "optionalParams": [],
+  "derivedParams": [],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "opportunity-delete-preview",
   "interactionStrategy": {
@@ -43,5 +44,5 @@
   },
   "sourceObject": "opportunity",
   "sourceFormCodeId": "b1869173654e49fbac0b1fc6ad37e761",
-  "sourceVersion": "2026-04-24T08:59:16.425Z"
+  "sourceVersion": "2026-04-28T10:39:48.776Z"
 }
