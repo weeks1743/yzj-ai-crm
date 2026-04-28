@@ -889,7 +889,7 @@ function toPersistableMessageInfo(
     return null;
   }
 
-  const extraInfo = (candidate.extraInfo ?? candidate.message.extraInfo) as
+  const extraInfo = (candidate.message.extraInfo ?? candidate.extraInfo) as
     | AssistantChatMessage['extraInfo']
     | undefined;
   return {
@@ -1420,6 +1420,31 @@ function getSlashCommandFromInput(text: string) {
 
 function getSlashCommandByRoute(route: string) {
   return slashCommands.find((item) => item.route === route && item.key !== 'plan');
+}
+
+function resolveWritebackResume(
+  text: string,
+  agentTrace?: NonNullable<NonNullable<AssistantChatMessage['extraInfo']>['agentTrace']>,
+) {
+  const pending = agentTrace?.pendingConfirmation;
+  if (!pending || pending.status !== 'pending') {
+    return undefined;
+  }
+
+  const normalized = text.replace(/\s+/g, '').toLowerCase();
+  const approve = /^(确认|确认写回|同意|同意写回|批准|批准写回|执行|提交|提交写回|approve|yes|ok)$/.test(normalized);
+  const reject = /^(取消|取消写回|拒绝|拒绝写回|不要|不写回|reject|no)$/.test(normalized);
+
+  if (!approve && !reject) {
+    return undefined;
+  }
+
+  return {
+    runId: pending.runId,
+    action: 'confirm_writeback' as const,
+    decision: approve ? 'approve' as const : 'reject' as const,
+    confirmationId: pending.confirmationId,
+  };
 }
 
 function getSceneSourceTags(sceneKey: string) {
@@ -2372,6 +2397,7 @@ function AssistantWorkspace() {
         type: file.type || 'file',
         size: file.size,
       })),
+      resume: resolveWritebackResume(queryText, latestAgentTrace),
     });
     setInputValue('');
     setAttachedFiles([]);
@@ -2632,7 +2658,7 @@ function AssistantWorkspace() {
             key: item.id,
             status: item.status,
             loading: item.status === 'loading',
-            extraInfo: item.extraInfo ?? item.message.extraInfo,
+            extraInfo: item.message.extraInfo ?? item.extraInfo,
           }))}
         />
       ) : (

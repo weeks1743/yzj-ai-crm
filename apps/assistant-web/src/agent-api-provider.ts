@@ -5,6 +5,9 @@ import {
   type XRequestOptions,
 } from '@ant-design/x-sdk';
 
+const TEST_OPERATOR_OPEN_ID =
+  import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || '69e75eb5e4b0e65b61c014da';
+
 export interface AssistantAttachment {
   name: string;
   url: string;
@@ -47,6 +50,43 @@ export interface AssistantChatMessage {
       executionState: any;
       toolCalls: any[];
       qdrantFilter?: unknown;
+      selectedTool?: {
+        toolCode: string;
+        reason: string;
+        input: Record<string, unknown>;
+        confidence: number;
+      };
+      pendingConfirmation?: {
+        confirmationId: string;
+        runId: string;
+        toolCode: string;
+        title: string;
+        summary: string;
+        preview: unknown;
+        requestInput: Record<string, unknown>;
+        status: 'pending' | 'approved' | 'rejected' | 'expired';
+        createdAt: string;
+        decidedAt: string | null;
+      } | null;
+      resolvedContext?: {
+        usedContext: boolean;
+        reason: string;
+        subject?: {
+          kind: string;
+          type?: string;
+          id?: string;
+          name?: string;
+        };
+        sourceRunId?: string;
+        evidenceRefs?: AssistantEvidenceCard[];
+      } | null;
+      policyDecisions?: Array<{
+        policyCode: string;
+        action: string;
+        toolCode?: string;
+        reason: string;
+        createdAt: string;
+      }>;
     };
   };
 }
@@ -56,6 +96,12 @@ export interface AssistantRequestInput {
   sceneKey: string;
   conversationKey: string;
   attachments?: AssistantAttachment[];
+  resume?: {
+    runId: string;
+    action: 'confirm_writeback';
+    decision: 'approve' | 'reject';
+    confirmationId?: string;
+  };
 }
 
 interface AssistantResponseOutput {
@@ -148,6 +194,10 @@ async function agentApiFetch(
       query: params.query,
       sceneKey: params.sceneKey,
       attachments: params.attachments ?? [],
+      tenantContext: {
+        operatorOpenId: TEST_OPERATOR_OPEN_ID,
+      },
+      ...(params.resume ? { resume: params.resume } : {}),
     }),
     signal: options.signal,
   });

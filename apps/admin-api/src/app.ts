@@ -79,6 +79,7 @@ function writeError(response: ServerResponse, error: unknown): void {
     return;
   }
 
+  console.error('[admin-api] unhandled request error', error);
   writeJson(response, 500, {
     code: 'INTERNAL_SERVER_ERROR',
     message: '服务内部错误',

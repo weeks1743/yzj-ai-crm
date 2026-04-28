@@ -249,7 +249,14 @@ export interface ArtifactPresentationResponse {
 
 export type AgentActionType = 'query' | 'analyze' | 'write' | 'plan' | 'export' | 'clarify';
 export type AgentTargetType = 'company' | 'customer' | 'opportunity' | 'contact' | 'followup' | 'artifact' | 'unknown';
-export type AgentTaskPlanKind = 'company_research' | 'artifact_search' | 'audio_not_supported' | 'unknown_clarify';
+export type AgentTaskPlanKind =
+  | 'tool_execution'
+  | 'tool_confirmation'
+  | 'tool_clarify'
+  | 'company_research'
+  | 'artifact_search'
+  | 'audio_not_supported'
+  | 'unknown_clarify';
 export type AgentExecutionStatus =
   | 'draft'
   | 'running'
@@ -337,6 +344,13 @@ export interface AgentChatRequest {
   tenantContext?: {
     eid?: string;
     appId?: string;
+    operatorOpenId?: string;
+  };
+  resume?: {
+    runId: string;
+    action: 'confirm_writeback';
+    decision: 'approve' | 'reject';
+    confirmationId?: string;
   };
 }
 
@@ -369,6 +383,43 @@ export interface AgentChatMessage {
       executionState: ExecutionState;
       toolCalls: AgentToolCall[];
       qdrantFilter?: unknown;
+      selectedTool?: {
+        toolCode: string;
+        reason: string;
+        input: Record<string, unknown>;
+        confidence: number;
+      };
+      pendingConfirmation?: {
+        confirmationId: string;
+        runId: string;
+        toolCode: string;
+        title: string;
+        summary: string;
+        preview: unknown;
+        requestInput: Record<string, unknown>;
+        status: 'pending' | 'approved' | 'rejected' | 'expired';
+        createdAt: string;
+        decidedAt: string | null;
+      } | null;
+      resolvedContext?: {
+        usedContext: boolean;
+        reason: string;
+        subject?: {
+          kind: string;
+          type?: string;
+          id?: string;
+          name?: string;
+        };
+        sourceRunId?: string;
+        evidenceRefs?: AgentEvidenceCard[];
+      } | null;
+      policyDecisions?: Array<{
+        policyCode: string;
+        action: string;
+        toolCode?: string;
+        reason: string;
+        createdAt: string;
+      }>;
     };
   };
 }
@@ -709,17 +760,55 @@ export interface YzjApprovalOption {
   [key: string]: unknown;
 }
 
+export interface YzjApprovalDisplayLinkage {
+  additional?: {
+    target?: {
+      label?: string;
+      value?: string;
+    };
+    targetList?: Array<{
+      label?: string;
+      value?: string;
+    }>;
+    option?: Array<{
+      label?: string;
+      value?: string;
+    }>;
+    state?: {
+      label?: string;
+      value?: string;
+    };
+    [key: string]: unknown;
+  };
+  behavior?: Record<string, {
+    state?: string;
+    data?: string;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
 export interface YzjApprovalWidget {
   codeId: string;
   title?: string;
   type: string;
-  required?: boolean;
+  required?: boolean | string | number | null;
+  isRequired?: boolean | string | number | null;
+  requiredFlag?: boolean | string | number | null;
+  mustInput?: boolean | string | number | null;
+  notNull?: boolean | string | number | null;
   readOnly?: boolean;
+  edit?: boolean;
+  view?: boolean;
+  systemDefault?: string | number | null;
+  placeholder?: string | null;
+  noRepeat?: boolean;
   option?: 'single' | 'multi' | string | null;
   options?: YzjApprovalOption[];
   referId?: string;
   parentCodeId?: string | null;
   extendFieldMap?: Record<string, unknown> | null;
+  displaylinkageVos?: YzjApprovalDisplayLinkage[];
   [key: string]: unknown;
 }
 
@@ -737,10 +826,14 @@ export interface YzjApprovalFormTemplateResponse {
   errorCode: number;
   error?: string | null;
   data?: {
-    formDefId?: string;
+    formDefId?: string | null;
     formInfo?: {
       widgetMap?: Record<string, YzjApprovalWidget>;
       detailMap?: Record<string, YzjApprovalDetailWidget>;
+    };
+    basicInfo?: {
+      formDefId?: string | null;
+      [key: string]: unknown;
     };
     [key: string]: unknown;
   };
@@ -809,12 +902,40 @@ export interface ShadowFieldRelationBinding {
   displayCol: string | null;
 }
 
+export type ShadowFieldRequiredMode = 'required' | 'conditional' | 'optional';
+export type ShadowFieldWritePolicy = 'promptable' | 'derived' | 'read_only';
+export type ShadowTemplateSource = 'public_view_form_def' | 'internal_get_form_by_code_id';
+
+export interface ShadowFieldRequiredRule {
+  kind: 'static' | 'conditional';
+  sourceFieldCode?: string;
+  sourceLabel?: string;
+  optionLabels?: string[];
+  description: string;
+}
+
+export interface ShadowFieldProvenance {
+  sources: ShadowTemplateSource[];
+  truthSource: ShadowTemplateSource;
+}
+
 export interface ShadowStandardizedField {
   fieldCode: string;
   label: string;
   widgetType: string;
   required: boolean;
+  requiredMode?: ShadowFieldRequiredMode;
+  requiredRules?: ShadowFieldRequiredRule[];
   readOnly: boolean;
+  edit: boolean;
+  view: boolean;
+  systemDefault?: string | null;
+  placeholder?: string | null;
+  writePolicy: ShadowFieldWritePolicy;
+  isSystemField: boolean;
+  provenance: ShadowFieldProvenance;
+  writeParameterKey?: string;
+  searchParameterKey?: string;
   multi: boolean;
   linkCodeId?: string | null;
   options: ShadowFieldOption[];
@@ -822,6 +943,35 @@ export interface ShadowStandardizedField {
   semanticSlot?: ShadowSemanticSlot;
   enumBinding?: ShadowFieldEnumBinding;
   relationBinding?: ShadowFieldRelationBinding;
+}
+
+export interface ShadowMergedTemplateDiagnostics {
+  publicWidgetCount: number;
+  internalWidgetCount: number;
+  mergedWidgetCount: number;
+  publicOnlyFields: string[];
+  internalOnlyFields: string[];
+  truthOverlayFields: string[];
+}
+
+export interface ShadowMergedTemplateRaw {
+  formDefId?: string | null;
+  basicInfo?: {
+    formDefId?: string | null;
+    [key: string]: unknown;
+  };
+  formInfo?: {
+    widgetMap?: Record<string, YzjApprovalWidget>;
+    detailMap?: Record<string, YzjApprovalDetailWidget>;
+    [key: string]: unknown;
+  };
+  templateTitle?: string | null;
+  sourcePayloads: {
+    publicViewFormDef: NonNullable<YzjApprovalFormTemplateResponse['data']> | null;
+    internalGetFormByCodeId: unknown | null;
+  };
+  mergeDiagnostics: ShadowMergedTemplateDiagnostics;
+  [key: string]: unknown;
 }
 
 export interface ShadowObjectRegistryRecord {
@@ -874,6 +1024,7 @@ export interface ShadowSkillContract {
   notWhenToUse: string;
   requiredParams: string[];
   optionalParams: string[];
+  derivedParams: string[];
   confirmationPolicy: string;
   outputCardType: string;
   interactionStrategy: ShadowSkillInteractionStrategy;

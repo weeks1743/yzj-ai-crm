@@ -9,13 +9,59 @@ import type {
   IntentFrame,
   TaskPlan,
 } from './contracts.js';
+import type { ConfirmationRequest, ContextFrame, ContextFrameSubject } from './agent-core.js';
 
 interface FocusRow {
+  run_id?: string;
   intent_frame_json: string;
+  evidence_refs_json?: string;
+}
+
+interface ConfirmationRow {
+  confirmation_id: string;
+  run_id: string;
+  tool_code: string;
+  status: ConfirmationRequest['status'];
+  title: string;
+  summary: string;
+  preview_json: string;
+  request_input_json: string;
+  created_at: string;
+  decided_at: string | null;
 }
 
 export class AgentRunRepository {
   constructor(private readonly database: DatabaseSync) {}
+
+  findContextFrame(conversationKey: string): ContextFrame | null {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT run_id, intent_frame_json, evidence_refs_json
+          FROM agent_runs
+          WHERE conversation_key = ?
+          ORDER BY created_at DESC
+          LIMIT 10
+        `,
+      )
+      .all(conversationKey) as unknown as FocusRow[];
+
+    for (const row of rows) {
+      const evidenceRefs = parseEvidenceRefs(row.evidence_refs_json);
+      const subject = resolveSubjectFromRun(row.intent_frame_json, evidenceRefs);
+      if (subject?.name) {
+        return {
+          subject,
+          sourceRunId: row.run_id,
+          evidenceRefs,
+          confidence: evidenceRefs.length ? 0.86 : 0.72,
+          resolvedBy: evidenceRefs.length ? 'agent_run.evidence_refs' : 'agent_run.intent_frame',
+        };
+      }
+    }
+
+    return null;
+  }
 
   findFocusedCompany(conversationKey: string): string | null {
     const row = this.database
@@ -62,7 +108,7 @@ export class AgentRunRepository {
     this.database
       .prepare(
         `
-          INSERT INTO agent_runs (
+          INSERT OR REPLACE INTO agent_runs (
             run_id, trace_id, eid, app_id, conversation_key, scene_key, user_input,
             intent_frame_json, task_plan_json, execution_state_json, evidence_refs_json,
             status, created_at, updated_at
@@ -129,7 +175,7 @@ export class AgentRunRepository {
 
     const insertToolCall = this.database.prepare(
       `
-        INSERT INTO agent_tool_calls (
+        INSERT OR REPLACE INTO agent_tool_calls (
           tool_call_id, run_id, tool_code, status, input_summary, output_summary,
           started_at, finished_at, error_message
         )
@@ -151,4 +197,163 @@ export class AgentRunRepository {
       );
     }
   }
+
+  saveConfirmation(confirmation: ConfirmationRequest): void {
+    this.database
+      .prepare(
+        `
+          INSERT OR REPLACE INTO agent_confirmations (
+            confirmation_id, run_id, tool_code, status, title, summary,
+            preview_json, request_input_json, created_at, decided_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        confirmation.confirmationId,
+        confirmation.runId,
+        confirmation.toolCode,
+        confirmation.status,
+        confirmation.title,
+        confirmation.summary,
+        JSON.stringify(confirmation.preview),
+        JSON.stringify(confirmation.requestInput),
+        confirmation.createdAt,
+        confirmation.decidedAt,
+      );
+  }
+
+  findPendingConfirmation(runId: string, confirmationId?: string): ConfirmationRequest | null {
+    const row = confirmationId
+      ? this.database
+          .prepare(
+            `
+              SELECT *
+              FROM agent_confirmations
+              WHERE run_id = ? AND confirmation_id = ? AND status = 'pending'
+              LIMIT 1
+            `,
+          )
+          .get(runId, confirmationId)
+      : this.database
+          .prepare(
+            `
+              SELECT *
+              FROM agent_confirmations
+              WHERE run_id = ? AND status = 'pending'
+              ORDER BY created_at DESC
+              LIMIT 1
+            `,
+          )
+          .get(runId);
+
+    return row ? mapConfirmationRow(row as unknown as ConfirmationRow) : null;
+  }
+
+  resolveConfirmation(input: {
+    runId: string;
+    confirmationId: string;
+    status: 'approved' | 'rejected';
+    decidedAt?: string;
+  }): ConfirmationRequest | null {
+    const decidedAt = input.decidedAt ?? new Date().toISOString();
+    this.database
+      .prepare(
+        `
+          UPDATE agent_confirmations
+          SET status = ?, decided_at = ?
+          WHERE run_id = ? AND confirmation_id = ? AND status = 'pending'
+        `,
+      )
+      .run(input.status, decidedAt, input.runId, input.confirmationId);
+
+    const row = this.database
+      .prepare(
+        `
+          SELECT *
+          FROM agent_confirmations
+          WHERE run_id = ? AND confirmation_id = ?
+          LIMIT 1
+        `,
+      )
+      .get(input.runId, input.confirmationId);
+
+    return row ? mapConfirmationRow(row as unknown as ConfirmationRow) : null;
+  }
+}
+
+function parseEvidenceRefs(value?: string): AgentEvidenceCard[] {
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isEvidenceRef) : [];
+  } catch {
+    return [];
+  }
+}
+
+function isEvidenceRef(value: unknown): value is AgentEvidenceCard {
+  return Boolean(
+    value
+      && typeof value === 'object'
+      && typeof (value as AgentEvidenceCard).title === 'string'
+      && typeof (value as AgentEvidenceCard).anchorLabel === 'string',
+  );
+}
+
+function resolveSubjectFromRun(intentJson: string, evidenceRefs: AgentEvidenceCard[]): ContextFrameSubject | null {
+  try {
+    const intent = JSON.parse(intentJson) as IntentFrame;
+    const target = intent.targets.find((item) => item.name?.trim());
+    if (target) {
+      return {
+        kind: mapTargetKind(target.type),
+        type: target.type,
+        id: target.id,
+        name: target.name,
+      };
+    }
+  } catch {
+    // Ignore malformed historical rows.
+  }
+
+  const evidence = evidenceRefs.find((item) => item.anchorLabel?.trim());
+  return evidence
+    ? {
+        kind: 'artifact',
+        type: 'artifact_anchor',
+        id: evidence.artifactId,
+        name: evidence.anchorLabel,
+      }
+    : null;
+}
+
+function mapTargetKind(type: IntentFrame['targetType']): ContextFrameSubject['kind'] {
+  if (type === 'artifact') {
+    return 'artifact';
+  }
+  if (type === 'company') {
+    return 'external_subject';
+  }
+  if (type === 'unknown') {
+    return 'unknown';
+  }
+  return 'record';
+}
+
+function mapConfirmationRow(row: ConfirmationRow): ConfirmationRequest {
+  return {
+    confirmationId: row.confirmation_id,
+    runId: row.run_id,
+    toolCode: row.tool_code,
+    title: row.title,
+    summary: row.summary,
+    preview: JSON.parse(row.preview_json),
+    requestInput: JSON.parse(row.request_input_json),
+    status: row.status,
+    createdAt: row.created_at,
+    decidedAt: row.decided_at,
+  };
 }

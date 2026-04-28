@@ -50,7 +50,7 @@ function normalizeIntent(value: any, input: AgentChatRequest, focusedCompany?: s
   const targets: IntentFrame['targets'] = Array.isArray(value?.targets)
     ? value.targets
         .map((item: any) => ({
-          type: item?.type === 'artifact' ? 'artifact' : item?.type === 'company' ? 'company' : 'unknown',
+          type: normalizeTargetType(item?.type),
           id: cleanupCompanyName(String(item?.id || item?.name || '').trim()),
           name: cleanupCompanyName(String(item?.name || item?.id || '').trim()),
         }))
@@ -94,6 +94,12 @@ function normalizeIntent(value: any, input: AgentChatRequest, focusedCompany?: s
     confidence: Number.isFinite(Number(value?.confidence)) ? Math.max(0, Math.min(1, Number(value.confidence))) : 0.6,
     source: 'llm',
   };
+}
+
+function normalizeTargetType(value: unknown): IntentFrame['targetType'] {
+  return ['company', 'customer', 'opportunity', 'contact', 'followup', 'artifact', 'unknown'].includes(String(value))
+    ? String(value) as IntentFrame['targetType']
+    : 'unknown';
 }
 
 function extractCompanyNameFromMaterials(value: unknown): string {
