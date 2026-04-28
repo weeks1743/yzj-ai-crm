@@ -9,7 +9,7 @@ import type {
   ShadowSkillOperation,
   ShadowSkillView,
 } from '@shared';
-import { externalSkillRows, sceneAssemblyDrafts } from '@shared';
+import { externalSkillRows, sceneAssemblyDrafts, scenePlanPlaybooks } from '@shared';
 import { requestJson } from '@/utils/request';
 
 export const shadowObjectOrder: ShadowObjectKey[] = [
@@ -88,8 +88,8 @@ export const salesStageMeta: Record<string, {
   },
   方案推进: {
     indexLabel: '阶段 6',
-    focus: '基于客户诉求与价值定位，组织公司内部方案、案例和专家资源推进下一轮动作。',
-    helper: '重点形成候选方案、案例引用、专家协同和推进支持包。',
+    focus: '基于客户诉求与价值定位，匹配公司内部方案和案例，推动下一轮动作。',
+    helper: '重点形成候选方案、案例引用和推进建议。',
     color: 'green',
   },
 };
@@ -124,8 +124,8 @@ export const salesPhaseMeta: Record<string, {
   },
   方案推进: {
     indexLabel: '阶段 4',
-    focus: '围绕客户诉求和价值定位去匹配公司内部方案、案例和专家支持，推动下一轮方案动作。',
-    helper: '对应方案匹配与专家协同这类真正往前推进的复合场景。',
+    focus: '围绕客户诉求和价值定位去匹配公司内部方案和案例，推动下一轮方案动作。',
+    helper: '对应方案匹配这类普通方案推进技能。',
     color: 'green',
     stageNames: ['方案推进'],
   },
@@ -423,6 +423,7 @@ export function resolveSceneAssemblyViews(params: {
       upstreamAssets: draft.upstreamAssets,
       outputs: draft.outputs,
       orchestrationChain: draft.orchestrationChain,
+      playbook: scenePlanPlaybooks[draft.key],
       status: hasRecordSkillGap ? '依赖缺口' : hasExternalRisk ? '能力风险' : '待组装',
       recordSkillDependencies,
       externalSkillDependencies,

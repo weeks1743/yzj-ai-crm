@@ -575,7 +575,7 @@ const SkillsCatalogPage = () => {
                     message="图片试运行台"
                     description={
                       current.status === '运行中'
-                        ? '当前走真实 HTTP provider，生成结果仅用于后台即时预览，不进入正式 AI 资产体系。'
+                        ? '当前走真实 HTTP provider，生成结果仅用于后台即时预览，不进入正式任务沉淀。'
                         : '当前仍可试运行，但如果缺少本地 .env 配置，接口会返回可读错误而不会静默失败。'
                     }
                   />

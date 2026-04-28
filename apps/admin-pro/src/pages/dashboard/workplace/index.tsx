@@ -8,10 +8,8 @@ import { Link } from '@umijs/max';
 import { Button, List, Space, Tag, Timeline, Typography } from 'antd';
 import type { ProColumns } from '@ant-design/pro-components';
 import {
-  assetPages,
   sceneTasks,
   tenantContext,
-  visitBriefs,
 } from '@shared';
 
 const { Statistic } = StatisticCard;
@@ -63,13 +61,13 @@ const WorkplacePage = () => {
         <ProCard colSpan="65%" title="今日运营摘要">
           <Space orientation="vertical" size={16} style={{ width: '100%' }}>
             <Paragraph style={{ marginBottom: 0 }}>
-              双系统已经进入“正式后台 + 正式 AI 端”协同原型阶段，管理员当前最重要的工作是保证对象元数据、技能版本、确认策略和资产可观测性始终一致。
+              双系统已经进入“正式后台 + 正式 AI 端”协同原型阶段，管理员当前最重要的工作是保证对象元数据、工具版本、确认策略和运行观测始终一致。
             </Paragraph>
             <Timeline
               items={[
-                { children: '09:18 公司研究快照待补源，已通知研究能力组。 ' },
-                { children: '10:51 星海精工拜访材料生成成功并下发销售。' },
-                { children: '11:32 录音导入链路完成回写，追踪审计正常。' },
+                { children: '09:18 客户研究计划进入等待补源状态。 ' },
+                { children: '10:51 星海精工会话任务完成写回确认。' },
+                { children: '11:32 录音导入相关 TaskPlan 挂起等待补充纪要。' },
               ]}
             />
           </Space>
@@ -77,12 +75,8 @@ const WorkplacePage = () => {
         <ProCard colSpan="35%" title="今日关键指标">
           <Space orientation="vertical" size={16} style={{ width: '100%' }}>
             <Statistic title="活跃任务" value={sceneTasks.length} suffix="个" />
-            <Statistic title="拜访材料结果" value={visitBriefs.length} suffix="份" />
-            <Statistic
-              title="录音分析资产"
-              value={assetPages['audio-analysis'].items.length}
-              suffix="条"
-            />
+            <Statistic title="会话任务" value={sceneTasks.length} suffix="个" />
+            <Statistic title="待确认任务" value={1} suffix="个" />
           </Space>
         </ProCard>
       </ProCard>
@@ -107,9 +101,9 @@ const WorkplacePage = () => {
                 path: '/skills/record-skills/customer',
                 desc: '查看客户技能、字段快照与刷新状态。',
               },
-              { title: '录音分析资产', path: '/assets/audio-analysis', desc: '查看转写和异步分析结果。' },
-              { title: '可观测性', path: '/settings/observability', desc: '按追踪ID / 任务ID 排查问题。' },
-              { title: '安全与运营', path: '/settings/security', desc: '查看跨租户拦截和脱敏规则。' },
+              { title: '会话任务', path: '/agent-governance/sessions', desc: '查看用户会话、计划状态和任务沉淀。' },
+              { title: '运行观测', path: '/agent-governance/runtime-observability', desc: '按追踪ID / 任务ID 排查问题。' },
+              { title: '策略与确认', path: '/agent-governance/policies-confirmation', desc: '查看写回确认和守卫规则。' },
             ]}
             renderItem={(item) => (
               <List.Item

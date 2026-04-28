@@ -241,7 +241,7 @@ const STATIC_EXTERNAL_SKILLS: StaticExternalSkillDefinition[] = [
     label: '录音转写',
     skillCode: 'ext.audio_transcribe',
     trigger: '音频文件导入',
-    route: '/chat/post-visit-loop',
+    route: '/chat',
     dependencies: ['语音服务 Provider', '对象存储'],
     owner: '语音能力组',
     sla: 'P95 < 5 分钟',

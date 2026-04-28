@@ -3,6 +3,9 @@ import Busboy from 'busboy';
 import type {
   ApiErrorResponse,
   AppConfig,
+  AgentChatRequest,
+  ArtifactSearchRequest,
+  CompanyResearchArtifactRequest,
   EnterprisePptTemplatePromptResponse,
   EnterprisePptTemplateUploadResponse,
   ExternalSkillJobRequest,
@@ -17,7 +20,10 @@ import type {
   ShadowPreviewUpsertInput,
 } from './contracts.js';
 import { ApprovalFileService } from './approval-file-service.js';
-import { AppError, BadRequestError } from './errors.js';
+import { AgentService } from './agent-service.js';
+import { AppError, BadRequestError, ServiceUnavailableError } from './errors.js';
+import { ArtifactPresentationService } from './artifact-presentation-service.js';
+import { ArtifactService } from './artifact-service.js';
 import { EnterprisePptTemplateService } from './enterprise-ppt-template-service.js';
 import { ExternalSkillService } from './external-skill-service.js';
 import { OrgSyncService, getRunIdFromConflict } from './org-sync-service.js';
@@ -31,6 +37,9 @@ interface CreateAdminApiServerOptions {
   approvalFileService: ApprovalFileService;
   externalSkillService: ExternalSkillService;
   enterprisePptTemplateService: EnterprisePptTemplateService;
+  artifactService?: ArtifactService;
+  artifactPresentationService?: ArtifactPresentationService;
+  agentService?: AgentService;
 }
 
 const SHADOW_OBJECT_KEYS = new Set<ShadowObjectKey>([
@@ -285,6 +294,15 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         return;
       }
 
+      if (method === 'POST' && url.pathname === '/api/agent/chat') {
+        if (!options.agentService) {
+          throw new ServiceUnavailableError('Agent Runtime 服务未启用');
+        }
+        const payload = await readJsonBody<AgentChatRequest>(request);
+        writeJson(response, 200, await options.agentService.chat(payload));
+        return;
+      }
+
       if (method === 'POST' && url.pathname === '/api/external-skills/image-generate') {
         const payload = await readJsonBody<ImageGenerationRequest>(request);
         writeJson(response, 200, await options.externalSkillService.generateImage(payload));
@@ -353,6 +371,57 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
             'Access-Control-Allow-Origin': '*',
           });
           response.end(content);
+          return;
+        }
+      }
+
+      if (method === 'POST' && url.pathname === '/api/artifacts/company-research') {
+        if (!options.artifactService) {
+          throw new ServiceUnavailableError('Artifact 服务未启用');
+        }
+        const payload = await readJsonBody<CompanyResearchArtifactRequest>(request);
+        writeJson(response, 201, await options.artifactService.createCompanyResearchArtifact(payload));
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/artifacts/search') {
+        if (!options.artifactService) {
+          throw new ServiceUnavailableError('Artifact 服务未启用');
+        }
+        const payload = await readJsonBody<ArtifactSearchRequest>(request);
+        writeJson(response, 200, await options.artifactService.search(payload));
+        return;
+      }
+
+      if (method === 'GET' && url.pathname.startsWith('/api/artifacts/')) {
+        if (!options.artifactService) {
+          throw new ServiceUnavailableError('Artifact 服务未启用');
+        }
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length === 4 && parts[3] === 'presentation') {
+          if (!options.artifactPresentationService) {
+            throw new ServiceUnavailableError('Artifact PPT 生成服务未启用');
+          }
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          writeJson(response, 200, await options.artifactPresentationService.getPresentation(artifactId));
+          return;
+        }
+
+        if (parts.length === 3) {
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          writeJson(response, 200, await options.artifactService.getArtifact(artifactId));
+          return;
+        }
+      }
+
+      if (method === 'POST' && url.pathname.startsWith('/api/artifacts/')) {
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length === 4 && parts[3] === 'presentation') {
+          if (!options.artifactPresentationService) {
+            throw new ServiceUnavailableError('Artifact PPT 生成服务未启用');
+          }
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          writeJson(response, 202, await options.artifactPresentationService.ensurePresentation(artifactId));
           return;
         }
       }

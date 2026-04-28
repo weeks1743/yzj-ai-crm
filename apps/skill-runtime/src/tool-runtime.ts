@@ -959,7 +959,7 @@ export function createCompanyResearchTools(): RuntimeTool[] {
       async execute(rawArgs, context) {
         const args = expectObject(rawArgs);
         const query = expectString(args, 'query');
-        const maxResults = optionalInteger(args, 'maxResults') ?? 5;
+        const maxResults = Math.min(optionalInteger(args, 'maxResults') ?? 3, 3);
         return context.webSearchClient.search(query, { maxResults });
       },
     },

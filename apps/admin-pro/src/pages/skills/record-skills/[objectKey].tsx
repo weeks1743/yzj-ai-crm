@@ -253,7 +253,11 @@ const RecordSkillDetailPage = () => {
       return;
     }
 
-    navigate('/skills/record-skills');
+    navigate(
+      location.pathname.startsWith('/agent-governance')
+        ? '/agent-governance/tools-objects'
+        : '/skills/record-skills',
+    );
   };
 
   const handleRefresh = async () => {
@@ -277,7 +281,7 @@ const RecordSkillDetailPage = () => {
       onBack={handleBack}
       extra={[
         <Button key="back" onClick={handleBack}>
-          返回记录系统技能
+          {location.pathname.startsWith('/agent-governance') ? '返回工具与对象' : '返回记录系统技能'}
         </Button>,
         <Button key="refresh" type="primary" loading={refreshing} onClick={() => void handleRefresh()}>
           刷新模板快照

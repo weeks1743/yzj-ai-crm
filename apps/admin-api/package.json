@@ -15,8 +15,10 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@qdrant/js-client-rest": "^1.17.0",
     "@types/busboy": "^1.5.4",
     "busboy": "^1.6.0",
+    "mongodb": "^7.2.0",
     "xlsx": "^0.18.5"
   }
 }

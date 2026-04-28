@@ -38,13 +38,13 @@ const MonitorPage = () => {
   return (
     <PageContainer
       title="运行监控"
-      subTitle="聚焦场景任务状态、追踪上下文、工具调用链和异常告警"
+      subTitle="聚焦 Agent 计划状态、追踪上下文、工具调用链和异常告警"
     >
       <Alert
         type="info"
         showIcon
         message="监控口径"
-        description="所有运行指标均围绕真实业务链路：会话任务 -> 技能编排 -> 资产沉淀 -> 确认写回，而不是传统站点访问量仪表盘。"
+        description="所有运行指标均围绕真实业务链路：用户输入 -> IntentFrame -> TaskPlan -> 工具调用 -> 确认写回，而不是传统站点访问量仪表盘。"
       />
 
       <ProCard split="vertical" style={{ marginTop: 16 }}>

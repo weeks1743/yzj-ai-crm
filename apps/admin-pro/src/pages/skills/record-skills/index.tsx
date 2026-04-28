@@ -248,7 +248,7 @@ const RecordSkillsPage = () => {
   return (
     <PageContainer
       title="记录系统技能"
-      subTitle="统一查看各对象的技能状态、刷新情况和字段准备情况。"
+      subTitle="统一查看记录对象技能、刷新情况和字段准备情况。"
       extra={[
         <Button key="reload" onClick={() => window.location.reload()}>
           重新加载
@@ -259,7 +259,7 @@ const RecordSkillsPage = () => {
         type="info"
         showIcon
         message="管理视图说明"
-        description="这里聚焦对象接入状态、技能覆盖情况和刷新结果，方便管理员日常查看和排查。"
+        description="这里聚焦对象接入状态、记录系统技能覆盖情况和刷新结果，方便管理员日常查看和排查。"
       />
 
       {errorMessage ? (

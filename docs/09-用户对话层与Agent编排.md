@@ -1,535 +1,247 @@
-# 用户对话层与Agent编排
+# 用户对话层与 Agent 编排
 
 ## 本篇回答什么问题
 
 本篇回答以下问题：
 
-- `AI销售助手` 的对话层应该如何组织
-- Main Agent、Tool Registry、Meta Tools、确定性守卫分别负责什么
-- 复合场景与分析场景如何在对话层被调起
-- slash 命令如何作为统一入口语法出现
-- 如何避免上层 Agent 被底层数据库选型绑死
+- 用户自然语言如何落到可执行计划
+- Main Agent、Tool Registry、Meta Tools、Policy Guard 分别负责什么
+- 为什么不再把 `scene.*` 作为运行时技能类型
+- `/计划`、普通 slash 技能入口和自然语言入口如何协同
 
-## 0.4.3 对话入口补充
+## 0.4.6 核心链路
 
-自 `0.4.3` 起，用户 AI 端的工作台改成“双入口”：
+用户意图统一落到：
 
-### 1. 快速闭环入口
-
-- `/拜访后闭环 星海精工股份拜访.mp3`
-
-用于承接：
-
-- mp3 录音
-- 拜访纪要
-- 已发生的拜访结果
-
-它命中的是复合场景：
-
-- `scene.post_visit_loop`
-
-### 2. 分步分析入口
-
-用于逐步访问 5 个分析场景：
-
-- `/客户分析`
-- `/拜访会话理解`
-- `/客户需求工作待办分析`
-- `/问题陈述`
-- `/客户价值定位`
-
-这里的 slash 命令只是：
-
-- 对话层的统一入口语法
-
-而不是：
-
-- 新的技能类型
-
-## 对话层目标
-
-用户希望在对话中完成的是：
-
-- 录入客户、联系人、商机、跟进记录
-- 查询客户、商机与历史跟进
-- 通过拜访后闭环收口一段 mp3 或纪要
-- 分步完成客户分析、会话理解、需求待办、问题陈述和价值定位
-
-因此，对话层不应只是问答接口，而是系统的主入口。
-
-## 总体架构
-
-```mermaid
-flowchart TD
-    U["用户"] --> UI["Chat UI"]
-    UI --> AGENT["Main Agent"]
-    AGENT --> TOOLS["Tool Registry"]
-    AGENT --> GUARDS["Deterministic Guards"]
-    TOOLS --> RECORD["记录系统技能"]
-    TOOLS --> SCENE["场景技能"]
-    TOOLS --> EXT["外部技能"]
-    TOOLS --> META["Meta Tools"]
-    RECORD --> SHADOW["轻云影子系统"]
-    SCENE --> DATA["AI-CRM 原生数据"]
-    SCENE --> EXT
-    EXT --> OUTSIDE["外部世界 / 第三方能力"]
-    META --> DATA
-    GUARDS --> SHADOW
-    GUARDS --> DATA
+```text
+UserInput -> IntentFrame -> TaskPlan -> Tool Selection -> ExecutionState
 ```
 
-## 四个核心角色
+这条链路不绑定 CRM。CRM 只提供一组业务对象、工具和样例话术。
 
-### 1. Main Agent
+### IntentFrame
 
-负责：
+负责表达：
+
+- 用户目标
+- 动作类型：query / analyze / write / plan / export
+- 目标对象
+- 输入材料
+- 约束
+- 缺失信息
+- 置信度
+
+### TaskPlan
+
+负责表达：
+
+- 推荐步骤
+- 步骤依赖
+- 可跳过步骤
+- 需确认步骤
+- 暂停点
+- 输出卡片
+- 证据要求
+
+### Tool Selection
+
+只从 Tool Registry 选择工具：
+
+- `record`：结构化记录对象工具
+- `external`：外部研究、分析、生成、导出工具
+- `meta`：澄清、候选选择、计划生成、确认写回工具
+
+不再选择 `scene.*`。
+
+## Artifact 消费链路
+
+0.4.7 起，对话侧通过 `POST /api/agent/chat` 进入后端 Agent Runtime，而不是在前端 mock 中自行判断意图。第一条真实 MVP 闭环是公司分析 Artifact：
+
+```text
+UserInput
+  -> IntentFrame(analyze / query)
+  -> TaskPlan
+  -> ext.company_research
+  -> Markdown Artifact
+  -> MongoDB
+  -> text-embedding-v4
+  -> Qdrant
+  -> Evidence Card
+```
+
+当用户输入 `/客户分析 星海精工股份` 或“研究星海精工股份公司”：
+
+- Main Agent 优先调用 DeepSeek 生成 IntentFrame；模型不可用或 JSON 非法时，已知意图走确定性 fallback，并在 trace 标记。
+- TaskPlan 选择公司研究外部工具。
+- `ext.company_research_pm` 调用 skill-runtime 的 `company-research` Skill。
+- Skill 输出 Markdown。
+- Artifact Repository 写入 `artifacts` 与 `artifact_versions`。
+- Embedding Service 使用阿里 `text-embedding-v4` 生成向量。
+- Vector Service 写入 Qdrant `yzj_artifact_chunks`。
+- 对话侧展示证据卡，而不是只返回一次性文本。
+
+当用户后续问“这个客户最近有什么值得关注”：
+
+- Main Agent 识别为 `query artifact`。
+- 检索必须带 `eid + appId`。
+- 如能识别公司、客户、商机等对象，再叠加锚点过滤。
+- 回答必须引用 Artifact 证据卡；无证据时提示先生成公司分析。
+
+### Agent API
+
+`POST /api/agent/chat` 输入：
+
+- `conversationKey`
+- `query`
+- `sceneKey`
+- `attachments`
+- `tenantContext`
+
+返回：
+
+- assistant message
+- `traceId`
+- `IntentFrame`
+- `TaskPlan`
+- `ExecutionState`
+- tool calls
+- evidence cards
+
+### Agent Run Store
+
+0.4.7 第一版运行态保存在 admin-api 现有 SQLite：
+
+- `agent_runs`
+- `agent_messages`
+- `agent_tool_calls`
+
+这些数据服务于运行观测，不替代 MongoDB Artifact 主存，也不替代记录系统主数据。
+
+### ExecutionState
+
+负责表达：
+
+- draft
+- running
+- waiting_input
+- waiting_selection
+- waiting_confirmation
+- paused
+- completed
+- failed
+- cancelled
+
+## Main Agent 边界
+
+Main Agent 负责：
 
 - 理解用户输入
-- 判断当前意图
-- 选择合适的技能或 Meta Tool
-- 决定是否需要澄清、后台执行或确认
-
-不负责：
-
-- 直接写主数据
-- 直接跳过权限与确认
-
-### 2. Tool Registry
-
-负责暴露全部可用工具：
-
-- 记录系统动态技能
-- 场景技能
-- 外部技能
-- Meta Tools
-
-### 3. Meta Tools
-
-固定保留三个：
-
-- `clarify_card`
-- `query_with_context`
-- `plan_composite`
-
-### 4. Deterministic Guards
-
-负责保底约束：
-
-- 写操作确认
-- 权限校验
-- 音频导入流程控制
-- 后台任务通知
-- 跨租户引用拦截
-
-## Tool 分类
-
-### A. 记录系统技能
-
-例如：
-
-- `shadow.customer_create`
-- `shadow.contact_create`
-- `shadow.opportunity_update`
-- `shadow.followup_record_create`
-
-### B. 场景技能
-
-例如：
-
-- `scene.post_visit_loop`
-- `scene.customer_analysis`
-- `scene.conversation_understanding`
-- `scene.needs_todo_analysis`
-- `scene.problem_statement`
-- `scene.value_positioning`
-- `scene.solution_expert_enablement`
-
-其中：
-
-- `scene.post_visit_loop` 是复合场景
-- `scene.solution_expert_enablement` 是方案推进阶段的复合场景
-- 中间 5 个是分析场景
-- 这些分析场景既能被 slash 单独访问，也能被复合场景自动组装
-
-当前不纳入：
-
-- `scene.company_deep_analysis`
-
-### C. 外部技能
-
-例如：
-
-- `ext.image_generate`
-- `ext.company_research_pm`
-- `ext.web_search`
-- `ext.web_fetch_extract`
-- `ext.audio_transcribe`
-- `ext.super_ppt`
-
-### 外部技能 provider 策略
-
-当前阶段，Tool Registry 不只要知道“有哪些技能”，还要知道“这些技能当前走哪个 provider”。
-
-阶段性收敛如下：
-
-- `scene.audio_import` 相关链路优先走已有的通义 Agent 服务
-- `ext.image_generate` 先走 `http_request provider`
-- 其他外部技能先统一走 `mock provider`
-
-建议至少维护以下映射关系：
-
-- `ext.image_generate -> http_request_provider`
-- `ext.audio_transcribe -> tongyi_agent_provider`
-- `ext.company_research_pm -> mock_provider`
-- `ext.web_search -> mock_provider`
-- `ext.web_fetch_extract -> mock_provider`
-- `ext.super_ppt -> docmee-v2`
-
-### 为什么要这样做
-
-原因不是因为 mock 更好，而是：
-
-- 录音导入是 v1 核心场景
-- 通义 Agent 服务已经存在，可直接复用
-- 图片生成先以单一 HTTP provider 落一条真实外部技能链路
-- 其他外部技能先 mock，更有利于尽快打通全链路
-
-### 编排层要求
-
-对 Main Agent 和场景技能来说：
-
-- 只感知 `skill_code`
-- 不感知底层到底是通义、mock 还是未来真实 provider
-
-这样后续替换 provider 时，不需要重写上层编排逻辑。
-
-## `scene.audio_import` 的统一契约
-
-文档层面，`scene.audio_import` 的定义需要从“录音分析驱动的跟进候选生成”收敛为：
-
-- 商机跟进记录创建场景
-- 录音异步分析场景
-
-### 输入重点
-
-该场景至少接受：
-
-- `audioFile`
-
-并按上下文情况补充：
-
-- `customerId`
-- `opportunityId`
-- `contactIds`
-- `visitDate`
-
-### 输出重点
-
-该场景至少统一输出：
-
-- `task_status`
-- `next_required_action`
-- `customer_candidate`
-- `opportunity_candidate`
-- `followup_record_id`
-- `analysis_status`
-- `contact_edit_status`
-
-### 通义分析补充输出
-
-通义分析结果建议至少补充：
-
-- `contact_candidates[]`
-
-其中每个联系人候选至少包含：
-
-- `name`
-- `title`
-- `phone`
-- `source_segment_refs`
-
-### `next_required_action` 固定取值
-
-至少包含：
-
-- `create_customer`
-- `create_opportunity`
-- `select_opportunity`
-- `create_followup_record`
-- `wait_analysis`
-
-### Main Agent 的判断边界
-
-Main Agent 不需要判断“这是第几次拜访”。
-
-它只需要命中：
-
-- `scene.audio_import`
-
-再由该场景技能根据当前上下文状态决定后续分支。
-
-### D. Meta Tools
-
-例如：
-
-- `clarify_card`
-- `query_with_context`
-- `plan_composite`
-
-## 外部技能的调用边界
-
-外部技能应作为 Tool Registry 的正式组成部分，但不应和场景技能混成一类。
-
-### 适合直接调用外部技能的情况
-
-- 用户要做一个低风险的通用动作
-- 不需要绑定客户、商机、任务状态
-- 不需要沉淀研究快照或业务资产
-
-例如：
-
-- “分析一下华为”
-- “搜一下这家公司最近新闻”
-- “把这份简报导出成 PPT”
-
-### 不适合直接调用外部技能的情况
-
-- 目标是完成完整业务场景
-- 需要绑定客户或商机
-- 需要后台任务、快照、版本、审计
-
-例如：
-
-- “导入这段录音并生成跟进记录”
-- “帮我准备明天拜访材料”
-- “围绕某个客户生成可长期复用的公司研究资产”
-
-这类请求应优先命中：
-
-- `scene.audio_import`
-- `scene.visit_prepare`
-
-最后一类未来如需实现，应单独设计为：
-
-- `scene.company_deep_analysis`
-
-## 检索层抽象接口
-
-为了避免上层 Agent 被底层数据库绑死，对话层必须只依赖统一检索接口，不直接依赖 Postgres 或 Mongo 的具体查询语法。
-
-### 抽象接口
-
-建议在文档中统一定义以下抽象：
-
-#### `EntityContextRepository`
-
-负责按实体读取聚合上下文：
-
-- 客户上下文
-- 联系人上下文
-- 商机上下文
-
-#### `KnowledgeSearchRepository`
-
-负责语义检索：
-
-- 研究快照块检索
-- 录音摘要块检索
-- 相似历史问题检索
-
-#### `TaskStateRepository`
-
-负责：
-
-- 任务状态
-- 后台任务
-- 恢复点
-
-#### `ArtifactRepository`
-
-负责：
-
-- 文件引用
-- 研究快照
-- 转写原文引用
-
-### 抽象接口的价值
-
-这样设计后：
-
-- 上层 Agent 只关心“拿到什么上下文”
-- 不关心底层到底是 PostgreSQL + pgvector，还是 MongoDB + 向量数据库
-
-## 典型能力在对话层中的处理
-
-### 场景 1：录入客户但字段不全
-
-处理方式：
-
-1. Main Agent 识别为结构化写操作
-2. 选择记录系统技能
-3. 如果缺字段，调用 `clarify_card`
-4. 收齐参数后生成写入预览
-5. 通过确定性守卫确认后写轻云
-
-### 场景 2：录音导入
-
-处理方式：
-
-1. 用户上传音频
-2. 确定性守卫创建后台任务
-3. `scene.audio_import` 先补齐客户 / 商机上下文
-4. 创建商机跟进记录
-5. 跟进记录创建成功后调用已有通义 Agent 服务执行录音分析
-6. 分析结果沉淀到 AI-CRM 原生层
-7. 如通义识别出联系人候选，可触发联系人补充侧流程
-
-### 录音导入的三条内部处理分支
-
-#### A. 首次拜访，无客户无商机
-
-1. 进入 `create_customer`
-2. 再进入 `create_opportunity`
-3. 再进入 `create_followup_record`
-4. 跟进记录创建成功后进入 `wait_analysis`
-
-#### B. 已有客户，首次拜访
-
-1. 复用客户上下文
-2. 默认进入 `create_opportunity`
-3. 商机创建后进入 `create_followup_record`
-4. 跟进记录创建成功后进入 `wait_analysis`
-
-#### C. 已有客户，多次拜访
-
-1. 若存在唯一明确商机，则直接预填
-2. 若存在多个商机，则进入 `select_opportunity`
-3. 若没有可用商机，则进入 `create_opportunity`
-4. 商机明确后进入 `create_followup_record`
-5. 跟进记录创建成功后进入 `wait_analysis`
-
-### 录音分析后的联系人补充子流程
-
-该流程属于：
-
-- `scene.audio_import` 的后置扩展
-
-但需要明确：
-
-- 它不是新的场景技能
-- 它不影响主录音任务完成判定
-
-### 流程说明
-
-1. 通义分析完成后输出 `contact_candidates`
-2. 打开通义独立联系人编辑界面
-3. 界面按当前客户拉取影子系统联系人
-4. 用户对每个候选执行：
-   - 选择已有联系人
-   - 新建联系人
-   - 忽略
-5. 联系人处理结果单独更新 `contact_edit_status`
-
-### Main Agent 的边界
+- 生成 IntentFrame
+- 生成或调整 TaskPlan
+- 选择工具
+- 解释步骤
+- 收集澄清和确认
+- 维护当前会话焦点
 
 Main Agent 不负责：
 
-- 联系人逐个去重判断
-- 我司成员识别
-- 联系人逐条编辑确认
+- 绕过写回确认
+- 自由调用未注册工具
+- 编造没有证据的确定结论
+- 把 CRM 场景硬编码成平台核心流程
 
-这些步骤统一交由：
+## Tool Registry
 
-- 通义独立联系人编辑界面
+Tool Registry 是运行时能力唯一来源。
 
-### 影子系统写技能边界
+工具契约至少包含：
 
-联系人补充阶段只允许调用：
+- tool id / code
+- tool type
+- input schema
+- output schema
+- provider
+- risk level
+- confirmation policy
+- timeout / retry policy
+- evidence refs
+- display card type
 
-- `shadow.contact_query`
-- `shadow.contact_create`
+## Meta Tools
 
-明确不做：
+v1 固定保留：
 
-- `shadow.contact_update`
-- `shadow.followup_record_update`
+- `meta.clarify_card`
+- `meta.candidate_selection`
+- `meta.plan_builder`
+- `meta.confirm_writeback`
 
-### `contact_edit_status` 建议固定取值
+这些工具负责对话交互和计划控制，不承载具体业务场景。
 
-- `pending_manual_edit`
-- `completed`
-- `skipped`
+## Policy Guard
 
-### 能力 3：公司分析
+确定性守卫负责兜底：
 
-这里的“公司分析”指外部技能，而不是场景技能。
+- 写操作确认
+- 权限校验
+- 字段白名单
+- 跨租户引用拦截
+- 证据要求
+- 禁用能力降级
+- 审计事件生成
 
-处理方式：
+## 对话入口
 
-1. Main Agent 识别为外部研究请求
-2. 提取 `companyName`
-3. 当前先调用 `ext.company_research_pm` 的 `mock provider`
-4. 返回研究摘要与来源说明
-5. 如未来需要形成长期资产，再进入单独的“公司深度分析”场景设计
+### 自然语言入口
 
-### 场景 4：准备拜访材料
+用户可以直接说：
 
-处理方式：
+- “查一下这个客户”
+- “这个客户现在卡在哪里”
+- “这段录音先帮我整理下，客户信息能补就补”
 
-1. Main Agent 调用 `plan_composite`
-2. 命中“准备拜访材料”模板
-3. 模板内部读取影子系统主数据、录音分析资产
-4. 必要时调用 `ext.company_research_pm` 的 `mock provider` 补充公开公司信息
-5. 返回拜访简报
+系统先生成 IntentFrame，再决定是否需要 Plan。
 
-## 模板化复合任务
+### `/计划`
 
-v1 的 `plan_composite` 只允许命中预定义模板，不开放自由 DAG。
+`/计划` 是复杂或不确定任务入口。
 
-### v1 模板清单
+它表示：
 
-- 录音导入并创建商机跟进记录
-- 准备拜访材料
+- 先生成可裁剪计划
+- 用户可跳过步骤
+- 可暂停和继续
+- 写入仍需确认
 
-### 为什么不开放自由 DAG
+### 普通 slash 入口
 
-- 销售场景需要可解释与可审计
-- v1 重点是把高频场景走通，而不是追求开放式 Agent 炫技
+如 `/客户分析`、`/问题陈述`、`/方案匹配`。
 
-## 状态管理
+它们是用户体验入口和 Plan 模板提示，不是运行时 `scene.*` 技能。
 
-对话层至少要维护以下状态：
+## MVP 对录音的处理
 
-- 当前线程上下文
-- 当前焦点客户 / 商机
-- 当前挂起任务
-- 后台任务进度
-- `scene.audio_import` 的 `next_required_action`
-- 最近消费的研究快照与录音分析版本
+`0.4.7` MVP 暂不做录音转写。
 
-## 提示与确认策略
+当用户只上传录音时：
 
-### 应触发澄清的情况
+- 系统可以保存附件资产元信息
+- 返回“当前 MVP 不做转写，可补充文字纪要后继续整理”
+- 不调用 `ext.audio_transcribe`
 
-- 客户不明确
-- 商机不明确
-- 存在多个候选商机
-- 写操作缺少必填字段
+当用户提供文字纪要或已有跟进内容时：
 
-### 应触发确认的情况
-
-- 写轻云主数据
-- 覆盖已有关键字段
-- 用 AI 推断结果回写主数据
+- 可以调用外部会话理解工具
+- 可以查询记录对象
+- 可以生成补录预览
+- 写入前必须确认
 
 ## 本篇结论
 
-`AI销售助手` 的对话层必须坚持以下原则：
+对话层的核心不是命中某个场景技能，而是：
 
-1. Main Agent 负责理解和选择
-2. Tool Registry 负责暴露记录系统技能、场景技能、外部技能与 Meta Tools
-3. 当前“公司分析”属于外部技能，输入核心是 `companyName`
-4. 外部技能负责联网、研究、转写、导出等通用能力，但不替代业务场景
-5. Meta Tools 负责结构化交互
-6. 确定性守卫负责企业级兜底
-7. 检索层必须抽象，不能把数据库选型泄漏到上层对话逻辑中
+1. 把用户输入结构化为 IntentFrame
+2. 把意图转成可编辑 TaskPlan
+3. 从 Tool Registry 动态选择工具
+4. 用 Policy Guard 限制风险
+5. 用 ExecutionState 支持中断、确认和恢复

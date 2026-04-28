@@ -102,6 +102,24 @@ export interface AppConfig {
   };
   storage: {
     sqlitePath: string;
+    mongodbUri: string;
+    mongodbDb: string;
+  };
+  qdrant: {
+    url: string;
+    apiKey: string | null;
+    collectionName: string;
+  };
+  embedding: {
+    baseUrl: string;
+    apiKey: string | null;
+    model: string;
+    dimensions: number;
+  };
+  deepseek: {
+    baseUrl: string;
+    apiKey: string | null;
+    defaultModel: SkillRuntimeModelName;
   };
   external: {
     image: {
@@ -118,6 +136,256 @@ export interface AppConfig {
     configSource: '.env';
     envFilePath: string;
   };
+}
+
+export type ArtifactAnchorType =
+  | 'customer'
+  | 'opportunity'
+  | 'contact'
+  | 'followup'
+  | 'company'
+  | 'source_file';
+
+export type ArtifactVectorStatus =
+  | 'pending_embedding'
+  | 'pending_config'
+  | 'indexed'
+  | 'embedding_failed';
+
+export interface ArtifactAnchor {
+  type: ArtifactAnchorType;
+  id: string;
+  name?: string;
+  role?: 'primary' | 'related' | 'source';
+  confidence?: number;
+  bindingStatus?: 'bound' | 'unbound' | 'suggested';
+}
+
+export interface CompanyResearchArtifactRequest {
+  eid?: string;
+  appId?: string;
+  title: string;
+  markdown: string;
+  sourceToolCode: string;
+  anchors: ArtifactAnchor[];
+  createdBy?: string;
+  summary?: string;
+  sourceRefs?: Array<{
+    title: string;
+    url?: string;
+    source?: string;
+  }>;
+}
+
+export interface ArtifactVersionSummary {
+  artifactId: string;
+  versionId: string;
+  version: number;
+  title: string;
+  sourceToolCode: string;
+  vectorStatus: ArtifactVectorStatus;
+  anchors: ArtifactAnchor[];
+  chunkCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ArtifactCreateResponse {
+  artifact: ArtifactVersionSummary;
+}
+
+export interface ArtifactDetailResponse {
+  artifact: ArtifactVersionSummary;
+  markdown: string;
+  summary?: string;
+}
+
+export interface ArtifactSearchRequest {
+  eid?: string;
+  appId?: string;
+  query: string;
+  anchors?: ArtifactAnchor[];
+  limit?: number;
+}
+
+export interface ArtifactEvidenceRef {
+  artifactId: string;
+  versionId: string;
+  title: string;
+  version: number;
+  sourceToolCode: string;
+  anchorTypes: ArtifactAnchorType[];
+  anchorIds: string[];
+  snippet: string;
+  heading?: string;
+  score: number;
+}
+
+export interface ArtifactSearchResponse {
+  query: string;
+  vectorStatus: ArtifactVectorStatus | 'searched';
+  qdrantFilter: unknown;
+  evidence: ArtifactEvidenceRef[];
+}
+
+export type ArtifactPresentationStatus =
+  | 'not_started'
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed';
+
+export interface ArtifactPresentationResponse {
+  artifactId: string;
+  versionId: string;
+  title: string;
+  status: ArtifactPresentationStatus;
+  jobId?: string;
+  pptArtifact?: ExternalSkillJobArtifact;
+  errorMessage?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type AgentActionType = 'query' | 'analyze' | 'write' | 'plan' | 'export' | 'clarify';
+export type AgentTargetType = 'company' | 'customer' | 'opportunity' | 'contact' | 'followup' | 'artifact' | 'unknown';
+export type AgentTaskPlanKind = 'company_research' | 'artifact_search' | 'audio_not_supported' | 'unknown_clarify';
+export type AgentExecutionStatus =
+  | 'draft'
+  | 'running'
+  | 'waiting_input'
+  | 'waiting_selection'
+  | 'waiting_confirmation'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'tool_unavailable';
+export type AgentToolCallStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
+
+export interface AgentAttachment {
+  name: string;
+  url: string;
+  type: string;
+  size?: number;
+}
+
+export interface IntentFrame {
+  actionType: AgentActionType;
+  goal: string;
+  targetType: AgentTargetType;
+  targets: Array<{
+    type: AgentTargetType;
+    id: string;
+    name: string;
+  }>;
+  inputMaterials: string[];
+  constraints: string[];
+  missingSlots: string[];
+  confidence: number;
+  source: 'llm' | 'fallback';
+  fallbackReason?: string;
+}
+
+export interface TaskPlanStep {
+  key: string;
+  title: string;
+  actionType: 'query' | 'analyze' | 'write_preview' | 'confirm' | 'external' | 'meta';
+  toolRefs: string[];
+  required: boolean;
+  skippable: boolean;
+  confirmationRequired: boolean;
+  status: AgentToolCallStatus;
+}
+
+export interface TaskPlan {
+  planId: string;
+  kind: AgentTaskPlanKind;
+  title: string;
+  status: AgentExecutionStatus;
+  steps: TaskPlanStep[];
+  evidenceRequired: boolean;
+}
+
+export interface ExecutionState {
+  runId: string;
+  traceId: string;
+  status: AgentExecutionStatus;
+  currentStepKey: string | null;
+  message: string;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface AgentToolCall {
+  id: string;
+  runId: string;
+  toolCode: string;
+  status: AgentToolCallStatus;
+  inputSummary: string;
+  outputSummary: string;
+  startedAt: string;
+  finishedAt: string | null;
+  errorMessage: string | null;
+}
+
+export interface AgentChatRequest {
+  conversationKey: string;
+  query: string;
+  sceneKey: string;
+  attachments?: AgentAttachment[];
+  tenantContext?: {
+    eid?: string;
+    appId?: string;
+  };
+}
+
+export interface AgentEvidenceCard {
+  artifactId: string;
+  versionId: string;
+  title: string;
+  version: number;
+  sourceToolCode: string;
+  anchorLabel: string;
+  snippet: string;
+  score?: number;
+  vectorStatus?: string;
+}
+
+export interface AgentChatMessage {
+  role: 'assistant';
+  content: string;
+  attachments?: AgentAttachment[];
+  extraInfo: {
+    feedback: 'default';
+    sceneKey: string;
+    headline: string;
+    references: string[];
+    evidence?: AgentEvidenceCard[];
+    agentTrace: {
+      traceId: string;
+      intentFrame: IntentFrame;
+      taskPlan: TaskPlan;
+      executionState: ExecutionState;
+      toolCalls: AgentToolCall[];
+      qdrantFilter?: unknown;
+    };
+  };
+}
+
+export interface AgentChatResponse {
+  success: true;
+  data: {
+    content: string;
+    attachments?: AgentAttachment[];
+    extraInfo: AgentChatMessage['extraInfo'];
+  };
+  message: AgentChatMessage;
+  intentFrame: IntentFrame;
+  taskPlan: TaskPlan;
+  executionState: ExecutionState;
+  toolCalls: AgentToolCall[];
+  traceId: string;
 }
 
 export interface TenantAppSettingsResponse {
