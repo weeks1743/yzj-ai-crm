@@ -266,7 +266,8 @@ export class SkillExecutor {
         '- 先规划检索主题，再搜索，再抓取页面，再整合来源与日期。',
         '- 必须在结束前调用 write_text_artifact 生成 markdown 报告。',
         '- 报告必须包含来源链接、日期和简明引用说明。',
-        '- 为保证稳定性，请控制在最多 3 次 web_search 与最多 4 次 web_fetch_extract 内完成。',
+        '- 为保证稳定性，请控制在最多 2 次 web_search 与最多 2 次 web_fetch_extract 内完成。',
+        '- 已获得公司主体、业务定位、主要产品和 2 条以上来源后，立即调用 write_text_artifact 收口。',
         '- 优先选择最新、信息密度高的一手或权威来源，证据足够后立即收口。',
         `- 输出 artifact 建议文件名：company-research-${job.jobId}.md`,
         `- Job 输出目录：${paths.outputsDir}`,
@@ -758,6 +759,24 @@ export class SkillExecutor {
     if (skill.skillName === 'company-research') {
       ({ systemPrompt, userPrompt } = this.buildCompanyResearchPrompt(skill, stagedAttachments, paths, job));
       tools = createCompanyResearchTools();
+      maxTurns = 8;
+      stopWhen = ({ messages, toolExecutions }) => {
+        if (!toolExecutions.some((item) => item.name === 'write_text_artifact')) {
+          return null;
+        }
+
+        const lastAssistantMessage = [...messages]
+          .reverse()
+          .find((item) => item.role === 'assistant' && typeof item.content === 'string' && item.content.trim());
+        if (!lastAssistantMessage?.content?.trim()) {
+          return null;
+        }
+
+        return {
+          stop: true,
+          finalText: lastAssistantMessage.content.trim(),
+        };
+      };
     } else if (GENERIC_TEXT_SKILLS.has(skill.skillName)) {
       ({ systemPrompt, userPrompt } = this.buildGenericTextPrompt(skill, stagedAttachments, paths, job));
       tools = createGenericTextTools();

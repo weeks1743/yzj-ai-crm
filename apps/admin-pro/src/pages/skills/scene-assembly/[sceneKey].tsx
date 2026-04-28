@@ -28,8 +28,6 @@ import {
   fetchResolvedSceneAssemblyViews,
   getSalesStageColor,
   getSceneAssemblyStatusColor,
-  salesStageMeta,
-  salesStageOrder,
 } from '../shared';
 
 const { Paragraph, Text } = Typography;
@@ -94,6 +92,26 @@ function renderBulletList(items: string[]) {
       ))}
     </ul>
   );
+}
+
+function formatPlanStepRequirement(requirement: string) {
+  if (requirement === 'required') {
+    return '必选';
+  }
+  if (requirement === 'conditional') {
+    return '条件';
+  }
+  return '可选';
+}
+
+function getPlanStepRequirementColor(requirement: string) {
+  if (requirement === 'required') {
+    return 'red';
+  }
+  if (requirement === 'conditional') {
+    return 'gold';
+  }
+  return 'blue';
 }
 
 const recordDependencyColumns: ProColumns<SceneAssemblyDependency>[] = [
@@ -220,7 +238,7 @@ const SceneAssemblyDetailPage = () => {
   return (
     <PageContainer
       title={scene?.label ?? '场景技能详情'}
-      subTitle={scene?.businessGoal ?? '查看当前场景的真实入口、业务链路和供给关系。'}
+      subTitle={scene?.businessGoal ?? '查看当前 Playbook 的推荐 Plan、技能供给和守卫边界。'}
       extra={[
         <Button key="back" onClick={() => history.push('/skills/scene-assembly')}>
           返回清单
@@ -291,13 +309,13 @@ const SceneAssemblyDetailPage = () => {
                 },
                 {
                   key: 'upstreamCount',
-                  label: '上游资产',
-                  children: `${scene.upstreamAssets.length} 项`,
+                  label: 'Plan 模式',
+                  children: `${scene.playbook.planModes.length} 个`,
                 },
                 {
                   key: 'outputCount',
-                  label: '标准输出',
-                  children: `${scene.outputs.length} 项`,
+                  label: '步骤库',
+                  children: `${scene.playbook.stepLibrary.length} 步`,
                 },
               ]}
             />
@@ -307,10 +325,10 @@ const SceneAssemblyDetailPage = () => {
             items={[
               {
                 key: 'overview',
-                label: '场景总览',
+                label: 'Playbook 总览',
                 children: (
                   <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                    <ProCard title="场景定位" bordered>
+                    <ProCard title="Playbook 定位" bordered>
                       <Paragraph style={{ marginBottom: 16 }}>{scene.summary}</Paragraph>
                       <Descriptions
                         size="small"
@@ -326,22 +344,17 @@ const SceneAssemblyDetailPage = () => {
                             label: '记录系统锚点',
                             children: scene.entityAnchor,
                           },
+                          {
+                            key: 'planModes',
+                            label: '推荐 Plan 模式',
+                            children: renderTagGroup(scene.playbook.planModes, 'geekblue'),
+                          },
+                          {
+                            key: 'adminControls',
+                            label: '管理员治理项',
+                            children: renderTagGroup(scene.playbook.adminControls),
+                          },
                         ]}
-                      />
-                    </ProCard>
-
-                    <ProCard title="销售链路位置" bordered>
-                      <Steps
-                        size="small"
-                        direction="vertical"
-                        current={Math.max(salesStageOrder.indexOf(scene.salesStage as (typeof salesStageOrder)[number]), 0)}
-                        items={salesStageOrder.map((stageName) => ({
-                          title: stageName,
-                          description:
-                            stageName === scene.salesStage
-                              ? `${scene.label}：${salesStageMeta[stageName]?.focus ?? ''}`
-                              : undefined,
-                        }))}
                       />
                     </ProCard>
 
@@ -363,20 +376,30 @@ const SceneAssemblyDetailPage = () => {
                           },
                           {
                             key: 'outputs',
-                            label: '标准输出',
+                            label: '可能产出',
                             children: renderTagGroup(scene.outputs, 'green'),
                           },
                         ]}
                       />
                     </ProCard>
 
-                    <ProCard title="标准业务链路" bordered>
+                    <ProCard title="推荐步骤库" bordered>
                       <Steps
                         size="small"
                         direction="vertical"
-                        current={Math.max(scene.orchestrationChain.length - 1, 0)}
-                        items={scene.orchestrationChain.map((item) => ({
-                          title: item,
+                        current={Math.max(scene.playbook.stepLibrary.length - 1, 0)}
+                        items={scene.playbook.stepLibrary.map((item) => ({
+                          title: (
+                            <Space wrap size={[6, 6]}>
+                              <span>{item.label}</span>
+                              <Tag color={getPlanStepRequirementColor(item.requirement)}>
+                                {formatPlanStepRequirement(item.requirement)}
+                              </Tag>
+                              {item.canSkip ? <Tag>可跳过</Tag> : null}
+                              {item.canPause ? <Tag>可暂停</Tag> : null}
+                            </Space>
+                          ),
+                          description: item.description,
                         }))}
                       />
                     </ProCard>
@@ -384,8 +407,51 @@ const SceneAssemblyDetailPage = () => {
                 ),
               },
               {
+                key: 'variants',
+                label: `Plan 变体 (${scene.playbook.variants.length})`,
+                children: (
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    {scene.playbook.variants.map((variant) => {
+                      const steps = variant.steps
+                        .map((stepKey) => scene.playbook.stepLibrary.find((item) => item.key === stepKey))
+                        .filter(Boolean);
+
+                      return (
+                        <ProCard key={variant.key} title={variant.label} bordered>
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Paragraph style={{ marginBottom: 0 }}>{variant.summary}</Paragraph>
+                            <Text type="secondary">{variant.recommendedFor}</Text>
+                            <Steps
+                              size="small"
+                              direction="vertical"
+                              current={Math.max(steps.length - 1, 0)}
+                              items={steps.map((item) => ({
+                                title: item?.label,
+                                description: item?.description,
+                              }))}
+                            />
+                            <Descriptions
+                              bordered
+                              size="small"
+                              column={1}
+                              items={[
+                                {
+                                  key: 'decisions',
+                                  label: '用户可决定',
+                                  children: renderTagGroup(variant.userDecisions, 'blue'),
+                                },
+                              ]}
+                            />
+                          </Space>
+                        </ProCard>
+                      );
+                    })}
+                  </Space>
+                ),
+              },
+              {
                 key: 'dependencies',
-                label: `供给关系 (${scene.recordSkillDependencies.length + scene.externalSkillDependencies.length})`,
+                label: `技能供给 (${scene.recordSkillDependencies.length + scene.externalSkillDependencies.length})`,
                 children: (
                   <Space direction="vertical" size={16} style={{ width: '100%' }}>
                     <ProCard title={`记录系统技能 (${scene.recordSkillDependencies.length})`} bordered>
@@ -418,14 +484,26 @@ const SceneAssemblyDetailPage = () => {
               },
               {
                 key: 'boundaries',
-                label: '边界与写回',
+                label: '守卫与确认',
                 children: (
-                  <ProCard title="边界说明" bordered>
+                  <ProCard title="守卫与确认" bordered>
                     <Descriptions
                       bordered
                       size="small"
                       column={1}
                       items={[
+                        {
+                          key: 'planPolicy',
+                          label: 'Plan 守卫',
+                          children: renderBulletList(
+                            scene.playbook.policies.flatMap((item) => [
+                              item.confirmation,
+                              item.writeback,
+                              item.pauseResume,
+                              item.adminBoundary,
+                            ]),
+                          ),
+                        },
                         {
                           key: 'sceneBoundary',
                           label: '场景职责',

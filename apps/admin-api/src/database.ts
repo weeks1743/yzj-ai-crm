@@ -204,6 +204,69 @@ export function openDatabase(databasePath: string): DatabaseSync {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_enterprise_ppt_templates_single_active
     ON enterprise_ppt_templates(is_active)
     WHERE is_active = 1;
+
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      run_id TEXT PRIMARY KEY,
+      trace_id TEXT NOT NULL,
+      eid TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      conversation_key TEXT NOT NULL,
+      scene_key TEXT NOT NULL,
+      user_input TEXT NOT NULL,
+      intent_frame_json TEXT NOT NULL,
+      task_plan_json TEXT NOT NULL,
+      execution_state_json TEXT NOT NULL,
+      evidence_refs_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_messages (
+      message_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      conversation_key TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      attachments_json TEXT NOT NULL,
+      extra_info_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_tool_calls (
+      tool_call_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      tool_code TEXT NOT NULL,
+      status TEXT NOT NULL,
+      input_summary TEXT NOT NULL,
+      output_summary TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      error_message TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_conversation_recent
+    ON agent_runs(conversation_key, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_agent_tool_calls_run
+    ON agent_tool_calls(run_id, started_at ASC);
+
+    CREATE TABLE IF NOT EXISTS artifact_ppt_generations (
+      generation_id TEXT PRIMARY KEY,
+      artifact_id TEXT NOT NULL,
+      version_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      job_id TEXT,
+      ppt_artifact_json TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(version_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_artifact_ppt_generations_artifact
+    ON artifact_ppt_generations(artifact_id, updated_at DESC);
   `);
   migrateSnapshotDictionaryBindings(database);
 

@@ -16,6 +16,18 @@ interface TestConfigOptions {
   skillRuntimeBaseUrl?: string;
   docmeeBaseUrl?: string;
   docmeeApiKey?: string | null;
+  mongodbUri?: string;
+  mongodbDb?: string;
+  qdrantUrl?: string;
+  qdrantApiKey?: string | null;
+  qdrantCollectionName?: string;
+  embeddingBaseUrl?: string;
+  embeddingApiKey?: string | null;
+  embeddingModel?: string;
+  embeddingDimensions?: number;
+  deepseekBaseUrl?: string;
+  deepseekApiKey?: string | null;
+  deepseekDefaultModel?: AppConfig['deepseek']['defaultModel'];
 }
 
 export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
@@ -79,6 +91,24 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
     },
     storage: {
       sqlitePath: ':memory:',
+      mongodbUri: options.mongodbUri ?? 'mongodb://127.0.0.1:27018',
+      mongodbDb: options.mongodbDb ?? 'yzj_ai_crm_test',
+    },
+    qdrant: {
+      url: options.qdrantUrl ?? 'http://127.0.0.1:6333',
+      apiKey: options.qdrantApiKey ?? null,
+      collectionName: options.qdrantCollectionName ?? 'yzj_artifact_chunks_test',
+    },
+    embedding: {
+      baseUrl: options.embeddingBaseUrl ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      apiKey: options.embeddingApiKey ?? null,
+      model: options.embeddingModel ?? 'text-embedding-v4',
+      dimensions: options.embeddingDimensions ?? 1024,
+    },
+    deepseek: {
+      baseUrl: options.deepseekBaseUrl ?? 'https://api.deepseek.com',
+      apiKey: options.deepseekApiKey ?? null,
+      defaultModel: options.deepseekDefaultModel ?? 'deepseek-v4-flash',
     },
     external: {
       image: {

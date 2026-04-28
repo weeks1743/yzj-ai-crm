@@ -512,10 +512,46 @@ export type SceneAssemblyKey =
   | 'scene.needs_todo_analysis'
   | 'scene.problem_statement'
   | 'scene.value_positioning'
-  | 'scene.solution_expert_enablement';
+  | 'scene.solution_matching';
 export type SceneAssemblyStatus = '待组装' | '依赖缺口' | '能力风险';
 export type SceneAssemblyDependencyStatus = 'available' | 'gap' | 'risk';
 export type SceneAssemblyCategory = '复合场景' | '分析场景';
+export type ScenePlanStepRequirement = 'required' | 'optional' | 'conditional';
+
+export interface ScenePlanStep {
+  key: string;
+  label: string;
+  description: string;
+  requirement: ScenePlanStepRequirement;
+  skillCode?: string;
+  canSkip: boolean;
+  canPause: boolean;
+}
+
+export interface ScenePlanVariant {
+  key: string;
+  label: string;
+  summary: string;
+  recommendedFor: string;
+  steps: string[];
+  userDecisions: string[];
+}
+
+export interface ScenePlanPolicy {
+  confirmation: string;
+  writeback: string;
+  pauseResume: string;
+  adminBoundary: string;
+}
+
+export interface ScenePlanPlaybook {
+  sceneKey: SceneAssemblyKey;
+  planModes: string[];
+  stepLibrary: ScenePlanStep[];
+  variants: ScenePlanVariant[];
+  policies: ScenePlanPolicy[];
+  adminControls: string[];
+}
 
 export interface SceneRecordSkillDependency {
   skillName: string;
@@ -575,6 +611,7 @@ export interface SceneAssemblyResolvedView {
   upstreamAssets: string[];
   outputs: string[];
   orchestrationChain: string[];
+  playbook: ScenePlanPlaybook;
   status: SceneAssemblyStatus;
   recordSkillDependencies: SceneAssemblyDependency[];
   externalSkillDependencies: SceneAssemblyDependency[];
@@ -602,6 +639,79 @@ export interface TraceLog {
   status: string;
   toolChain: string[];
   writebackResult: string;
+  timestamp: string;
+}
+
+export type AgentToolType = 'record' | 'external' | 'meta';
+export type AgentToolRiskLevel = 'low' | 'medium' | 'high';
+export type AgentToolStatus = 'ready' | 'warning' | 'placeholder';
+
+export interface AgentToolRow {
+  id: string;
+  name: string;
+  code: string;
+  type: AgentToolType;
+  provider: string;
+  status: AgentToolStatus;
+  riskLevel: AgentToolRiskLevel;
+  confirmationPolicy: string;
+  inputSummary: string;
+  outputSummary: string;
+  owner: string;
+  healthNote: string;
+}
+
+export interface AgentPlanStepTemplate {
+  key: string;
+  title: string;
+  actionType: 'query' | 'analyze' | 'write_preview' | 'confirm' | 'external' | 'meta';
+  toolRefs: string[];
+  required: boolean;
+  skippable: boolean;
+  confirmationRequired: boolean;
+}
+
+export interface AgentPlanTemplate {
+  id: string;
+  name: string;
+  intentPattern: string;
+  summary: string;
+  sampleUtterances: string[];
+  steps: AgentPlanStepTemplate[];
+  outputs: string[];
+  governanceNotes: string[];
+  status: 'enabled' | 'draft';
+}
+
+export interface AgentPolicy {
+  id: string;
+  name: string;
+  target: string;
+  trigger: string;
+  action: 'block' | 'require_confirmation' | 'clarify' | 'downgrade_to_draft' | 'audit';
+  severity: AgentToolRiskLevel;
+  owner: string;
+  lastTriggered: string;
+}
+
+export interface AgentRuntimeTrace {
+  id: string;
+  userInput: string;
+  intentFrame: {
+    actionType: string;
+    goal: string;
+    targets: string[];
+    missingSlots: string[];
+  };
+  taskPlan: {
+    planId: string;
+    status: string;
+    steps: string[];
+  };
+  executionState: string;
+  toolChain: string[];
+  evidenceRefs: string[];
+  result: string;
   timestamp: string;
 }
 
@@ -799,13 +909,12 @@ export interface AssistantTaskCard {
 export interface AssistantScene {
   key:
     | 'chat'
-    | 'post-visit-loop'
     | 'customer-analysis'
     | 'conversation-understanding'
     | 'needs-todo-analysis'
     | 'problem-statement'
     | 'value-positioning'
-    | 'solution-expert-enablement'
+    | 'solution-matching'
     | 'tasks';
   route: string;
   title: string;

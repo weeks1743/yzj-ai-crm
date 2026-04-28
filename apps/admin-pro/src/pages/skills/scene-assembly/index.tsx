@@ -57,6 +57,16 @@ function renderCompactTags(values: string[], color?: string) {
   );
 }
 
+function formatPlanStepRequirement(requirement: string) {
+  if (requirement === 'required') {
+    return '必选';
+  }
+  if (requirement === 'conditional') {
+    return '条件';
+  }
+  return '可选';
+}
+
 const columns: ProColumns<SceneAssemblyResolvedView>[] = [
   {
     title: '场景技能',
@@ -99,13 +109,34 @@ const columns: ProColumns<SceneAssemblyResolvedView>[] = [
     ),
   },
   {
-    title: '核心输出',
-    dataIndex: 'outputs',
-    width: 220,
-    render: (_, record) => renderCompactTags(record.outputs),
+    title: '推荐 Plan 模式',
+    dataIndex: 'playbook',
+    width: 240,
+    render: (_, record) => renderCompactTags(record.playbook.planModes, 'geekblue'),
   },
   {
-    title: '状态',
+    title: '可选步骤',
+    dataIndex: 'playbook',
+    width: 170,
+    render: (_, record) => {
+      const optionalCount = record.playbook.stepLibrary.filter(
+        (item) => item.requirement !== 'required',
+      ).length;
+      return `${optionalCount} 个可跳过 / ${record.playbook.stepLibrary.length} 个步骤`;
+    },
+  },
+  {
+    title: '守卫规则',
+    dataIndex: 'playbook',
+    width: 260,
+    render: (_, record) => (
+      <Text ellipsis={{ tooltip: record.playbook.policies[0]?.confirmation }}>
+        {record.playbook.policies[0]?.confirmation ?? '-'}
+      </Text>
+    ),
+  },
+  {
+    title: '依赖健康',
     dataIndex: 'status',
     width: 110,
     render: (_, record) => (
@@ -241,7 +272,7 @@ const SceneAssemblyPage = () => {
   return (
     <PageContainer
       title="场景技能"
-      subTitle="按销售主链路管理复合场景和分析场景，重点看入口、输出和供给关系。"
+      subTitle="管理可生成用户 Plan 的业务 Playbook，重点看能力边界、推荐步骤、守卫规则和依赖健康。"
       extra={[
         <Button key="reload" onClick={() => window.location.reload()}>
           重新加载
@@ -263,7 +294,7 @@ const SceneAssemblyPage = () => {
         style={{ marginBottom: 16 }}
         extra={(
           <Space wrap size={12}>
-            <Text type="secondary">按 CRM 客户生命周期方式查看不同销售阶段对应的场景技能</Text>
+            <Text type="secondary">按 CRM 客户生命周期查看 Playbook，管理员维护边界，用户在对话中裁剪 Plan</Text>
             {stageFilter !== '全部阶段' ? (
               <Button type="link" style={{ paddingInline: 0 }} onClick={() => setStageFilter('全部阶段')}>
                 查看全部阶段
@@ -491,24 +522,36 @@ const SceneAssemblyPage = () => {
             </div>
 
             <div>
-              <Text strong>业务链路</Text>
-              <div style={{ marginTop: 12 }}>
-                <Steps
-                  size="small"
-                  direction="vertical"
-                  current={Math.max(previewScene.orchestrationChain.length - 2, 0)}
-                  items={previewScene.orchestrationChain.map((item) => ({
-                    title: item,
-                  }))}
-                />
+                <Text strong>推荐 Plan 变体</Text>
+                <div style={{ marginTop: 12 }}>
+                  <Steps
+                    size="small"
+                    direction="vertical"
+                    current={0}
+                    items={previewScene.playbook.variants.map((item) => ({
+                      title: item.label,
+                      description: item.summary,
+                    }))}
+                  />
+                </div>
               </div>
-            </div>
 
-            <div>
-              <Text strong>标准输出</Text>
-              <div style={{ marginTop: 8 }}>
-                {renderCompactTags(previewScene.outputs)}
-              </div>
+              <div>
+                <Text strong>步骤库</Text>
+                <div style={{ marginTop: 8 }}>
+                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                    {previewScene.playbook.stepLibrary.slice(0, 5).map((item) => (
+                      <Space key={item.key} wrap size={[6, 6]}>
+                        <Tag color={item.requirement === 'required' ? 'red' : item.requirement === 'conditional' ? 'gold' : 'blue'}>
+                          {formatPlanStepRequirement(item.requirement)}
+                        </Tag>
+                        <Text>{item.label}</Text>
+                        {item.canSkip ? <Tag>可跳过</Tag> : null}
+                        {item.canPause ? <Tag>可暂停</Tag> : null}
+                      </Space>
+                    ))}
+                  </Space>
+                </div>
             </div>
 
             <div>
@@ -522,11 +565,22 @@ const SceneAssemblyPage = () => {
             </div>
 
             <div>
-              <Text strong>写回边界</Text>
+              <Text strong>用户可决定</Text>
               <ul style={{ margin: '8px 0 0 18px', padding: 0 }}>
-                {previewScene.boundaries.writeback.map((item) => (
+                {previewScene.playbook.variants[0]?.userDecisions.map((item) => (
                   <li key={item} style={{ marginBottom: 4 }}>
                     <Text type="secondary">{item}</Text>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div>
+              <Text strong>守卫与写回</Text>
+              <ul style={{ margin: '8px 0 0 18px', padding: 0 }}>
+                {previewScene.playbook.policies.map((item) => (
+                  <li key={item.confirmation} style={{ marginBottom: 4 }}>
+                    <Text type="secondary">{item.confirmation}</Text>
                   </li>
                 ))}
               </ul>

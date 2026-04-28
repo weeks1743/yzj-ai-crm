@@ -7,7 +7,7 @@
 - AI销售助手 的结构化与非结构化数据到底怎么分层
 - 哪些数据存数据库，哪些存文件，哪些存向量索引
 - 如何设计 EID + APPID 强租户隔离
-- PostgreSQL + pgvector 与 MongoDB + 向量数据库在本项目中的适配性如何比较
+- MongoDB + Qdrant 在 0.4.6 MVP 中如何承接非结构化 Artifact
 
 ## 1. 数据架构总原则
 
@@ -100,22 +100,22 @@ AI-CRM 存储的内容包括：
 - 转写文本块向量
 - 拜访摘要向量
 
-## 3. 推荐的 v1 数据底座
+## 3. 0.4.6 MVP 数据底座
 
-当前阶段性推荐：
+当前 MVP 先采用：
 
-- 主数据库：`PostgreSQL`
-- 向量索引：`pgvector`
-- 文件存储：`Object Storage`
+- Artifact 主存：`MongoDB`
+- 向量索引：`Qdrant`
+- 长期文件存储：后续再接 `Object Storage`
 - 缓存与锁：`Redis`
 
 推荐原因：
 
-- 更适合当前项目强关联、强状态、强审计的业务约束
-- 减少 v1 技术栈分裂
-- 更利于把多源资产绑定到客户 / 商机 / 联系人上
+- 公司研究、录音分析、网页快照等结果天然是半结构化 Markdown / JSON 文档，MongoDB 更适合快速保存版本化 Artifact。
+- Qdrant 单独承接向量检索，便于后续替换 embedding 模型、调 filter、做多集合隔离。
+- 结构化主数据仍在记录系统或影子对象中，MVP 不把客户、联系人、商机复制成新的事实源。
 
-这不是最终定案，后文会给出与 Mongo 路线的详细对比和决策门。
+后续若进入强交易、强报表、复杂审计阶段，可以再评估 PostgreSQL 作为运行态主库；但非结构化 Artifact 不应被强行塞回业务表。
 
 ## 4. 核心实体设计
 
@@ -149,6 +149,8 @@ AI-CRM 存储的内容包括：
 - `entity_relation`
 - `knowledge_chunk`
 - `artifact_file`
+- `artifacts`
+- `artifact_versions`
 
 ### 审计与观测类
 
@@ -210,6 +212,7 @@ AI-CRM 存储的内容包括：
 - 版本引用
 - 审计事件
 - 关系边
+- Markdown Artifact 正文与版本
 
 ### 放对象存储的内容
 
@@ -219,12 +222,59 @@ AI-CRM 存储的内容包括：
 - 长文本原文
 - 导出文件
 
-### 放向量索引的内容
+## 7. Artifact 与向量索引
 
-- 可被问答检索的文本块
-- 可被相似度检索的摘要块
+0.4.6 MVP 的第一条闭环是：
 
-## 7. EID + APPID 强租户隔离设计
+```text
+公司分析 -> Markdown Artifact -> MongoDB -> text-embedding-v4 -> Qdrant -> 对话证据卡
+```
+
+MongoDB collection：
+
+- `artifacts`：Artifact 元数据、当前版本、租户、来源工具、锚点、向量状态。
+- `artifact_versions`：Markdown 正文、版本号、来源引用、内容 hash。
+
+Qdrant collection：
+
+- `yzj_artifact_chunks`
+
+Qdrant payload 必须包含：
+
+- `eid`
+- `appId`
+- `artifactId`
+- `versionId`
+- `anchorTypes`
+- `anchorIds`
+- `anchorKeys`
+- `sourceToolCode`
+- `logicalPointId`
+
+检索 filter 必须至少包含 `eid + appId`。如果用户问题能识别出对象锚点，再叠加 `anchorKeys`，例如 `company:星海精工股份`。
+
+说明：Qdrant 真实 point id 只接受 UUID 或无符号整数，因此 MVP 使用 `${versionId}:${chunkIndex}` 作为 `logicalPointId` 写入 payload，并用它派生确定性 UUID 作为真实 point id。
+
+## 8. 多租户与对象锚点
+
+MVP 的强隔离边界：
+
+- Mongo 文档必须写入 `eid + appId`。
+- Qdrant payload 必须写入 `eid + appId`。
+- 查询与检索必须用同一组 `eid + appId` 过滤。
+
+Artifact 支持多个锚点：
+
+- `customer`
+- `opportunity`
+- `contact`
+- `followup`
+- `company`
+- `source_file`
+
+本轮默认同租户同应用内可复用。对象级权限、数据行权限和跨应用授权只预留 hook，不在 MVP 实现。
+
+## 9. EID + APPID 强租户隔离设计
 
 ### 强制规则
 
@@ -243,9 +293,9 @@ AI-CRM 存储的内容包括：
 
 因此 `appId` 是隔离“应用实例”的必要维度。
 
-## 8. 存储选型对比：PostgreSQL + pgvector vs MongoDB + 向量数据库
+## 10. 存储选型对比：PostgreSQL + pgvector vs MongoDB + 向量数据库
 
-### 8.1 为什么这件事现在不拍板
+### 10.1 为什么这件事现在不拍板
 
 当前阶段的重点不是先选一个“正确数据库”，而是先明确：
 
@@ -260,7 +310,7 @@ AI-CRM 存储的内容包括：
 
 因此，本阶段先形成“对比 + 决策门 + 阶段性建议”，不做不可逆拍板。
 
-### 8.2 候选方案定义
+### 10.2 候选方案定义
 
 #### 方案 A
 
@@ -280,7 +330,7 @@ AI-CRM 存储的内容包括：
 - B2 是 Mongo + 第三方向量库的更重路线
 - B2 不作为 v1 首选，只作为备选扩展路线
 
-### 8.3 官方资料
+### 10.3 官方资料
 
 - pgvector README：
   <https://github.com/pgvector/pgvector>
@@ -295,7 +345,7 @@ AI-CRM 存储的内容包括：
 - MongoDB Atlas Vector Search 产品页：
   <https://www.mongodb.com/en-us/products/platform/atlas-vector-search>
 
-### 8.4 评价维度
+### 10.4 评价维度
 
 本项目统一按以下维度比较：
 
@@ -310,7 +360,7 @@ AI-CRM 存储的内容包括：
 9. 横向扩展
 10. 对三大核心场景的适配度
 
-### 8.5 总体对比结论
+### 10.5 总体对比结论
 
 | 维度 | PostgreSQL + pgvector | MongoDB + 向量数据库 |
 |------|------------------------|-----------------------|
@@ -325,7 +375,7 @@ AI-CRM 存储的内容包括：
 | 横向扩展 | 中到优 | 优 |
 | 核心场景适配度 | 更优 | 中到优 |
 
-### 8.6 详细对比口径
+### 10.6 详细对比口径
 
 #### 数据模型匹配度
 
@@ -432,7 +482,7 @@ PostgreSQL + pgvector 的 v1 运维更简单。
 
 MongoDB Atlas Vector Search 如果全托管也可以很省事，但一旦变成 `MongoDB + 独立向量库`，复杂度会明显上升。
 
-### 8.7 分场景对比
+### 10.7 分场景对比
 
 #### 记录系统技能
 
@@ -485,7 +535,7 @@ PostgreSQL 更优。
 
 如果问答主要围绕“长文档语义检索”，Mongo 路线会更自然。
 
-### 8.8 决策门
+### 10.8 决策门
 
 #### 优先选 PostgreSQL + pgvector 的信号
 
@@ -501,7 +551,7 @@ PostgreSQL 更优。
 - 团队已有成熟 Mongo / Atlas 运维体系
 - 需要深度依赖 Mongo 聚合管道作为主查询范式
 
-### 8.9 阶段性建议
+### 10.9 阶段性建议
 
 本项目当前阶段建议写为：
 
@@ -509,7 +559,7 @@ PostgreSQL 更优。
 
 这个建议是阶段性推荐，不是最终不可变结论。
 
-## 9. 对现有核心场景文档的影响
+## 11. 对现有核心场景文档的影响
 
 ### 对录音导入的影响
 

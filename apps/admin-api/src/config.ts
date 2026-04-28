@@ -5,6 +5,7 @@ import type {
   ShadowDictionarySource,
   ShadowObjectConfig,
   ShadowObjectKey,
+  SkillRuntimeModelName,
 } from './contracts.js';
 import { ConfigError } from './errors.js';
 
@@ -110,6 +111,15 @@ function parsePositiveInteger(value: string | undefined, fallbackValue: number, 
   return parsed;
 }
 
+function parseSkillRuntimeModel(value: string | undefined): SkillRuntimeModelName {
+  const candidate = (value?.trim() || 'deepseek-v4-flash') as SkillRuntimeModelName;
+  if (candidate === 'deepseek-v4-pro' || candidate === 'deepseek-v4-flash') {
+    return candidate;
+  }
+
+  throw new ConfigError('DEEPSEEK_DEFAULT_MODEL 必须是 deepseek-v4-pro 或 deepseek-v4-flash');
+}
+
 function parseDictionarySource(value: string | undefined): ShadowDictionarySource {
   if (!value) {
     return 'manual_json';
@@ -194,6 +204,31 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
         dirname(envFilePath),
         env.ORG_SYNC_SQLITE_PATH || '.local/admin-api.sqlite',
       ),
+      mongodbUri: (env.MONGODB_URI || 'mongodb://127.0.0.1:27018').trim(),
+      mongodbDb: (env.MONGODB_DB || 'yzj_ai_crm_dev').trim(),
+    },
+    qdrant: {
+      url: (env.QDRANT_URL || 'http://127.0.0.1:6333').trim(),
+      apiKey: env.QDRANT_API_KEY?.trim() || null,
+      collectionName: (env.QDRANT_COLLECTION || 'yzj_artifact_chunks').trim(),
+    },
+    embedding: {
+      baseUrl: (
+        env.DASHSCOPE_EMBEDDING_BASE_URL ||
+        'https://dashscope.aliyuncs.com/compatible-mode/v1'
+      ).trim(),
+      apiKey: env.DASHSCOPE_API_KEY?.trim() || null,
+      model: (env.EMBEDDING_MODEL || 'text-embedding-v4').trim(),
+      dimensions: parsePositiveInteger(
+        env.EMBEDDING_DIMENSIONS,
+        1024,
+        'EMBEDDING_DIMENSIONS',
+      ),
+    },
+    deepseek: {
+      baseUrl: (env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').trim(),
+      apiKey: env.DEEPSEEK_API_KEY?.trim() || null,
+      defaultModel: parseSkillRuntimeModel(env.DEEPSEEK_DEFAULT_MODEL),
     },
     external: {
       image: {
