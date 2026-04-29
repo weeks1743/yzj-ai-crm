@@ -113,6 +113,7 @@ function buildMessage(sceneKey: string, output: AgentRuntimeOutput): AgentChatMe
       headline: output.headline,
       references: output.references,
       evidence: output.evidence,
+      uiSurfaces: output.uiSurfaces,
       agentTrace: {
         traceId: output.executionState.traceId,
         intentFrame: output.legacyIntentFrame,

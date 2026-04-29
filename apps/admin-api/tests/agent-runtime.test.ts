@@ -8,7 +8,7 @@ import { createCrmAgentRuntimeParts } from '../src/crm-agent-pack.js';
 import { YzjApiError } from '../src/errors.js';
 import { AgentToolRegistry, GENERIC_TOOL_CONTRACTS } from '../src/tool-registry.js';
 import { createInMemoryDatabase, createTestConfig } from './test-helpers.js';
-import type { AgentChatMessage, AppConfig, ExecutionState, IntentFrame, ShadowObjectKey, TaskPlan } from '../src/contracts.js';
+import type { AgentChatMessage, AppConfig, ExecutionState, IntentFrame, ShadowObjectKey, ShadowStandardizedField, TaskPlan } from '../src/contracts.js';
 import type { AgentToolDefinition, GenericIntentFrame } from '../src/agent-core.js';
 
 function recordIntent(
@@ -327,6 +327,132 @@ function createCompanyResearchMocks(input: {
   };
 }
 
+function createSearchField(input: Partial<ShadowStandardizedField> & Pick<ShadowStandardizedField, 'fieldCode' | 'label' | 'widgetType'>): ShadowStandardizedField {
+  return {
+    fieldCode: input.fieldCode,
+    label: input.label,
+    widgetType: input.widgetType,
+    required: false,
+    readOnly: false,
+    edit: true,
+    view: true,
+    writePolicy: 'promptable',
+    isSystemField: false,
+    provenance: {
+      sources: ['public_view_form_def'],
+      truthSource: 'public_view_form_def',
+    },
+    multi: false,
+    options: [],
+    ...input,
+  } as ShadowStandardizedField;
+}
+
+function createCustomerSearchFields(): ShadowStandardizedField[] {
+  return [
+    createSearchField({
+      fieldCode: '_S_NAME',
+      label: '客户名称',
+      widgetType: 'textWidget',
+      readOnly: true,
+      edit: false,
+      isSystemField: true,
+      semanticSlot: 'customer_name',
+      searchParameterKey: '_S_NAME',
+    }),
+    createSearchField({
+      fieldCode: 'Pw_0',
+      label: '省',
+      widgetType: 'publicOptBoxWidget',
+      semanticSlot: 'province',
+      searchParameterKey: 'province',
+      enumBinding: {
+        kind: 'public_option',
+        referId: null,
+        source: 'field_binding_workbook',
+        resolutionStatus: 'resolved',
+        acceptedValueShape: 'array<{title,dicId}>',
+        resolvedEntryCount: 2,
+      },
+      options: [
+        { title: '安徽', dicId: 'dic-province-ah' },
+        { title: '浙江', dicId: 'dic-province-zj' },
+      ],
+    }),
+    createSearchField({
+      fieldCode: 'Ra_0',
+      label: '客户状态',
+      widgetType: 'radioWidget',
+      semanticSlot: 'customer_status',
+      searchParameterKey: 'customer_status',
+      options: [{ title: '潜在客户', key: 'potential', value: '潜在客户' }],
+    }),
+    createSearchField({
+      fieldCode: 'Ra_3',
+      label: '客户类型',
+      widgetType: 'radioWidget',
+      semanticSlot: 'customer_type',
+      searchParameterKey: 'customer_type',
+      options: [{ title: 'VIP客户', key: 'vip', value: 'VIP客户' }],
+    }),
+    createSearchField({
+      fieldCode: 'Industry_0',
+      label: '行业',
+      widgetType: 'radioWidget',
+      semanticSlot: 'industry',
+      searchParameterKey: 'industry',
+      options: [{ title: '制造业', key: 'manufacturing', value: '制造业' }],
+    }),
+    createSearchField({
+      fieldCode: 'Nu_1',
+      label: '联系人手机',
+      widgetType: 'numberWidget',
+      searchParameterKey: 'Nu_1',
+    }),
+    createSearchField({
+      fieldCode: '_S_DISABLE',
+      label: '启用状态',
+      widgetType: 'switchWidget',
+      searchParameterKey: '_S_DISABLE',
+      readOnly: true,
+      edit: false,
+      isSystemField: true,
+    }),
+  ];
+}
+
+async function runCustomerSearchExtractionCase(query: string, fields = createCustomerSearchFields()) {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let searchInput: any = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'query', ''),
+    shadowMetadataService: {
+      getObject: () => ({ fields }),
+      executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
+        searchInput = input;
+        return { records: [] };
+      },
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => {
+        throw new Error('not used');
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: `conv-record-search-extraction-${Math.random().toString(16).slice(2)}`,
+    sceneKey: 'chat',
+    query,
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  return { response, searchInput };
+}
+
 test('Tool Registry exposes generic contracts and rejects scene tools', () => {
   assert.deepEqual([...GENERIC_TOOL_CONTRACTS], [
     'record.object.search',
@@ -542,6 +668,164 @@ test('Agent runtime routes record query through record search tool', async () =>
   assert.equal(response.executionState.status, 'completed');
   assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.search');
   assert.equal(searchedObject, 'customer');
+  assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.kind, 'record-search-results');
+  assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.summary.displayMode, 'card');
+  assert.doesNotMatch(response.message.content, /```json/);
+});
+
+test('Agent runtime returns A2UI surfaces for empty, single, and multi record search results', async () => {
+  const cases: Array<{
+    records: any[];
+    displayMode: 'empty' | 'card' | 'list';
+  }> = [
+    { records: [], displayMode: 'empty' },
+    {
+      records: [
+        {
+          formInstId: 'customer-form-001',
+          fields: [{ title: '客户名称', value: '测试客户 A' }],
+          rawRecord: {},
+        },
+      ],
+      displayMode: 'card',
+    },
+    {
+      records: [
+        {
+          formInstId: 'customer-form-001',
+          fields: [{ title: '客户名称', value: '测试客户 A' }],
+          rawRecord: {},
+        },
+        {
+          formInstId: 'customer-form-002',
+          fields: [{ title: '客户名称', value: '测试客户 B' }],
+          rawRecord: {},
+        },
+      ],
+      displayMode: 'list',
+    },
+  ];
+
+  for (const item of cases) {
+    const repository = new AgentRunRepository(createInMemoryDatabase());
+    const { service } = createAgentTestService({
+      repository,
+      intentFrame: recordIntent('customer', 'query'),
+      shadowMetadataService: {
+        executeSearch: async () => ({
+          objectKey: 'customer',
+          operation: 'search',
+          mode: 'live',
+          requestBody: {},
+          pageNumber: 1,
+          pageSize: 5,
+          totalPages: 1,
+          totalElements: item.records.length,
+          records: item.records,
+        }),
+        executeGet: async () => ({ record: null }),
+        previewUpsert: async () => {
+          throw new Error('not used');
+        },
+        executeUpsert: async () => {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    const response = await service.chat({
+      conversationKey: `conv-record-a2ui-${item.displayMode}`,
+      sceneKey: 'chat',
+      query: '查询客户 测试客户',
+      tenantContext: { operatorOpenId: 'operator-001' },
+    });
+    const surface = response.message.extraInfo.uiSurfaces?.[0];
+
+    assert.equal(response.executionState.status, 'completed');
+    assert.equal(surface?.protocol, 'a2ui');
+    assert.equal(surface?.version, 'v0.9');
+    assert.equal(surface?.catalogId, 'local://yzj-crm/record-result/v1');
+    assert.equal(surface?.summary.displayMode, item.displayMode);
+    assert.equal(surface?.commands.some((command: any) => command.updateComponents), true);
+    assert.doesNotMatch(response.message.content, /```json/);
+  }
+});
+
+test('Agent runtime extracts metadata-driven record search filters before title fallback', async () => {
+  const cases: Array<{
+    query: string;
+    expectedFilter: Record<string, unknown>;
+  }> = [
+    {
+      query: '查询安徽省的客户',
+      expectedFilter: { field: 'province', value: '安徽', operator: 'eq' },
+    },
+    {
+      query: '查询客户状态为潜在客户的客户',
+      expectedFilter: { field: 'customer_status', value: '潜在客户', operator: 'eq' },
+    },
+    {
+      query: '查询行业为制造业的客户',
+      expectedFilter: { field: 'industry', value: '制造业', operator: 'eq' },
+    },
+    {
+      query: '查询联系人手机为 13800138000 的客户',
+      expectedFilter: { field: 'Nu_1', value: '13800138000' },
+    },
+    {
+      query: '查询启用客户',
+      expectedFilter: { field: '_S_DISABLE', value: '1', operator: 'eq' },
+    },
+  ];
+
+  for (const item of cases) {
+    const { response, searchInput } = await runCustomerSearchExtractionCase(item.query);
+
+    assert.equal(response.executionState.status, 'completed');
+    assert.deepEqual(searchInput.filters, [item.expectedFilter], item.query);
+    assert.equal(
+      searchInput.filters.some((filter: { field?: string }) => filter.field === '_S_NAME' || filter.field === 'customer_name'),
+      false,
+      item.query,
+    );
+    const searchExtraction = (response.message.extraInfo.agentTrace.selectedTool?.input.agentControl as any)?.searchExtraction;
+    assert.equal(searchExtraction.conditions.length, 1, item.query);
+    assert.equal(searchExtraction.conditions[0]?.field, item.expectedFilter.field, item.query);
+  }
+});
+
+test('Agent runtime keeps customer name fallback when field value is not a standalone condition', async () => {
+  const { response, searchInput } = await runCustomerSearchExtractionCase('查询安徽艳阳电气客户');
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.deepEqual(searchInput.filters, [
+    {
+      field: 'customer_name',
+      value: '安徽艳阳电气',
+      operator: 'like',
+    },
+  ]);
+});
+
+test('Agent runtime clarifies ambiguous implicit record search field instead of title fallback', async () => {
+  const fields = [
+    ...createCustomerSearchFields(),
+    createSearchField({
+      fieldCode: 'Ra_9',
+      label: '客户等级',
+      widgetType: 'radioWidget',
+      searchParameterKey: 'customer_level',
+      options: [{ title: 'VIP客户', key: 'vip-level', value: 'VIP客户' }],
+    }),
+  ];
+  const { response, searchInput } = await runCustomerSearchExtractionCase('查询VIP客户', fields);
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(searchInput, null);
+  assert.match(response.message.content, /同时命中多个可查询字段/);
+  const searchExtraction = (response.message.extraInfo.agentTrace.selectedTool?.input.agentControl as any)?.searchExtraction;
+  assert.equal(searchExtraction.ambiguities[0]?.candidateFields.length, 2);
+  assert.equal(searchExtraction.fallbackName, undefined);
 });
 
 test('Agent runtime probes existing customer before ambiguous company info request', async () => {
@@ -678,6 +962,8 @@ test('Agent runtime does not route unavailable existing research choice to compa
 test('Agent runtime routes ambiguous company info choice to customer get', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   let getInput: any = null;
+  const longTailMarker = '完整输出尾部标记-END';
+  const longRecordPayload = `${'完整输出字段-'.repeat(700)}${longTailMarker}`;
   const { service } = createAgentTestService({
     repository,
     intentFrame: companyIntent('安徽艳阳电气集团有限公司'),
@@ -700,8 +986,11 @@ test('Agent runtime routes ambiguous company info choice to customer get', async
             fields: [
               { title: '客户名称', value: '安徽艳阳电气集团有限公司' },
               { title: '客户状态', value: '销售线索阶段' },
+              { title: '完整字段', value: longRecordPayload },
             ],
-            rawRecord: {},
+            rawRecord: {
+              longRecordPayload,
+            },
           },
         };
       },
@@ -741,7 +1030,15 @@ test('Agent runtime routes ambiguous company info choice to customer get', async
   assert.equal(response.message.extraInfo.agentTrace.continuationResolution?.action, 'route_tool');
   assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.get');
   assert.equal(getInput.formInstId, 'customer-ahyy-001');
-  assert.match(response.message.content, /记录工具已执行/);
+  assert.match(response.message.content, /已查询到客户/);
+  assert.doesNotMatch(response.message.content, /```json/);
+  assert.doesNotMatch(response.message.content, new RegExp(longTailMarker));
+  assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.kind, 'record-detail');
+  assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.summary.displayMode, 'card');
+  assert.match(
+    JSON.stringify(response.message.extraInfo.uiSurfaces?.[0]?.rawResult),
+    new RegExp(longTailMarker),
+  );
 });
 
 test('Agent runtime routes ambiguous company info choice to company research', async () => {

@@ -4,6 +4,7 @@ import {
   XRequest,
   type XRequestOptions,
 } from '@ant-design/x-sdk';
+import type { AgentUiSurface } from '@shared/types';
 
 const TEST_OPERATOR_OPEN_ID =
   import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || '69e75eb5e4b0e65b61c014da';
@@ -77,6 +78,7 @@ export interface AssistantChatMessage {
     headline: string;
     references: string[];
     evidence?: AssistantEvidenceCard[];
+    uiSurfaces?: AgentUiSurface[];
     artifactTrace?: {
       intentFrame: string;
       taskPlan: string[];

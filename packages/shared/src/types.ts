@@ -123,6 +123,51 @@ export interface AssetPageConfig {
 }
 
 export type ShadowObjectKey = 'customer' | 'contact' | 'opportunity' | 'followup';
+export interface AgentUiSurface {
+  kind: 'record-search-results' | 'record-detail';
+  protocol: 'a2ui';
+  version: 'v0.9';
+  surfaceId: string;
+  catalogId: 'local://yzj-crm/record-result/v1';
+  commands: AgentA2UiCommand[];
+  summary: {
+    objectKey: ShadowObjectKey;
+    operation: 'search' | 'get';
+    total?: number;
+    displayMode: 'empty' | 'list' | 'card';
+  };
+  rawResult?: unknown;
+}
+
+export type AgentA2UiCommand =
+  | {
+      version: 'v0.9';
+      createSurface: {
+        surfaceId: string;
+        catalogId: 'local://yzj-crm/record-result/v1';
+      };
+    }
+  | {
+      version: 'v0.9';
+      updateDataModel: {
+        surfaceId: string;
+        path: string;
+        value: unknown;
+      };
+    }
+  | {
+      version: 'v0.9';
+      updateComponents: {
+        surfaceId: string;
+        components: Array<Record<string, unknown>>;
+      };
+    }
+  | {
+      version: 'v0.9';
+      deleteSurface: {
+        surfaceId: string;
+      };
+    };
 export type ShadowDictionarySource = 'manual_json' | 'approval_api' | 'hybrid';
 export type ShadowResolvedDictionarySource =
   | ShadowDictionarySource

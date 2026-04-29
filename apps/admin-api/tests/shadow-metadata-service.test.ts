@@ -37,6 +37,7 @@ function writeFieldBoundWorkbook(workbookPath: string) {
     { dicId: 'd007', title: '区', parentId: '0', code: 'district', sort: 3, type: 1 },
     { dicId: 'd-province-js', title: '江苏', parentId: 'd005', code: '320000', sort: 4, type: 0 },
     { dicId: 'd-province-zj', title: '浙江', parentId: 'd005', code: '330000', sort: 1, type: 0 },
+    { dicId: 'd-province-ah', title: '安徽', parentId: 'd005', code: '340000', sort: 2, type: 0 },
     { dicId: 'd-city-nt', title: '南通市', parentId: 'd006', code: '320600', sort: 4, type: 0 },
     { dicId: 'd-city-hz', title: '杭州', parentId: 'd006', code: '330100', sort: 1, type: 0 },
     { dicId: 'd-district-ct-a', title: '城区', parentId: 'd007', code: '320601', sort: 10, type: 0 },
@@ -2459,6 +2460,66 @@ test('ShadowMetadataService executes real search and get with live read bindings
         plusDay: false,
       },
       value: [SEARCH_RANGE_START_TS, SEARCH_RANGE_END_TS],
+    });
+
+    const metadataFieldSearch = await service.executeSearch('customer', {
+      operatorOpenId: 'oid-live-1',
+      filters: [
+        {
+          field: 'province',
+          value: '安徽',
+          operator: 'eq',
+        },
+        {
+          field: 'customer_status',
+          value: '待跟进',
+          operator: 'eq',
+        },
+        {
+          field: '_S_DISABLE',
+          value: '启用',
+          operator: 'eq',
+        },
+        {
+          field: 'Nu_1',
+          value: '13800138000',
+        },
+      ],
+      pageNumber: 1,
+      pageSize: 20,
+    });
+    assert.equal(metadataFieldSearch.mode, 'live');
+    assert.deepEqual(metadataFieldSearch.requestBody.searchItems[0], {
+      codeId: 'Pw_0',
+      parentCodeId: null,
+      type: 'publicOptBoxWidget',
+      operator: 'eq',
+      value: [
+        {
+          title: '安徽',
+          dicId: 'd-province-ah',
+        },
+      ],
+    });
+    assert.deepEqual(metadataFieldSearch.requestBody.searchItems[1], {
+      codeId: 'Ra_0',
+      parentCodeId: null,
+      type: 'radioWidget',
+      operator: 'eq',
+      value: 'customer-pending',
+    });
+    assert.deepEqual(metadataFieldSearch.requestBody.searchItems[2], {
+      codeId: '_S_DISABLE',
+      parentCodeId: null,
+      type: 'switchWidget',
+      operator: 'eq',
+      value: '1',
+    });
+    assert.deepEqual(metadataFieldSearch.requestBody.searchItems[3], {
+      codeId: 'Nu_1',
+      parentCodeId: null,
+      type: 'numberWidget',
+      value: '13800138000',
     });
 
     const detail = await service.executeGet('customer', {

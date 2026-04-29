@@ -6,6 +6,7 @@ import type {
   AgentExecutionStatus,
   AgentToolCall,
   AgentToolCallStatus,
+  AgentUiSurface,
   AppConfig,
   ExecutionState,
   IntentFrame,
@@ -409,6 +410,7 @@ export interface AgentToolExecutionResult {
   references: string[];
   evidence?: AgentEvidenceCard[];
   attachments?: AgentAttachment[];
+  uiSurfaces?: AgentUiSurface[];
   toolCalls: AgentToolCall[];
   qdrantFilter?: unknown;
   contextFrame?: ContextFrame | null;
@@ -430,6 +432,7 @@ export interface AgentRuntimeOutput {
   headline: string;
   references: string[];
   attachments: AgentAttachment[];
+  uiSurfaces?: AgentUiSurface[];
   qdrantFilter?: unknown;
   contextFrame?: ContextFrame | null;
   selectedTool?: AgentToolSelection;

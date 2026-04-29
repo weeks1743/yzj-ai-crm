@@ -5,6 +5,7 @@ import type {
   AgentEvidenceCard,
   AgentExecutionStatus,
   AgentToolCall,
+  AgentUiSurface,
   AppConfig,
   ExecutionState,
   TaskPlan,
@@ -63,6 +64,7 @@ interface MainAgentGraphState {
   headline: string;
   references: string[];
   attachments: NonNullable<AgentRuntimeOutput['attachments']>;
+  uiSurfaces?: AgentUiSurface[];
   qdrantFilter?: unknown;
   status: AgentExecutionStatus;
   currentStepKey: string | null;
@@ -121,6 +123,7 @@ const MainAgentState = Annotation.Root({
   headline: Annotation<string>(),
   references: Annotation<string[]>(),
   attachments: Annotation<NonNullable<AgentRuntimeOutput['attachments']>>(),
+  uiSurfaces: Annotation<AgentUiSurface[] | undefined>(),
   qdrantFilter: Annotation<unknown | undefined>(),
   status: Annotation<AgentExecutionStatus>(),
   currentStepKey: Annotation<string | null>(),
@@ -163,6 +166,7 @@ export class MainAgentRuntime {
       headline: state.headline,
       references: state.references,
       attachments: state.attachments,
+      uiSurfaces: state.uiSurfaces ?? [],
       qdrantFilter: state.qdrantFilter,
       contextFrame: state.contextFrame ?? null,
       selectedTool: state.selectedTool,
@@ -273,6 +277,7 @@ export class MainAgentRuntime {
       headline: '',
       references: [],
       attachments: [],
+      uiSurfaces: [],
       status: 'draft',
       currentStepKey: null,
     };
@@ -395,6 +400,7 @@ export class MainAgentRuntime {
           references: result.references,
           evidence: result.evidence ?? [],
           attachments: result.attachments ?? [],
+          uiSurfaces: result.uiSurfaces ?? state.uiSurfaces ?? [],
           qdrantFilter: result.qdrantFilter,
           contextFrame: result.contextFrame ?? state.contextFrame ?? null,
           toolArbitration: result.toolArbitration ?? state.toolArbitration ?? null,
@@ -647,6 +653,7 @@ export class MainAgentRuntime {
           references: result.references,
           evidence: result.evidence ?? [],
           attachments: result.attachments ?? [],
+          uiSurfaces: result.uiSurfaces ?? state.uiSurfaces ?? [],
           qdrantFilter: result.qdrantFilter,
           contextFrame: result.contextFrame ?? state.contextFrame ?? null,
           toolArbitration: result.toolArbitration ?? state.toolArbitration ?? null,
@@ -699,6 +706,7 @@ function normalizeGraphOutput(
     headline: output.headline ?? '',
     references: output.references ?? [],
     attachments: output.attachments ?? [],
+    uiSurfaces: output.uiSurfaces ?? [],
     status: output.status ?? 'failed',
     currentStepKey: output.currentStepKey ?? null,
     focusedName: output.focusedName ?? fallback.focusedName,

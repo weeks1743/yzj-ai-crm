@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AgentEvidenceCard,
+  AgentUiSurface,
   AppConfig,
   ArtifactAnchor,
   ExternalSkillJobResponse,
   IntentFrame,
+  ShadowExecuteGetResponse,
+  ShadowExecuteSearchResponse,
+  ShadowLiveRecord,
   ShadowObjectKey,
   ShadowPreviewResponse,
   ShadowPreviewSearchInput,
@@ -54,10 +58,26 @@ const CRM_RECORD_OBJECTS: ShadowObjectKey[] = ['customer', 'contact', 'opportuni
 const COMPANY_RESEARCH_TOOL = 'external.company_research';
 const COMPANY_RESEARCH_RUNTIME_TOOL = 'ext.company_research_pm';
 const CONTEXT_SUMMARY_TOOL = 'meta.context_summary';
+const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1' as const;
 const COMPANY_RESEARCH_POLL_INTERVAL_MS = 1000;
 const COMPANY_RESEARCH_MAX_WAIT_MS = 420_000;
 const DUPLICATE_CHECK_MAX_ATTEMPTS = 2;
 const DUPLICATE_CHECK_RETRY_DELAY_MS = 300;
+const SEARCH_EXTRACTOR_WIDGET_TYPES = new Set([
+  'textWidget',
+  'textAreaWidget',
+  'numberWidget',
+  'moneyWidget',
+  'radioWidget',
+  'checkboxWidget',
+  'dateWidget',
+  'personSelectWidget',
+  'departmentSelectWidget',
+  'publicOptBoxWidget',
+  'basicDataWidget',
+  'switchWidget',
+  'serialNumWidget',
+]);
 
 const CRM_RECORD_CAPABILITIES: Record<ShadowObjectKey, RecordToolCapability> = {
   customer: {
@@ -335,11 +355,12 @@ export class CrmAgentPlanner implements AgentPlanner {
   constructor(
     private readonly options: {
       arbitrationRules: ToolArbitrationRule[];
+      shadowMetadataService: ShadowMetadataService;
     },
   ) {}
 
   async plan(input: AgentPlannerInput): Promise<AgentPlannerResult> {
-    const toolSelection = selectTool(input, this.options.arbitrationRules);
+    const toolSelection = selectTool(input, this.options.arbitrationRules, this.options.shadowMetadataService);
     const selectedTool = toolSelection.selectedTool;
     const taskPlan = buildToolTaskPlan(input.intentFrame.legacyIntentFrame, selectedTool);
     return {
@@ -381,6 +402,7 @@ export function createCrmAgentRuntimeParts(options: CrmAgentPackOptions): {
     }),
     planner: new CrmAgentPlanner({
       arbitrationRules: CRM_TOOL_ARBITRATION_RULES,
+      shadowMetadataService: options.shadowMetadataService,
     }),
   };
 }
@@ -490,7 +512,11 @@ interface CrmToolSelectionResult {
   toolArbitration?: ToolArbitrationTrace | null;
 }
 
-function selectTool(input: AgentPlannerInput, arbitrationRules: ToolArbitrationRule[]): CrmToolSelectionResult {
+function selectTool(
+  input: AgentPlannerInput,
+  arbitrationRules: ToolArbitrationRule[],
+  shadowMetadataService: ShadowMetadataService,
+): CrmToolSelectionResult {
   const query = input.request.query.trim();
   const target = input.intentFrame.target;
 
@@ -559,7 +585,7 @@ function selectTool(input: AgentPlannerInput, arbitrationRules: ToolArbitrationR
   }
 
   if (target.kind === 'record' && target.objectType) {
-    const objectKey = target.objectType;
+    const objectKey = target.objectType as ShadowObjectKey;
     const operation = resolveRecordOperation(query, input.intentFrame.legacyIntentFrame);
     const toolCode = `record.${objectKey}.${operation}`;
     const tool = input.availableTools.find((item) => item.code === toolCode);
@@ -573,6 +599,7 @@ function selectTool(input: AgentPlannerInput, arbitrationRules: ToolArbitrationR
         operatorOpenId: input.request.tenantContext?.operatorOpenId,
         targetName: target.name,
         tool,
+        fields: readRecordFields({ shadowMetadataService }, objectKey),
         contextFrame: input.contextFrame ?? null,
         resolvedContext: input.resolvedContext ?? null,
       }),
@@ -697,11 +724,12 @@ function buildRecordToolInput(input: {
   operatorOpenId?: string;
   targetName?: string;
   tool?: AgentToolDefinition;
+  fields?: ShadowStandardizedField[];
   contextFrame?: ContextFrame | null;
   resolvedContext?: AgentPlannerInput['resolvedContext'];
 }): Record<string, unknown> {
-  const name = input.targetName || extractRecordName(input.query, input.objectKey);
   const capability = input.tool?.recordCapability ?? CRM_RECORD_CAPABILITIES[input.objectKey as ShadowObjectKey];
+  const name = input.targetName || extractRecordName(input.query, input.objectKey);
   const identityField = capability.identityFields?.[0] ?? inferRecordNameParam(input.objectKey);
   const contextRecordId = resolveContextRecordFormInstId({
     objectKey: input.objectKey,
@@ -716,20 +744,16 @@ function buildRecordToolInput(input: {
     resolvedContext: input.resolvedContext ?? null,
   });
   if (input.operation === 'search') {
-    return {
-      filters: boundSearchInput?.filters ?? (name
-        ? [
-            {
-              field: identityField,
-              value: name,
-              operator: 'like',
-            },
-          ]
-        : []),
+    return buildRecordSearchInput({
+      query: input.query,
+      objectKey: input.objectKey,
+      capability,
+      identityField,
+      targetName: input.targetName,
+      fields: input.fields ?? [],
+      boundFilters: boundSearchInput?.filters ?? [],
       operatorOpenId: input.operatorOpenId,
-      pageNumber: 1,
-      pageSize: 5,
-    };
+    });
   }
   if (input.operation === 'get') {
     return {
@@ -821,6 +845,563 @@ function buildSubjectBoundSearchInput(input: {
         operator: 'eq',
       },
     ],
+  };
+}
+
+type RecordSearchFilter = NonNullable<ShadowPreviewSearchInput['filters']>[number];
+
+interface RecordSearchExtraction {
+  filters: RecordSearchFilter[];
+  consumedTexts: string[];
+  conditions: Array<{
+    field: string;
+    label: string;
+    value: string;
+    source: 'explicit' | 'implicit';
+  }>;
+  ambiguities: Array<{
+    value: string;
+    candidateFields: Array<{ field: string; label: string }>;
+  }>;
+  unresolvedValues: Array<{
+    field: string;
+    label: string;
+    value: string;
+    reason: string;
+  }>;
+}
+
+function buildRecordSearchInput(input: {
+  query: string;
+  objectKey: string;
+  capability: RecordToolCapability;
+  identityField: string;
+  targetName?: string;
+  fields: ShadowStandardizedField[];
+  boundFilters: RecordSearchFilter[];
+  operatorOpenId?: string;
+}): Record<string, unknown> {
+  const extraction = extractRecordSearchConditions({
+    query: input.query,
+    objectKey: input.objectKey,
+    capability: input.capability,
+    fields: input.fields,
+    identityField: input.identityField,
+  });
+  const structuredFilters = [
+    ...input.boundFilters,
+    ...extraction.filters,
+  ];
+  const fallbackName = resolveRecordSearchFallbackName({
+    query: input.query,
+    objectKey: input.objectKey,
+    targetName: input.targetName,
+    consumedTexts: extraction.consumedTexts,
+    hasStructuredFilters: structuredFilters.length > 0 || extraction.ambiguities.length > 0 || extraction.unresolvedValues.length > 0,
+  });
+  const filters = [
+    ...structuredFilters,
+    ...(fallbackName
+      ? [
+          {
+            field: input.identityField,
+            value: fallbackName,
+            operator: 'like',
+          },
+        ]
+      : []),
+  ];
+  const searchExtraction = buildSearchExtractionControl({
+    extraction,
+    fallbackName,
+  });
+
+  return {
+    filters,
+    operatorOpenId: input.operatorOpenId,
+    pageNumber: 1,
+    pageSize: 5,
+    ...(searchExtraction ? { agentControl: { searchExtraction } } : {}),
+  };
+}
+
+function extractRecordSearchConditions(input: {
+  query: string;
+  objectKey: string;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  identityField: string;
+}): RecordSearchExtraction {
+  const fieldRefs = buildSearchFieldRefs(input.fields, input.capability, input.identityField);
+  const extraction: RecordSearchExtraction = {
+    filters: [],
+    consumedTexts: [],
+    conditions: [],
+    ambiguities: [],
+    unresolvedValues: [],
+  };
+  const usedFields = new Set<string>();
+
+  for (const ref of fieldRefs) {
+    const explicit = extractExplicitSearchCondition({
+      query: input.query,
+      objectKey: input.objectKey,
+      ref,
+    });
+    if (!explicit) {
+      continue;
+    }
+
+    const value = buildSearchFilterValue(ref.field, explicit.value, 'explicit');
+    extraction.consumedTexts.push(explicit.sourceText);
+    usedFields.add(ref.parameterKey);
+    if (value.status === 'ok') {
+      extraction.filters.push({
+        field: ref.parameterKey,
+        value: value.value,
+        ...(value.operator ? { operator: value.operator } : {}),
+      });
+      extraction.conditions.push({
+        field: ref.parameterKey,
+        label: ref.field.label,
+        value: explicit.value,
+        source: 'explicit',
+      });
+    } else {
+      extraction.unresolvedValues.push({
+        field: ref.parameterKey,
+        label: ref.field.label,
+        value: explicit.value,
+        reason: value.reason,
+      });
+    }
+  }
+
+  const implicitText = buildImplicitSearchPredicateText(input.query, input.objectKey);
+  if (implicitText) {
+    const implicitMatches = fieldRefs
+      .filter((ref) => !usedFields.has(ref.parameterKey) && canImplicitlyExtractField(ref.field))
+      .map((ref) => {
+        const value = buildSearchFilterValue(ref.field, implicitText, 'implicit');
+        return value.status === 'ok'
+          ? {
+              ref,
+              value,
+            }
+          : null;
+      })
+      .filter((item): item is { ref: SearchFieldRef; value: SearchFilterValueResult & { status: 'ok' } } => Boolean(item));
+
+    if (implicitMatches.length === 1) {
+      const match = implicitMatches[0]!;
+      extraction.filters.push({
+        field: match.ref.parameterKey,
+        value: match.value.value,
+        ...(match.value.operator ? { operator: match.value.operator } : {}),
+      });
+      extraction.consumedTexts.push(implicitText);
+      extraction.conditions.push({
+        field: match.ref.parameterKey,
+        label: match.ref.field.label,
+        value: implicitText,
+        source: 'implicit',
+      });
+    } else if (implicitMatches.length > 1) {
+      extraction.ambiguities.push({
+        value: implicitText,
+        candidateFields: implicitMatches.map((match) => ({
+          field: match.ref.parameterKey,
+          label: match.ref.field.label,
+        })),
+      });
+      extraction.consumedTexts.push(implicitText);
+    }
+  }
+
+  return extraction;
+}
+
+interface SearchFieldRef {
+  field: ShadowStandardizedField;
+  parameterKey: string;
+  labels: string[];
+}
+
+function buildSearchFieldRefs(
+  fields: ShadowStandardizedField[],
+  capability: RecordToolCapability,
+  identityField: string,
+): SearchFieldRef[] {
+  return fields
+    .filter(isFieldEligibleForSearchExtraction)
+    .filter((field) => !isRecordIdentitySearchField(field, identityField))
+    .map((field) => {
+      const parameterKey = field.searchParameterKey ?? field.semanticSlot ?? field.fieldCode;
+      return {
+        field,
+        parameterKey,
+        labels: buildSearchFieldLabels(field, capability, parameterKey, identityField),
+      };
+    })
+    .filter((ref) => ref.labels.length > 0)
+    .sort((a, b) => Math.max(...b.labels.map((label) => label.length)) - Math.max(...a.labels.map((label) => label.length)));
+}
+
+function isRecordIdentitySearchField(field: ShadowStandardizedField, identityField: string): boolean {
+  return [
+    field.fieldCode,
+    field.searchParameterKey,
+    field.writeParameterKey,
+    field.semanticSlot,
+  ].some((key) => key === identityField || key === '_S_NAME' || key === '_S_TITLE');
+}
+
+function isFieldEligibleForSearchExtraction(field: ShadowStandardizedField): boolean {
+  if (!SEARCH_EXTRACTOR_WIDGET_TYPES.has(field.widgetType) || field.widgetType === 'attachmentWidget') {
+    return false;
+  }
+  if (field.widgetType === 'publicOptBoxWidget') {
+    return field.enumBinding?.resolutionStatus === 'resolved' || field.options.length > 0;
+  }
+  if (field.widgetType === 'basicDataWidget') {
+    return Boolean(field.relationBinding?.formCodeId);
+  }
+  return true;
+}
+
+function buildSearchFieldLabels(
+  field: ShadowStandardizedField,
+  capability: RecordToolCapability,
+  parameterKey: string,
+  identityField: string,
+): string[] {
+  const keys = [
+    field.fieldCode,
+    field.searchParameterKey,
+    field.writeParameterKey,
+    field.semanticSlot,
+    parameterKey,
+  ].filter((item): item is string => Boolean(item?.trim()));
+  const labels = [
+    field.label,
+    ...keys.map((key) => capability.fieldLabels?.[key]),
+    ...keys,
+  ];
+  const variants = labels
+    .filter((item): item is string => Boolean(item?.trim()))
+    .flatMap((label) => [label, ...buildShortLabelVariants(label)])
+    .map((label) => label.replace(/（.*?）/g, '').trim())
+    .filter(Boolean);
+  const objectLabels = new Set(['客户', '公司', '联系人', '商机', '机会', '跟进', '记录']);
+
+  return Array.from(new Set(variants))
+    .filter((label) => {
+      if (objectLabels.has(label) && (parameterKey === identityField || field.fieldCode === identityField)) {
+        return false;
+      }
+      return label.length > 0;
+    })
+    .sort((a, b) => b.length - a.length);
+}
+
+function extractExplicitSearchCondition(input: {
+  query: string;
+  objectKey: string;
+  ref: SearchFieldRef;
+}): { value: string; sourceText: string } | null {
+  const connector = '(?:为|是|=|：|:|在|属于|包含|含有|等于)';
+  for (const label of input.ref.labels) {
+    const escaped = escapeRegExp(label);
+    const pattern = label.length <= 1
+      ? new RegExp(`${escaped}\\s*${connector}\\s*([^，。；;！？\\n]+)`)
+      : new RegExp(`${escaped}\\s*(?:${connector}\\s*)?([^，。；;！？\\n]+)`);
+    const matched = input.query.match(pattern);
+    const rawValue = matched?.[1]?.trim();
+    if (!matched?.[0] || !rawValue) {
+      continue;
+    }
+    const value = trimSearchConditionValue(rawValue, input.objectKey);
+    if (value) {
+      return {
+        value,
+        sourceText: matched[0],
+      };
+    }
+  }
+  return null;
+}
+
+type SearchFilterValueResult =
+  | { status: 'ok'; value: unknown; operator?: string }
+  | { status: 'unresolved'; reason: string };
+
+function buildSearchFilterValue(
+  field: ShadowStandardizedField,
+  rawValue: string,
+  source: 'explicit' | 'implicit',
+): SearchFilterValueResult {
+  const normalizedValue = rawValue.replace(/[，,：:。！？、；;\s]+$/g, '').trim();
+  if (!normalizedValue) {
+    return {
+      status: 'unresolved',
+      reason: '字段值为空',
+    };
+  }
+
+  if (field.widgetType === 'radioWidget' || field.widgetType === 'checkboxWidget' || field.widgetType === 'publicOptBoxWidget') {
+    const option = findMatchingFieldOption(field, normalizedValue);
+    if (!option) {
+      return {
+        status: 'unresolved',
+        reason: `${field.label} 的值未命中可选项`,
+      };
+    }
+    return {
+      status: 'ok',
+      value: option.title || option.value || option.key || normalizedValue,
+      operator: 'eq',
+    };
+  }
+
+  if (field.widgetType === 'switchWidget') {
+    const switchValue = normalizeSearchSwitchValue(normalizedValue);
+    if (!switchValue) {
+      return {
+        status: 'unresolved',
+        reason: `${field.label} 的开关值无法识别`,
+      };
+    }
+    return {
+      status: 'ok',
+      value: switchValue,
+      operator: 'eq',
+    };
+  }
+
+  if (field.widgetType === 'dateWidget') {
+    const dateValue = normalizeSearchDateValue(normalizedValue);
+    if (!dateValue) {
+      return {
+        status: 'unresolved',
+        reason: `${field.label} 的日期值无法识别`,
+      };
+    }
+    return {
+      status: 'ok',
+      value: dateValue,
+    };
+  }
+
+  if (field.widgetType === 'numberWidget' || field.widgetType === 'moneyWidget') {
+    const comparable = normalizeSearchComparable(normalizedValue);
+    const isPhoneField = /手机|电话|phone/i.test(`${field.label}${field.semanticSlot ?? ''}${field.searchParameterKey ?? ''}`);
+    const phoneValue = isPhoneField ? comparable.match(/1[3-9]\d{9}/)?.[0] : undefined;
+    if (phoneValue) {
+      return {
+        status: 'ok',
+        value: phoneValue,
+      };
+    }
+    if (source === 'implicit' && isPhoneField) {
+      return {
+        status: 'unresolved',
+        reason: `${field.label} 不支持非手机号文本的隐式识别`,
+      };
+    }
+    if (source === 'implicit' && !isPhoneField && !/^-?\d+(?:\.\d+)?$/.test(comparable)) {
+      return {
+        status: 'unresolved',
+        reason: `${field.label} 不支持非数字文本的隐式识别`,
+      };
+    }
+  }
+
+  if (source === 'implicit' && (field.widgetType === 'textWidget' || field.widgetType === 'textAreaWidget' || field.widgetType === 'serialNumWidget')) {
+    return {
+      status: 'unresolved',
+      reason: `${field.label} 不支持隐式文本字段识别`,
+    };
+  }
+
+  return {
+    status: 'ok',
+    value: normalizedValue,
+    ...(field.widgetType === 'textWidget' || field.widgetType === 'textAreaWidget' || field.widgetType === 'serialNumWidget'
+      ? { operator: 'like' }
+      : {}),
+  };
+}
+
+function findMatchingFieldOption(field: ShadowStandardizedField, rawValue: string): ShadowStandardizedField['options'][number] | undefined {
+  const valueVariants = buildSearchValueVariants(rawValue, field.semanticSlot);
+  return field.options.find((option) => {
+    const optionValues = [
+      option.title,
+      option.value,
+      option.key,
+      option.code ?? undefined,
+      ...(option.aliases ?? []),
+    ].filter((item): item is string => Boolean(item?.trim()));
+    const optionVariants = optionValues.flatMap((item) => buildSearchValueVariants(item, field.semanticSlot));
+    return valueVariants.some((value) => optionVariants.includes(value));
+  });
+}
+
+function buildSearchValueVariants(value: string, semanticSlot?: string): string[] {
+  const normalized = normalizeSearchComparable(value);
+  const variants = new Set([normalized]);
+  variants.add(normalized.replace(/(?:客户|公司|联系人|商机|机会)$/, ''));
+  if (semanticSlot === 'province') {
+    variants.add(normalized.replace(/省$/, ''));
+  }
+  if (semanticSlot === 'city') {
+    variants.add(normalized.replace(/市$/, ''));
+  }
+  if (semanticSlot === 'district') {
+    variants.add(normalized.replace(/[区县]$/, ''));
+  }
+  return [...variants].filter(Boolean);
+}
+
+function normalizeSearchComparable(value: string): string {
+  return value
+    .replace(/\s+/g, '')
+    .replace(/[：:，。！？、；;]/g, '')
+    .toLowerCase();
+}
+
+function normalizeSearchSwitchValue(value: string): string | null {
+  const normalized = normalizeSearchComparable(value);
+  if (/^(1|true|yes|y|on|enable|enabled|open|开启|启用|打开|是)$/.test(normalized)) {
+    return '1';
+  }
+  if (/^(0|false|no|n|off|disable|disabled|close|关闭|停用|禁用|关|否)$/.test(normalized)) {
+    return '0';
+  }
+  return null;
+}
+
+function normalizeSearchDateValue(value: string): string | null {
+  const normalized = value.trim();
+  const chineseDate = normalized.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日?$/);
+  if (chineseDate) {
+    const [, year, month, day] = chineseDate;
+    return `${year}-${month!.padStart(2, '0')}-${day!.padStart(2, '0')}`;
+  }
+  const slashDate = normalized.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  if (slashDate) {
+    const [, year, month, day] = slashDate;
+    return `${year}-${month!.padStart(2, '0')}-${day!.padStart(2, '0')}`;
+  }
+  return null;
+}
+
+function canImplicitlyExtractField(field: ShadowStandardizedField): boolean {
+  if (field.widgetType === 'switchWidget') {
+    return true;
+  }
+  if (field.widgetType === 'radioWidget' || field.widgetType === 'checkboxWidget' || field.widgetType === 'publicOptBoxWidget') {
+    return field.options.length > 0;
+  }
+  if (field.widgetType === 'numberWidget' && /手机|电话|phone/i.test(`${field.label}${field.semanticSlot ?? ''}`)) {
+    return true;
+  }
+  return false;
+}
+
+function buildImplicitSearchPredicateText(query: string, objectKey: string): string {
+  const labels = getRecordObjectLabelPattern(objectKey);
+  const text = query
+    .replace(/^\/\S+\s*/, '')
+    .replace(/^(?:查询|查一下|找一下|搜索|查看|打开)\s*(?:一个|这?个)?\s*/, '')
+    .replace(new RegExp(`^(?:${labels})[，,：:\\s]*`), '')
+    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${labels})(?:数据|列表|信息|资料)?$`), '')
+    .replace(/(?:数据|列表|信息|资料)$/, '')
+    .replace(/[，,：:。！？、；;\s]+$/g, '')
+    .trim();
+  return text.replace(/的$/, '').trim();
+}
+
+function trimSearchConditionValue(value: string, objectKey: string): string {
+  const labels = getRecordObjectLabelPattern(objectKey);
+  return value
+    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${labels})(?:数据|列表|信息|资料)?$`), '')
+    .replace(/(?:数据|列表|信息|资料)$/, '')
+    .replace(/[，,：:。！？、；;\s]+$/g, '')
+    .trim();
+}
+
+function resolveRecordSearchFallbackName(input: {
+  query: string;
+  objectKey: string;
+  targetName?: string;
+  consumedTexts: string[];
+  hasStructuredFilters: boolean;
+}): string {
+  if (!input.hasStructuredFilters && input.targetName?.trim()) {
+    return cleanupRecordNameCandidate(input.targetName, input.objectKey);
+  }
+
+  const remainingQuery = removeConsumedSearchTexts(input.query, input.consumedTexts);
+  const name = extractRecordName(remainingQuery, input.objectKey);
+  const normalized = cleanupRecordNameCandidate(name, input.objectKey);
+  return isMeaningfulRecordNameCandidate(normalized, input.objectKey) ? normalized : '';
+}
+
+function removeConsumedSearchTexts(query: string, consumedTexts: string[]): string {
+  return consumedTexts
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .reduce((text, consumed) => text.replace(consumed, ' '), query);
+}
+
+function cleanupRecordNameCandidate(value: string, objectKey: string): string {
+  const labels = getRecordObjectLabelPattern(objectKey);
+  return cleanupCompanyName(value)
+    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${labels})$`), '')
+    .trim();
+}
+
+function isMeaningfulRecordNameCandidate(value: string, objectKey: string): boolean {
+  const labels = getRecordObjectLabelPattern(objectKey);
+  const normalized = value
+    .replace(new RegExp(`^(?:查询|查一下|找一下|搜索|查看|打开)?(?:的)?(?:${labels})?$`), '')
+    .replace(/^的$/, '')
+    .trim();
+  return normalized.length > 0;
+}
+
+function getRecordObjectLabelPattern(objectKey: string): string {
+  if (objectKey === 'contact') {
+    return '联系人';
+  }
+  if (objectKey === 'opportunity') {
+    return '商机|机会';
+  }
+  if (objectKey === 'followup') {
+    return '跟进记录|拜访记录|跟进';
+  }
+  return '客户|公司';
+}
+
+function buildSearchExtractionControl(input: {
+  extraction: RecordSearchExtraction;
+  fallbackName: string;
+}): Record<string, unknown> | null {
+  const { extraction } = input;
+  if (
+    extraction.conditions.length === 0 &&
+    extraction.ambiguities.length === 0 &&
+    extraction.unresolvedValues.length === 0 &&
+    !input.fallbackName
+  ) {
+    return null;
+  }
+  return {
+    conditions: extraction.conditions,
+    ambiguities: extraction.ambiguities,
+    unresolvedValues: extraction.unresolvedValues,
+    ...(input.fallbackName ? { fallbackName: input.fallbackName } : {}),
   };
 }
 
@@ -1188,6 +1769,28 @@ async function executeRecordReadTool(
     };
   }
 
+  const extractionIssue = operation === 'search'
+    ? readSearchExtractionIssue(readRecordAgentControl(input.selectedTool.input))
+    : null;
+  if (extractionIssue) {
+    finishToolCall(toolCall, 'skipped', extractionIssue.headline);
+    return {
+      status: 'waiting_input',
+      content: extractionIssue.content,
+      headline: extractionIssue.headline,
+      references: ['meta.clarify_card'],
+      toolCalls: [toolCall],
+      policyDecisions: [
+        createPolicyDecision({
+          policyCode: 'record.search_condition_extraction',
+          action: 'clarify',
+          toolCode: input.selectedTool.toolCode,
+          reason: extractionIssue.reason,
+        }),
+      ],
+    };
+  }
+
   try {
     const selectedInput = stripRecordAgentControl(input.selectedTool.input);
     const result = operation === 'search'
@@ -1213,11 +1816,21 @@ async function executeRecordReadTool(
         registry,
       });
     }
+    const presentation = buildRecordReadPresentation({
+      runId: context.runId,
+      toolCode: input.selectedTool.toolCode,
+      objectKey,
+      operation,
+      result: result as ShadowExecuteSearchResponse | ShadowExecuteGetResponse,
+      capability: CRM_RECORD_CAPABILITIES[objectKey],
+    });
+
     return {
       status: 'completed',
-      content: `## 记录工具已执行\n- 工具：\`${input.selectedTool.toolCode}\`\n- 对象：\`${objectKey}\`\n\n\`\`\`json\n${JSON.stringify(result, null, 2).slice(0, 3000)}\n\`\`\``,
+      content: presentation.content,
       headline: '记录对象读取完成',
       references: [input.selectedTool.toolCode],
+      uiSurfaces: [presentation.uiSurface],
       contextFrame: buildRecordContextFrame({
         objectKey,
         operation,
@@ -1232,6 +1845,259 @@ async function executeRecordReadTool(
   } catch (error) {
     finishToolCall(toolCall, 'failed', '记录读取失败', error);
     throw error;
+  }
+}
+
+interface RecordResultFieldView {
+  label: string;
+  value: string;
+}
+
+interface RecordResultRecordView {
+  formInstId: string;
+  title: string;
+  subtitle?: string;
+  tags: string[];
+  primaryFields: RecordResultFieldView[];
+  secondaryFields: RecordResultFieldView[];
+}
+
+interface RecordResultViewModel {
+  objectKey: ShadowObjectKey;
+  operation: 'search' | 'get';
+  toolCode: string;
+  title: string;
+  total: number;
+  displayMode: 'empty' | 'list' | 'card';
+  records: RecordResultRecordView[];
+  record?: RecordResultRecordView;
+}
+
+function buildRecordReadPresentation(input: {
+  runId: string;
+  toolCode: string;
+  objectKey: ShadowObjectKey;
+  operation: 'search' | 'get';
+  result: ShadowExecuteSearchResponse | ShadowExecuteGetResponse;
+  capability: RecordToolCapability;
+}): {
+  content: string;
+  uiSurface: AgentUiSurface;
+} {
+  const view = buildRecordResultViewModel(input);
+  const surfaceId = `record-${input.operation}-${input.runId}-${randomUUID().slice(0, 8)}`;
+  const component = view.displayMode === 'empty'
+    ? 'RecordResultEmpty'
+    : view.displayMode === 'list'
+      ? 'RecordResultList'
+      : 'RecordResultCard';
+  const uiSurface: AgentUiSurface = {
+    kind: input.operation === 'search' ? 'record-search-results' : 'record-detail',
+    protocol: 'a2ui',
+    version: 'v0.9',
+    surfaceId,
+    catalogId: RECORD_RESULT_A2UI_CATALOG_ID,
+    commands: [
+      {
+        version: 'v0.9',
+        createSurface: {
+          surfaceId,
+          catalogId: RECORD_RESULT_A2UI_CATALOG_ID,
+        },
+      },
+      {
+        version: 'v0.9',
+        updateDataModel: {
+          surfaceId,
+          path: '/recordResult',
+          value: view,
+        },
+      },
+      {
+        version: 'v0.9',
+        updateComponents: {
+          surfaceId,
+          components: [
+            {
+              id: 'root',
+              component,
+              result: { path: '/recordResult' },
+            },
+          ],
+        },
+      },
+    ],
+    summary: {
+      objectKey: input.objectKey,
+      operation: input.operation,
+      total: view.total,
+      displayMode: view.displayMode,
+    },
+    rawResult: input.result,
+  };
+
+  return {
+    content: buildRecordReadContent(view),
+    uiSurface,
+  };
+}
+
+function buildRecordResultViewModel(input: {
+  toolCode: string;
+  objectKey: ShadowObjectKey;
+  operation: 'search' | 'get';
+  result: ShadowExecuteSearchResponse | ShadowExecuteGetResponse;
+  capability: RecordToolCapability;
+}): RecordResultViewModel {
+  const records = input.operation === 'search'
+    ? (input.result as ShadowExecuteSearchResponse).records
+    : [(input.result as ShadowExecuteGetResponse).record].filter(Boolean);
+  const total = input.operation === 'search'
+    ? (input.result as ShadowExecuteSearchResponse).totalElements ?? records.length
+    : records.length;
+  const mappedRecords = records.map((record) =>
+    buildRecordResultRecordView({
+      objectKey: input.objectKey,
+      record,
+      capability: input.capability,
+    }),
+  );
+  const objectLabel = mapRecordObjectLabel(input.objectKey);
+  const displayMode = mappedRecords.length === 0
+    ? 'empty'
+    : input.operation === 'get' || mappedRecords.length === 1
+      ? 'card'
+      : 'list';
+
+  return {
+    objectKey: input.objectKey,
+    operation: input.operation,
+    toolCode: input.toolCode,
+    title: displayMode === 'empty'
+      ? `未查询到${objectLabel}`
+      : input.operation === 'get'
+        ? `${objectLabel}详情`
+        : `查询到 ${total} 个${objectLabel}`,
+    total,
+    displayMode,
+    records: mappedRecords,
+    ...(displayMode === 'card' ? { record: mappedRecords[0] } : {}),
+  };
+}
+
+function buildRecordResultRecordView(input: {
+  objectKey: ShadowObjectKey;
+  record: ShadowLiveRecord;
+  capability: RecordToolCapability;
+}): RecordResultRecordView {
+  const record = input.record;
+  const title = readLiveRecordDisplayName(record, input.capability) || record.formInstId || '未命名记录';
+  const primaryFields = buildRecordResultFields(record, getPrimaryRecordFieldTitles(input.objectKey));
+  const usedLabels = new Set(primaryFields.map((field) => field.label));
+  const secondaryFields = (record.fields ?? [])
+    .map((field) => ({
+      label: field.title ?? field.codeId,
+      value: stringifyPreviewValue(field.value ?? field.rawValue),
+    }))
+    .filter((field) => field.label && field.value && field.value !== title && !usedLabels.has(field.label))
+    .slice(0, 8);
+  const tags = buildRecordResultTags(record, input.objectKey);
+  const subtitle = buildRecordResultSubtitle(record, input.objectKey);
+
+  return {
+    formInstId: record.formInstId,
+    title,
+    ...(subtitle ? { subtitle } : {}),
+    tags,
+    primaryFields,
+    secondaryFields,
+  };
+}
+
+function buildRecordResultFields(record: ShadowLiveRecord, orderedTitles: string[]): RecordResultFieldView[] {
+  const fields: RecordResultFieldView[] = [];
+  for (const title of orderedTitles) {
+    const value = readFieldByTitles(record, [title]);
+    if (value) {
+      fields.push({ label: title, value });
+    }
+  }
+  return dedupeRecordResultFields(fields).slice(0, 10);
+}
+
+function dedupeRecordResultFields(fields: RecordResultFieldView[]): RecordResultFieldView[] {
+  const seen = new Set<string>();
+  return fields.filter((field) => {
+    const key = `${field.label}:${field.value}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildRecordResultTags(record: ShadowLiveRecord, objectKey: ShadowObjectKey): string[] {
+  const candidates = objectKey === 'customer'
+    ? ['客户状态', '客户类型', '启用状态', '行业']
+    : objectKey === 'opportunity'
+      ? ['销售阶段', '商机状态']
+      : objectKey === 'contact'
+        ? ['启用状态']
+        : ['跟进方式'];
+  return candidates
+    .map((title) => readFieldByTitles(record, [title]))
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
+function buildRecordResultSubtitle(record: ShadowLiveRecord, objectKey: ShadowObjectKey): string {
+  if (objectKey === 'customer' || objectKey === 'contact') {
+    return [readFieldByTitles(record, ['省']), readFieldByTitles(record, ['市']), readFieldByTitles(record, ['区'])]
+      .filter(Boolean)
+      .join(' / ');
+  }
+  if (objectKey === 'opportunity') {
+    return readFieldByTitles(record, ['关联客户', '客户编号']) || readFieldByTitles(record, ['预计成交时间']);
+  }
+  return readFieldByTitles(record, ['跟进时间', '拜访时间']) || readFieldByTitles(record, ['关联客户']);
+}
+
+function getPrimaryRecordFieldTitles(objectKey: ShadowObjectKey): string[] {
+  if (objectKey === 'customer') {
+    return ['客户状态', '客户类型', '启用状态', '行业', '省', '市', '区', '联系人姓名', '联系人手机', '公司电话', '办公电话', '负责人', '售后服务代表'];
+  }
+  if (objectKey === 'contact') {
+    return ['联系人姓名', '手机', '启用状态', '关联客户', '省', '市', '区', '办公电话'];
+  }
+  if (objectKey === 'opportunity') {
+    return ['机会名称', '商机名称', '关联客户', '联系人', '销售阶段', '预计成交时间', '商机预算（元）', '负责人'];
+  }
+  return ['跟进记录', '关联客户', '关联商机', '跟进方式', '跟进时间', '下次回访日期', '负责人'];
+}
+
+function buildRecordReadContent(view: RecordResultViewModel): string {
+  const objectLabel = mapRecordObjectLabel(view.objectKey);
+  if (view.displayMode === 'empty') {
+    return `未查询到符合条件的${objectLabel}。`;
+  }
+  if (view.displayMode === 'list') {
+    return `已查询到 ${view.total} 个${objectLabel}，请在下方列表查看。`;
+  }
+  const title = view.record?.title ? `：${view.record.title}` : '';
+  return `已查询到${objectLabel}${title}，请在下方卡片查看。`;
+}
+
+function mapRecordObjectLabel(objectKey: ShadowObjectKey): string {
+  switch (objectKey) {
+    case 'contact':
+      return '联系人';
+    case 'opportunity':
+      return '商机';
+    case 'followup':
+      return '跟进记录';
+    default:
+      return '客户';
   }
 }
 
@@ -1511,6 +2377,25 @@ interface RecordAgentControl {
     };
   };
   subjectName?: string;
+  searchExtraction?: {
+    conditions?: Array<{
+      field?: string;
+      label?: string;
+      value?: string;
+      source?: string;
+    }>;
+    ambiguities?: Array<{
+      value?: string;
+      candidateFields?: Array<{ field?: string; label?: string }>;
+    }>;
+    unresolvedValues?: Array<{
+      field?: string;
+      label?: string;
+      value?: string;
+      reason?: string;
+    }>;
+    fallbackName?: string;
+  };
   choiceRouting?: {
     answerParamKey?: string;
     choices?: Record<string, unknown>;
@@ -1525,6 +2410,38 @@ function readRecordAgentControl(input: Record<string, unknown>): RecordAgentCont
 function stripRecordAgentControl(input: Record<string, unknown>): Record<string, unknown> {
   const { agentControl: _agentControl, ...rest } = input;
   return rest;
+}
+
+function readSearchExtractionIssue(control: RecordAgentControl): {
+  headline: string;
+  content: string;
+  reason: string;
+} | null {
+  const unresolved = control.searchExtraction?.unresolvedValues?.find((item) => item.field || item.label || item.value);
+  if (unresolved) {
+    const label = unresolved.label || unresolved.field || '查询字段';
+    const value = unresolved.value || '当前值';
+    return {
+      headline: '需要确认查询条件',
+      content: `已识别到字段「${label}」的查询值「${value}」，但该值无法匹配当前字段配置。请改用系统中的有效选项或补充更明确的条件。`,
+      reason: unresolved.reason || '字段值无法解析为可执行查询条件。',
+    };
+  }
+
+  const ambiguity = control.searchExtraction?.ambiguities?.find((item) => item.value && item.candidateFields?.length);
+  if (ambiguity) {
+    const fields = (ambiguity.candidateFields ?? [])
+      .map((field) => field.label || field.field)
+      .filter(Boolean)
+      .join('、');
+    return {
+      headline: '需要确认查询字段',
+      content: `「${ambiguity.value}」同时命中多个可查询字段：${fields}。请补充字段名称后再查询。`,
+      reason: '隐式查询条件命中多个字段，系统不会降级为标题搜索。',
+    };
+  }
+
+  return null;
 }
 
 function getFieldLabel(capability: RecordToolCapability, paramKey: string): string {
@@ -1962,7 +2879,7 @@ function findFieldByParamKey(paramKey: string, fields?: ShadowStandardizedField[
   ));
 }
 
-function readRecordFields(options: CrmAgentPackOptions, objectKey: ShadowObjectKey): ShadowStandardizedField[] {
+function readRecordFields(options: Pick<CrmAgentPackOptions, 'shadowMetadataService'>, objectKey: ShadowObjectKey): ShadowStandardizedField[] {
   try {
     return options.shadowMetadataService.getObject(objectKey).fields ?? [];
   } catch {

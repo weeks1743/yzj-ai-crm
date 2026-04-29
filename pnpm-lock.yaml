@@ -93,6 +93,9 @@ importers:
       '@ant-design/x':
         specifier: ^2.6.0
         version: 2.6.0(antd@6.3.6(date-fns@2.30.0)(moment@2.30.1)(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@ant-design/x-card':
+        specifier: 2.6.0
+        version: 2.6.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@ant-design/x-markdown':
         specifier: ^2.6.0
         version: 2.6.0(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -408,6 +411,12 @@ packages:
     peerDependencies:
       react: ^0.14.0 || ^15.0.1 || ^16.0.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^0.14.0 || ^15.0.1 || ^16.0.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  '@ant-design/x-card@2.6.0':
+    resolution: {integrity: sha512-wR2EyPtOimO6X1D9UxUd0sTuqB4K8A5klNfHUQy3zpeKnn33d5EddJFEZJW+eimrfrjF9IqrWOnikdbHPy+TdA==}
+    peerDependencies:
+      react: '>=18.0.0'
+      react-dom: '>=18.0.0'
 
   '@ant-design/x-markdown@2.6.0':
     resolution: {integrity: sha512-WTiuIXJjmX2Q3SW4Rh6EwAzCEQywGMZnZCQDX+tfjZ6/YyQ9IHIBRi5QuvaCbIOCGuIFZtcZ1rooG9WeaaAZig==}
@@ -8852,6 +8861,15 @@ snapshots:
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
       throttle-debounce: 5.0.2
+
+  '@ant-design/x-card@2.6.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+    dependencies:
+      '@ant-design/icons': 6.1.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@babel/runtime': 7.29.2
+      classnames: 2.5.1
+      rc-util: 5.44.4(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      react: 19.2.5
+      react-dom: 19.2.5(react@19.2.5)
 
   '@ant-design/x-markdown@2.6.0(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:

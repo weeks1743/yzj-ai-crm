@@ -36,6 +36,12 @@ import {
 } from '@ant-design/x';
 import type { BubbleListRef } from '@ant-design/x/es/bubble';
 import type { NodeRender } from '@ant-design/x/es/sender/interface';
+import {
+  Box as A2UIBox,
+  Card as A2UICard,
+  registerCatalog,
+  type Catalog,
+} from '@ant-design/x-card';
 import type { ComponentProps } from '@ant-design/x-markdown';
 import XMarkdown from '@ant-design/x-markdown';
 import type { DefaultMessageInfo, MessageInfo } from '@ant-design/x-sdk';
@@ -59,7 +65,7 @@ import type { GetProp } from 'antd';
 import { createStyles } from 'antd-style';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import type { ConversationSession } from '@shared/types';
+import type { AgentUiSurface, ConversationSession } from '@shared/types';
 import { brandTitle } from '@shared/brand';
 import { applyDocumentBranding } from '@shared/dom-branding';
 import {
@@ -89,6 +95,34 @@ const LEGACY_CHAT_STORAGE_KEYS = [
 const USER_CONVERSATION_KEY_PREFIX = 'conv-user-';
 const NEW_CONVERSATION_LABEL = '新会话';
 const NEW_CONVERSATION_LAST_MESSAGE = '可以描述目标、选择场景或输入 slash 命令。';
+const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1';
+
+const recordResultCatalog: Catalog = {
+  $id: RECORD_RESULT_A2UI_CATALOG_ID,
+  title: 'CRM record result cards',
+  components: {
+    RecordResultList: {
+      type: 'object',
+      properties: {
+        result: { type: 'object' },
+      },
+    },
+    RecordResultCard: {
+      type: 'object',
+      properties: {
+        result: { type: 'object' },
+      },
+    },
+    RecordResultEmpty: {
+      type: 'object',
+      properties: {
+        result: { type: 'object' },
+      },
+    },
+  },
+};
+
+registerCatalog(recordResultCatalog);
 
 const runtimeTenantContext = {
   owner: '当前用户',
@@ -196,6 +230,35 @@ type MetaQuestionSubmitHandler = (input: {
   answers: Record<string, unknown>;
   queryText: string;
 }) => void;
+type OpenRecordHandler = (input: {
+  objectKey: string;
+  formInstId: string;
+  title?: string;
+}) => void;
+
+interface RecordResultFieldView {
+  label: string;
+  value: string;
+}
+
+interface RecordResultRecordView {
+  formInstId: string;
+  title: string;
+  subtitle?: string;
+  tags?: string[];
+  primaryFields?: RecordResultFieldView[];
+  secondaryFields?: RecordResultFieldView[];
+}
+
+interface RecordResultViewModel {
+  objectKey: string;
+  operation: 'search' | 'get';
+  title: string;
+  total: number;
+  displayMode: 'empty' | 'list' | 'card';
+  records: RecordResultRecordView[];
+  record?: RecordResultRecordView;
+}
 
 type ArtifactPresentationStatus =
   | 'not_started'
@@ -654,6 +717,69 @@ const useStyles = createStyles(({ token, css }) => ({
     li {
       line-height: 1.8;
     }
+  `,
+  recordResultSummary: css`
+    color: ${token.colorTextSecondary};
+    line-height: 1.7;
+    margin-bottom: 10px;
+  `,
+  recordA2uiSurface: css`
+    margin-bottom: 12px;
+  `,
+  recordResultPanel: css`
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    background: ${token.colorBgContainer};
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
+    padding: 16px;
+  `,
+  recordResultHeader: css`
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 12px;
+  `,
+  recordResultList: css`
+    display: grid;
+    gap: 10px;
+  `,
+  recordResultItem: css`
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    padding: 12px;
+    background: ${token.colorFillQuaternary};
+  `,
+  recordResultCardTitle: css`
+    min-width: 0;
+    word-break: break-word;
+  `,
+  recordFieldGrid: css`
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px 14px;
+    margin-top: 12px;
+  `,
+  recordFieldItem: css`
+    min-width: 0;
+  `,
+  recordFieldLabel: css`
+    color: ${token.colorTextTertiary};
+    font-size: 12px;
+    line-height: 1.4;
+  `,
+  recordFieldValue: css`
+    color: ${token.colorText};
+    font-size: 13px;
+    line-height: 1.55;
+    word-break: break-word;
+  `,
+  rawResultJson: css`
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 12px;
+    line-height: 1.55;
   `,
   recordPreviewPanel: css`
     border: 1px solid ${token.colorBorderSecondary};
@@ -1330,6 +1456,247 @@ function buildMetaQuestionSubmitText(questionCard: AssistantMetaQuestionCard, an
   return parts.length ? parts.join('，') : '补充信息';
 }
 
+function AgentUiSurfacePanel({
+  surfaces,
+  styles,
+  onOpenRecord,
+}: {
+  surfaces: AgentUiSurface[];
+  styles: ReturnType<typeof useStyles>['styles'];
+  onOpenRecord?: OpenRecordHandler;
+}) {
+  const [rawSurface, setRawSurface] = useState<AgentUiSurface | null>(null);
+  const components = useMemo(
+    () => buildRecordA2UIComponents(styles),
+    [styles],
+  );
+
+  if (!surfaces.length) {
+    return null;
+  }
+
+  return (
+    <>
+      {surfaces.map((surface) => (
+        <div key={surface.surfaceId} className={styles.recordA2uiSurface}>
+          <A2UIBox
+            commands={surface.commands as any}
+            components={components}
+            onAction={(event: any) => {
+              if (event?.name === 'record.open' && event.context?.formInstId) {
+                onOpenRecord?.({
+                  objectKey: String(event.context.objectKey ?? surface.summary.objectKey),
+                  formInstId: String(event.context.formInstId),
+                  title: typeof event.context.title === 'string' ? event.context.title : undefined,
+                });
+              }
+            }}
+          >
+            <A2UICard id={surface.surfaceId} />
+          </A2UIBox>
+          {surface.rawResult ? (
+            <Button
+              type="link"
+              size="small"
+              icon={<EyeOutlined />}
+              style={{ paddingInline: 0, marginTop: 4 }}
+              onClick={() => setRawSurface(surface)}
+            >
+              查看原始结果
+            </Button>
+          ) : null}
+        </div>
+      ))}
+      <Drawer
+        open={Boolean(rawSurface)}
+        width={720}
+        title="原始结果"
+        onClose={() => setRawSurface(null)}
+      >
+        <pre className={styles.rawResultJson}>
+          {rawSurface?.rawResult ? JSON.stringify(rawSurface.rawResult, null, 2) : ''}
+        </pre>
+      </Drawer>
+    </>
+  );
+}
+
+function buildRecordA2UIComponents(styles: ReturnType<typeof useStyles>['styles']) {
+  return {
+    RecordResultList: (props: { result?: RecordResultViewModel; onAction?: (name: string, context: Record<string, unknown>) => void }) => (
+      <RecordResultList result={props.result} styles={styles} onAction={props.onAction} />
+    ),
+    RecordResultCard: (props: { result?: RecordResultViewModel; onAction?: (name: string, context: Record<string, unknown>) => void }) => (
+      <RecordResultCard result={props.result} styles={styles} onAction={props.onAction} />
+    ),
+    RecordResultEmpty: (props: { result?: RecordResultViewModel }) => (
+      <RecordResultEmpty result={props.result} styles={styles} />
+    ),
+  };
+}
+
+function RecordResultList({
+  result,
+  styles,
+  onAction,
+}: {
+  result?: RecordResultViewModel;
+  styles: ReturnType<typeof useStyles>['styles'];
+  onAction?: (name: string, context: Record<string, unknown>) => void;
+}) {
+  const records = result?.records ?? [];
+  return (
+    <div className={styles.recordResultPanel}>
+      <div className={styles.recordResultHeader}>
+        <div>
+          <Text strong>{result?.title ?? '记录查询结果'}</Text>
+          <div className={styles.recordResultSummary}>共 {result?.total ?? records.length} 条，优先展示关键字段。</div>
+        </div>
+        <Tag color="blue">{mapRecordObjectLabel(result?.objectKey)}</Tag>
+      </div>
+      <div className={styles.recordResultList}>
+        {records.map((record) => (
+          <div key={record.formInstId || record.title} className={styles.recordResultItem}>
+            <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
+              <div className={styles.recordResultCardTitle}>
+                <Text strong>{record.title}</Text>
+                {record.subtitle ? <div className={styles.recordResultSummary}>{record.subtitle}</div> : null}
+                <RecordTags tags={record.tags} />
+              </div>
+              {record.formInstId ? (
+                <Button
+                  size="small"
+                  icon={<EyeOutlined />}
+                  onClick={() => onAction?.('record.open', {
+                    objectKey: result?.objectKey,
+                    formInstId: record.formInstId,
+                    title: record.title,
+                  })}
+                >
+                  查看详情
+                </Button>
+              ) : null}
+            </Space>
+            <RecordFieldGrid
+              fields={[...(record.primaryFields ?? []), ...(record.secondaryFields ?? []).slice(0, 2)]}
+              styles={styles}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RecordResultCard({
+  result,
+  styles,
+  onAction,
+}: {
+  result?: RecordResultViewModel;
+  styles: ReturnType<typeof useStyles>['styles'];
+  onAction?: (name: string, context: Record<string, unknown>) => void;
+}) {
+  const record = result?.record ?? result?.records?.[0];
+  if (!record) {
+    return <RecordResultEmpty result={result} styles={styles} />;
+  }
+  const fields = [...(record.primaryFields ?? []), ...(record.secondaryFields ?? [])];
+  return (
+    <div className={styles.recordResultPanel}>
+      <div className={styles.recordResultHeader}>
+        <div className={styles.recordResultCardTitle}>
+          <Text strong>{record.title}</Text>
+          {record.subtitle ? <div className={styles.recordResultSummary}>{record.subtitle}</div> : null}
+          <RecordTags tags={record.tags} />
+        </div>
+        {record.formInstId && result?.operation !== 'get' ? (
+          <Button
+            size="small"
+            icon={<EyeOutlined />}
+            onClick={() => onAction?.('record.open', {
+              objectKey: result?.objectKey,
+              formInstId: record.formInstId,
+              title: record.title,
+            })}
+          >
+            查看详情
+          </Button>
+        ) : null}
+      </div>
+      <RecordFieldGrid fields={fields} styles={styles} />
+    </div>
+  );
+}
+
+function RecordResultEmpty({
+  result,
+  styles,
+}: {
+  result?: RecordResultViewModel;
+  styles: ReturnType<typeof useStyles>['styles'];
+}) {
+  return (
+    <Alert
+      type="info"
+      showIcon
+      className={styles.recordResultPanel}
+      message={result?.title ?? '未查询到记录'}
+      description="可以调整查询条件后再试。"
+    />
+  );
+}
+
+function RecordTags({ tags }: { tags?: string[] }) {
+  const visibleTags = (tags ?? []).filter(Boolean).slice(0, 4);
+  if (!visibleTags.length) {
+    return null;
+  }
+  return (
+    <Space size={6} wrap style={{ marginTop: 8 }}>
+      {visibleTags.map((tag) => (
+        <Tag key={tag}>{tag}</Tag>
+      ))}
+    </Space>
+  );
+}
+
+function RecordFieldGrid({
+  fields,
+  styles,
+}: {
+  fields: RecordResultFieldView[];
+  styles: ReturnType<typeof useStyles>['styles'];
+}) {
+  const visibleFields = fields.filter((field) => field.label && field.value);
+  if (!visibleFields.length) {
+    return null;
+  }
+  return (
+    <div className={styles.recordFieldGrid}>
+      {visibleFields.map((field) => (
+        <div key={`${field.label}:${field.value}`} className={styles.recordFieldItem}>
+          <div className={styles.recordFieldLabel}>{field.label}</div>
+          <div className={styles.recordFieldValue}>{field.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function mapRecordObjectLabel(objectKey?: string) {
+  if (objectKey === 'contact') {
+    return '联系人';
+  }
+  if (objectKey === 'opportunity') {
+    return '商机';
+  }
+  if (objectKey === 'followup') {
+    return '跟进记录';
+  }
+  return '客户';
+}
+
 function AssistantMessageContent({
   content,
   info,
@@ -1337,6 +1704,7 @@ function AssistantMessageContent({
   markdownClassName,
   onOpenArtifact,
   onGeneratePresentation,
+  onOpenRecord,
   onSubmitQuestionCard,
   presentationByArtifactId,
 }: {
@@ -1346,10 +1714,12 @@ function AssistantMessageContent({
   markdownClassName: string;
   onOpenArtifact: OpenArtifactHandler;
   onGeneratePresentation: GeneratePresentationHandler;
+  onOpenRecord?: OpenRecordHandler;
   onSubmitQuestionCard?: MetaQuestionSubmitHandler;
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>;
 }) {
   const evidence = (info.extraInfo?.evidence ?? []) as AssistantEvidenceCard[];
+  const uiSurfaces = (info.extraInfo?.uiSurfaces ?? []) as AgentUiSurface[];
   const pendingConfirmation = info.extraInfo?.agentTrace?.pendingConfirmation as PendingConfirmationView | null | undefined;
   const pendingInteraction = info.extraInfo?.agentTrace?.pendingInteraction as PendingInteractionView | null | undefined;
   const artifactFiles = uniqueEvidenceArtifacts(evidence);
@@ -1366,16 +1736,27 @@ function AssistantMessageContent({
         styles={styles}
         onSubmit={onSubmitQuestionCard}
       />
-      <div className={styles.assistantMarkdownCard}>
-        <XMarkdown
-          paragraphTag="div"
-          className={markdownClassName}
-          components={{ think: ThinkComponent }}
-          streaming={{ hasNextChunk: info.status === 'updating', enableAnimation: true }}
-        >
-          {content}
-        </XMarkdown>
-      </div>
+      {uiSurfaces.length ? (
+        <>
+          {content?.trim() ? <div className={styles.recordResultSummary}>{content}</div> : null}
+          <AgentUiSurfacePanel
+            surfaces={uiSurfaces}
+            styles={styles}
+            onOpenRecord={onOpenRecord}
+          />
+        </>
+      ) : (
+        <div className={styles.assistantMarkdownCard}>
+          <XMarkdown
+            paragraphTag="div"
+            className={markdownClassName}
+            components={{ think: ThinkComponent }}
+            streaming={{ hasNextChunk: info.status === 'updating', enableAnimation: true }}
+          >
+            {content}
+          </XMarkdown>
+        </div>
+      )}
 
       {artifactFiles.length ? (
         <div className={styles.inlineRefs}>
@@ -1798,6 +2179,7 @@ function buildRole(
   markdownClassName: string,
   onOpenArtifact: OpenArtifactHandler,
   onGeneratePresentation: GeneratePresentationHandler,
+  onOpenRecord: OpenRecordHandler,
   onSubmitQuestionCard: MetaQuestionSubmitHandler,
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>,
 ): BubbleListProps['role'] {
@@ -1852,6 +2234,7 @@ function buildRole(
           markdownClassName={markdownClassName}
           onOpenArtifact={onOpenArtifact}
           onGeneratePresentation={onGeneratePresentation}
+          onOpenRecord={onOpenRecord}
           onSubmitQuestionCard={onSubmitQuestionCard}
           presentationByArtifactId={presentationByArtifactId}
         />
@@ -2328,6 +2711,21 @@ function AssistantWorkspace() {
     [activeConversationKey, onRequest, safeScrollToBottom, scene.key],
   );
 
+  const handleOpenRecord = React.useCallback<OpenRecordHandler>(
+    ({ objectKey, formInstId }) => {
+      const queryText = `打开${mapRecordObjectLabel(objectKey)} formInstId=${formInstId}`;
+      onRequest({
+        query: queryText,
+        sceneKey: scene.key,
+        conversationKey: activeConversationKey,
+      });
+      window.requestAnimationFrame(() => {
+        safeScrollToBottom();
+      });
+    },
+    [activeConversationKey, onRequest, safeScrollToBottom, scene.key],
+  );
+
   const role = useMemo(
     () => buildRole(styles, markdownClassName, async (evidence) => {
       setArtifactViewer({
@@ -2367,10 +2765,11 @@ function AssistantWorkspace() {
           error: error instanceof Error ? error.message : '无法读取 Artifact Markdown',
         });
       }
-    }, handleGeneratePresentation, handleSubmitQuestionCard, presentationByArtifactId),
+    }, handleGeneratePresentation, handleOpenRecord, handleSubmitQuestionCard, presentationByArtifactId),
     [
       fetchPresentationStatus,
       handleGeneratePresentation,
+      handleOpenRecord,
       handleSubmitQuestionCard,
       markdownClassName,
       presentationByArtifactId,
