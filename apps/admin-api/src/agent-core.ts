@@ -262,6 +262,7 @@ export interface ContinuationResolution {
     | 'reject_writeback'
     | 'select_candidate'
     | 'route_tool'
+    | 'wait_for_input'
     | 'none';
   reason: string;
   sourceInteractionId?: string;
@@ -384,12 +385,21 @@ export interface AgentRouteToolResumeDecision {
   reason: string;
 }
 
+export interface AgentWaitInputResumeDecision {
+  runId: string;
+  action: 'wait_for_input';
+  interactionId: string;
+  query: string;
+  reason: string;
+}
+
 export type AgentResumeDecision =
   | AgentConfirmWritebackResumeDecision
   | AgentProvideInputResumeDecision
   | AgentStartNewTaskResumeDecision
   | AgentCandidateSelectionResumeDecision
-  | AgentRouteToolResumeDecision;
+  | AgentRouteToolResumeDecision
+  | AgentWaitInputResumeDecision;
 
 export interface AgentToolExecutionResult {
   status: AgentExecutionStatus;

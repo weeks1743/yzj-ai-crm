@@ -201,6 +201,24 @@ function resolveChoiceRouting(input: {
     choices: routing.choices,
   });
   if (!selectedKey) {
+    if (isUnavailableExistingResearchRequest(input.query, input.answers?.[answerParamKey])) {
+      return {
+        decision: {
+          runId: input.runId,
+          action: 'wait_for_input',
+          interactionId: input.pending.interactionId,
+          query: input.query,
+          reason: '“查看已有研究”能力尚未定义为可路由工具，继续等待用户选择查看客户信息或进行公司研究。',
+        },
+        resolution: {
+          usedContinuation: false,
+          action: 'wait_for_input',
+          reason: '“查看已有研究”能力尚未定义为可路由工具，继续等待用户选择查看客户信息或进行公司研究。',
+          sourceInteractionId: input.pending.interactionId,
+          toolCode: input.pending.toolCode,
+        },
+      };
+    }
     return null;
   }
   const choice = routing.choices[selectedKey];
@@ -244,6 +262,11 @@ function resolveChoiceKey(input: {
     }
   }
   return findChoiceKeyFromQuery(input.query, input.choices);
+}
+
+function isUnavailableExistingResearchRequest(query: string, rawAnswer: unknown): boolean {
+  const text = `${query}\n${typeof rawAnswer === 'string' ? rawAnswer : ''}`.replace(/\s+/g, '');
+  return /(查看|看|打开)?已有研究|历史研究|已有资料/.test(text);
 }
 
 function readChoiceRouting(value: unknown): {

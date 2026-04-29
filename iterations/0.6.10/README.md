@@ -10,7 +10,8 @@
 
 - 新增通用 `ToolSemanticArbitrator`，根据业务包声明的 `ToolArbitrationRule` 和工具 `semanticProfile` 输出直接工具或只读 probe 工具。
 - `AgentToolDefinition` 增加 `semanticProfile`，`agentTrace` 增加 `toolArbitration`，用于记录 ruleCode、conflictGroup、候选工具、probe 结果和最终路由原因。
-- CRM 包把 `record.customer.search/get`、`artifact.search`、`external.company_research` 注册到 `subject_profile_lookup`，不在主 Agent 内核写 CRM 分支。
+- CRM 包把 `record.customer.search/get`、`external.company_research` 注册到 `subject_profile_lookup`，不在主 Agent 内核写 CRM 分支。
+- 注：0.6.11 已回退 `artifact.search` 作为“查看已有研究”候选的设计；公司研究历史读取需等待正式数据模型或 Skill 契约。
 - 0.6.9 的 `ambiguityProbe` 已迁移为通用 `toolArbitrationProbe` 控制信息。
 
 ## 验收结果

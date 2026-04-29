@@ -157,6 +157,7 @@ export interface AssistantChatMessage {
           | 'reject_writeback'
           | 'select_candidate'
           | 'route_tool'
+          | 'wait_for_input'
           | 'none';
         reason: string;
         sourceInteractionId?: string;

@@ -507,6 +507,30 @@ export class MainAgentRuntime {
           };
         }
 
+        if (decision.action === 'wait_for_input') {
+          return {
+            selectedTool: state.selectedTool,
+            pendingInteraction: state.pendingInteraction,
+            continuationResolution: {
+              usedContinuation: false,
+              action: 'wait_for_input' as const,
+              reason: decision.reason,
+              sourceInteractionId: decision.interactionId,
+              toolCode: state.pendingInteraction?.toolCode,
+            },
+            content: [
+              '## 这个能力暂未开放',
+              decision.reason,
+              '',
+              '请在当前卡片中选择“查看客户信息”或“进行公司研究”。',
+            ].join('\n'),
+            headline: '该能力暂未开放，等待重新选择',
+            references: ['meta.clarify_card'],
+            status: 'waiting_input' as AgentExecutionStatus,
+            currentStepKey: 'wait-for-input',
+          };
+        }
+
         return {
           intentFrame: undefined,
           taskPlan: undefined,

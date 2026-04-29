@@ -630,12 +630,6 @@ function buildCrmArbitrationToolInput(toolCode: string, subjectName: string, que
       companyName,
     };
   }
-  if (toolCode === 'artifact.search') {
-    return {
-      query,
-      anchorName: companyName,
-    };
-  }
   return {
     query,
     subjectName: companyName,
@@ -1289,24 +1283,6 @@ function buildCrmToolArbitrationProbeResult(input: {
     }
   }
 
-  if (candidateToolCodes.includes('artifact.search')) {
-    choices.existing_artifact = {
-      toolCode: 'artifact.search',
-      input: {
-        query: input.control.query || `查看 ${companyName} 已有研究`,
-        anchorName: companyName,
-      },
-      reason: '用户选择查看已有 Artifact 研究资料。',
-      aliases: ['查看已有研究', '已有研究', '历史研究', '已有资料', '查看资料'],
-    };
-    options.push({
-      label: '查看已有研究',
-      value: 'existing_artifact',
-      key: 'existing_artifact',
-      source: 'field_option',
-    });
-  }
-
   if (candidateToolCodes.includes(COMPANY_RESEARCH_TOOL)) {
     choices.company_research = {
       toolCode: COMPANY_RESEARCH_TOOL,
@@ -1314,7 +1290,7 @@ function buildCrmToolArbitrationProbeResult(input: {
         companyName,
       },
       reason: '用户选择进行外部公司研究。',
-      aliases: ['公司研究', '进行公司研究', '研究', '分析'],
+      aliases: ['公司研究', '进行公司研究', '外部公司研究', '重新研究', '重新进行公司研究'],
     };
     options.push({
       label: '进行公司研究',
@@ -2891,7 +2867,7 @@ function registerCompanyResearchTool(registry: AgentToolRegistry, options: CrmAg
       priority: 60,
       risk: 'high_cost',
       clarifyLabel: '进行公司研究',
-      aliases: ['公司研究', '外部研究', '客户分析', '研究'],
+      aliases: ['公司研究', '进行公司研究', '外部公司研究', '重新研究', '重新进行公司研究', '客户分析'],
     },
     execute: (input, context) => executeCompanyResearch(options, input, context),
   });
@@ -2992,12 +2968,11 @@ function registerArtifactSearchTool(registry: AgentToolRegistry, options: CrmAge
     enabled: true,
     semanticProfile: {
       subjectTypes: ['company'],
-      intentCodes: ['provide_info', 'existing_artifact_lookup'],
-      conflictGroups: ['subject_profile_lookup'],
+      intentCodes: ['artifact_evidence_lookup'],
+      conflictGroups: [],
       priority: 70,
       risk: 'low_cost',
-      clarifyLabel: '查看已有研究',
-      aliases: ['已有研究', '历史研究', '已有资料', '证据'],
+      aliases: ['已有证据', '历史证据', '证据'],
     },
     execute: async (input, context) => {
       const query = String(input.selectedTool.input.query || input.request.query);

@@ -590,15 +590,89 @@ test('Agent runtime probes existing customer before ambiguous company info reque
   assert.match(response.message.content, /已找到已有客户/);
   assert.equal(question?.paramKey, 'next_action');
   assert.equal(question?.options?.some((item) => item.label === '查看客户信息'), true);
-  assert.equal(question?.options?.some((item) => item.label === '查看已有研究'), true);
+  assert.equal(question?.options?.some((item) => item.label === '查看已有研究'), false);
   assert.equal(question?.options?.some((item) => item.label === '进行公司研究'), true);
   assert.equal(response.message.extraInfo.agentTrace.toolArbitration?.ruleCode, 'crm.subject_profile_lookup');
   assert.equal(response.message.extraInfo.agentTrace.toolArbitration?.action, 'clarify');
   assert.equal(response.message.extraInfo.agentTrace.toolArbitration?.probeResult?.count, 1);
   assert.equal(
+    response.message.extraInfo.agentTrace.toolArbitration?.candidateTools.some((item) => item.toolCode === 'artifact.search'),
+    false,
+  );
+  assert.equal(
     response.message.extraInfo.agentTrace.policyDecisions?.some((item) => item.policyCode === 'tool.semantic_arbitration_probe'),
     true,
   );
+});
+
+test('Agent runtime does not route unavailable existing research choice to company research', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let researchCalls = 0;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: companyIntent('安徽艳阳电气集团有限公司'),
+    shadowMetadataService: {
+      executeSearch: async () => ({
+        records: [
+          {
+            formInstId: 'customer-ahyy-001',
+            title: '安徽艳阳电气集团有限公司',
+            fields: [{ title: '客户名称', value: '安徽艳阳电气集团有限公司' }],
+            rawRecord: {},
+          },
+        ],
+      }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => {
+        throw new Error('not used');
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+    externalSkillService: {
+      createSkillJob: async () => {
+        researchCalls += 1;
+        throw new Error('should not research unavailable existing research request');
+      },
+      getSkillJob: async () => {
+        throw new Error('not used');
+      },
+      getSkillJobArtifact: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-unavailable-existing-research-choice',
+    sceneKey: 'chat',
+    query: '给出 安徽艳阳电气 公司信息',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
+
+  const response = await service.chat({
+    conversationKey: 'conv-unavailable-existing-research-choice',
+    sceneKey: 'chat',
+    query: '查看已有研究',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: pending!.interactionId,
+      answers: {
+        next_action: '查看已有研究',
+      },
+    },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.search');
+  assert.equal(response.message.extraInfo.agentTrace.continuationResolution?.action, 'wait_for_input');
+  assert.match(response.message.extraInfo.agentTrace.continuationResolution?.reason ?? '', /尚未定义/);
+  assert.match(response.message.content, /能力暂未开放/);
+  assert.equal(researchCalls, 0);
 });
 
 test('Agent runtime routes ambiguous company info choice to customer get', async () => {
