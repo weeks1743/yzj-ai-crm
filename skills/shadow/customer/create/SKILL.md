@@ -10,8 +10,8 @@ Use this bundle only for the `customer` object. It is generated from the current
 ## Snapshot
 
 - `formCodeId`: `e2cfd2aef9bf4576a760aa1c6a557170`
-- `source_version`: `2026-04-24T08:38:15.214Z`
-- `schema_hash`: `2b3dbf9bf600e5e3f832c77ac7df6333131255a3634c235b7e8349b5be991027`
+- `source_version`: `2026-04-28T10:37:09.782Z`
+- `schema_hash`: `43a0770956662ca117bb070bb02d0f5eb26a8557f90b0c55f4be149e29024414`
 - `field_count`: `49`
 - `resolved_public_option_fields`: `3`
 - `pending_public_option_fields`: `0`
@@ -33,7 +33,7 @@ Use this bundle only for the `customer` object. It is generated from the current
 - 向用户展示将要写入的关键字段摘要，得到明确确认后才执行 live write。
 
 ### Parameter Collection
-- 追问时使用业务标签，例如 客户关键字段，不要直接暴露 `codeId`。
+- 追问时使用业务标签，例如 contact_name (联系人姓名)、enabled_state (启用状态)、customer_type (客户类型) 等 7 项，不要直接暴露 `codeId`。
 - 允许用户分多轮补充信息，不要一次性索要全部可选字段。
 - 用户只给自然语言描述时，先保留原意图，再补齐必填和引用信息。
 - 当用户只说“关联松井客户/挂到某联系人”这类口语化关系时，先 search 关联对象拿到精确记录，再回填。
@@ -59,8 +59,9 @@ Use this bundle only for the `customer` object. It is generated from the current
 
 ## Input Rules
 
-- Required params: (none)
-- Optional params: linked_contact_form_inst_id, Te_5, Te_4, Te_3, Ta_4, Ta_3, Ta_2, Te_8, last_followup_date, phone, Da_1, Te_6, Da_2, owner_open_id, service_rep_open_id, district, province, Ra_10, city, Ta_1, Ta_0, At_0, Ra_6, Ra_7, Ra_4, Ra_5, customer_type, customer_status, Ra_1, industry, Ra_9
+- Required params: contact_name, enabled_state, customer_type, customer_status, Ra_1, customer_name, contact_phone
+- Optional params: linked_contact_form_inst_id, Te_4, Te_3, Ta_4, Ta_3, Ta_2, Te_8, last_followup_date, office_phone, Da_1, Te_6, Da_2, owner_open_id, service_rep_open_id, district, _S_DEPT, province, Ra_10, city, Ta_1, At_0, Ra_6, Ra_7, Ra_4, Ra_5, industry, Ra_9, company_phone
+- Derived params: _S_TITLE
 - Confirmation policy: `required_before_write`
 - This write skill now exposes a live write API. Use preview first, then call live write only after explicit user confirmation.
 
@@ -70,6 +71,13 @@ Use this bundle only for the `customer` object. It is generated from the current
 - Relation field `linked_contact_form_inst_id` maps to `Bd_1`; exact search uses `_S_SERIAL` as `_name_`, target `formCodeId` is `a3ccc61c75c34cb28a7113a311418080`.
 
 - `province`, `city`, and `district` are backed by field-bound workbook dictionaries. Template `linkCodeId` metadata is preserved in references, but the current runtime still does not perform real province-city-district cascade filtering. Title-only mapping is allowed only when the title is unique; for repeated labels such as `城区`, pass a full `{title,dicId}` object.
+
+## Field Audit
+
+- 模板必填（需用户补齐）: `contact_name` -> 联系人姓名(`Te_5`, textWidget, source=internal_get_form_by_code_id), `enabled_state` -> 启用状态(`_S_DISABLE`, switchWidget, source=internal_get_form_by_code_id), `customer_type` -> 客户类型(`Ra_3`, radioWidget, source=internal_get_form_by_code_id), `customer_status` -> 客户状态(`Ra_0`, radioWidget, source=internal_get_form_by_code_id), `Ra_1` -> 客户是否分配(`Ra_1`, radioWidget, source=internal_get_form_by_code_id), `customer_name` -> 客户名称(`_S_NAME`, textWidget, source=internal_get_form_by_code_id), `contact_phone` -> 联系人手机(`Nu_1`, numberWidget, source=internal_get_form_by_code_id)
+- 条件必填（preview 触发校验）: `owner_open_id` -> 销售负责人(`Ps_0`, personSelectWidget, source=internal_get_form_by_code_id); 当 客户是否分配 为 已分配 时，销售负责人 为必填
+- 自动派生（preview/live 自动生成）: `_S_TITLE` -> 标题(`_S_TITLE`, textWidget, source=internal_get_form_by_code_id)
+- 只读不暴露（用户输入会被阻断）: `_S_ENCODE` -> 编码(`_S_ENCODE`, textWidget, source=internal_get_form_by_code_id), `_S_APPLY` -> 提交人(`_S_APPLY`, personSelectWidget, source=internal_get_form_by_code_id), `De_0` -> 说明文字(`De_0`, describeWidget, source=internal_get_form_by_code_id), `De_1` -> 说明文字(`De_1`, describeWidget, source=internal_get_form_by_code_id), `De_2` -> 说明文字(`De_2`, describeWidget, source=internal_get_form_by_code_id), `De_3` -> 说明文字(`De_3`, describeWidget, source=internal_get_form_by_code_id), `De_4` -> 说明文字(`De_4`, describeWidget, source=internal_get_form_by_code_id), `De_5` -> 说明文字(`De_5`, describeWidget, source=internal_get_form_by_code_id), `De_6` -> 说明文字(`De_6`, describeWidget, source=internal_get_form_by_code_id), `_S_ORDER` -> 显示顺序(`_S_ORDER`, numberWidget, source=internal_get_form_by_code_id), `_S_SERIAL` -> 客户编码(`_S_SERIAL`, serialNumWidget, source=internal_get_form_by_code_id), `_S_DATE` -> 申请日期(`_S_DATE`, dateWidget, source=internal_get_form_by_code_id), `Ta_0` -> 线索信息(`Ta_0`, textAreaWidget, source=internal_get_form_by_code_id)
 
 ## Public Option Rules
 
@@ -83,7 +91,7 @@ Use this bundle only for the `customer` object. It is generated from the current
 - Internal live API: `POST /api/shadow/objects/customer/execute/upsert`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; live write is enabled and should only be used after explicit user confirmation.
+- This bundle is generated for phase `0.6.0`; live write is enabled and should only be used after explicit user confirmation.
 
 ## References
 

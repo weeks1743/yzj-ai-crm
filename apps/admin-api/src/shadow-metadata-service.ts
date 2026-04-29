@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { dirname, resolve } from 'node:path';
 import type {
   AppConfig,
   FieldBoundDictionaryKey,
@@ -23,6 +24,9 @@ import type {
   ShadowResolvedDictionaryMapping,
   ShadowSemanticSlot,
   ShadowSkillContract,
+  ShadowFieldRequiredRule,
+  ShadowFieldWritePolicy,
+  ShadowMergedTemplateRaw,
   ShadowStandardizedField,
   YzjApprovalWidget,
 } from './contracts.js';
@@ -32,6 +36,14 @@ import { BadRequestError, NotFoundError } from './errors.js';
 import { LightCloudClient } from './lightcloud-client.js';
 import { ShadowSkillBundleWriter } from './shadow-skill-bundle-writer.js';
 import { ShadowMetadataRepository } from './shadow-metadata-repository.js';
+import {
+  ApprovalPublicTemplateProvider,
+  FixtureInternalTemplateProvider,
+  mergeShadowTemplateSnapshots,
+  type ShadowInternalTemplateProvider,
+  type ShadowMergedTemplateSnapshot,
+  type ShadowPublicTemplateProvider,
+} from './shadow-template-providers.js';
 
 const SUPPORTED_WRITABLE_WIDGET_TYPES = new Set([
   'textWidget',
@@ -40,6 +52,7 @@ const SUPPORTED_WRITABLE_WIDGET_TYPES = new Set([
   'moneyWidget',
   'radioWidget',
   'checkboxWidget',
+  'switchWidget',
   'dateWidget',
   'personSelectWidget',
   'departmentSelectWidget',
@@ -98,6 +111,8 @@ interface ShadowMetadataServiceOptions {
   lightCloudClient: LightCloudClient;
   dictionaryResolver: DictionaryResolver;
   skillBundleWriter?: ShadowSkillBundleWriter;
+  publicTemplateProvider?: ShadowPublicTemplateProvider;
+  internalTemplateProvider?: ShadowInternalTemplateProvider;
   now?: () => Date;
 }
 
@@ -135,6 +150,14 @@ function getActivationStatus(config: ShadowObjectConfig): ShadowObjectSummaryRes
   return config.enabled ? 'active' : 'pending';
 }
 
+function isSqliteLockedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const maybeSqliteError = error as { code?: unknown; errcode?: unknown; errstr?: unknown };
+  return message.includes('database is locked')
+    || maybeSqliteError.code === 'ERR_SQLITE_ERROR' && maybeSqliteError.errcode === 5
+    || maybeSqliteError.errstr === 'database is locked';
+}
+
 function parseReferId(widget: YzjApprovalWidget): string | undefined {
   if (typeof widget.referId === 'string' && widget.referId.trim()) {
     return widget.referId.trim();
@@ -152,6 +175,103 @@ function parseLinkCodeId(widget: YzjApprovalWidget): string | undefined {
   }
 
   return undefined;
+}
+
+function parseBooleanLike(value: unknown): boolean {
+  if (value === true || value === 1) {
+    return true;
+  }
+
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return ['true', '1', 'yes', 'y', 'required', 'must', 'notnull', 'not_null', '必填', '必录'].includes(
+    normalized,
+  );
+}
+
+function isWidgetStaticallyRequired(widget: YzjApprovalWidget): boolean {
+  return [
+    widget.required,
+    widget.isRequired,
+    widget.requiredFlag,
+    widget.mustInput,
+    widget.notNull,
+  ].some(parseBooleanLike);
+}
+
+function getTemplateFormDefId(template: {
+  formDefId?: string | null;
+  basicInfo?: {
+    formDefId?: string | null;
+  };
+}): string | null {
+  const candidates = [template.formDefId, template.basicInfo?.formDefId];
+  return candidates.find((value): value is string => Boolean(value?.trim())) ?? null;
+}
+
+function extractConditionalRequiredRules(
+  widgets: YzjApprovalWidget[],
+): Map<string, ShadowFieldRequiredRule[]> {
+  const widgetByCode = new Map(widgets.map((widget) => [widget.codeId, widget]));
+  const rulesByTarget = new Map<string, ShadowFieldRequiredRule[]>();
+
+  for (const widget of widgets) {
+    for (const linkage of widget.displaylinkageVos ?? []) {
+      const targetCodes = new Set<string>();
+      const additionalState = linkage.additional?.state?.value;
+      const additionalIsRequired = additionalState === 'required';
+
+      for (const target of linkage.additional?.targetList ?? []) {
+        if (target.value) {
+          targetCodes.add(target.value);
+        }
+      }
+
+      if (linkage.additional?.target?.value) {
+        targetCodes.add(linkage.additional.target.value);
+      }
+
+      for (const [targetCode, behavior] of Object.entries(linkage.behavior ?? {})) {
+        if (behavior?.state === 'required') {
+          targetCodes.add(targetCode);
+        }
+      }
+
+      if (!additionalIsRequired) {
+        for (const targetCode of Array.from(targetCodes)) {
+          if (linkage.behavior?.[targetCode]?.state !== 'required') {
+            targetCodes.delete(targetCode);
+          }
+        }
+      }
+
+      const optionLabels = (linkage.additional?.option ?? [])
+        .map((option) => option.label ?? option.value)
+        .filter((value): value is string => Boolean(value?.trim()));
+
+      for (const targetCode of targetCodes) {
+        const targetWidget = widgetByCode.get(targetCode);
+        const targetLabel = targetWidget?.title ?? targetCode;
+        const optionDescription =
+          optionLabels.length > 0 ? `当 ${widget.title || widget.codeId} 为 ${optionLabels.join('/')} 时` : '满足联动条件时';
+        const rule: ShadowFieldRequiredRule = {
+          kind: 'conditional',
+          sourceFieldCode: widget.codeId,
+          sourceLabel: widget.title || widget.codeId,
+          optionLabels,
+          description: `${optionDescription}，${targetLabel} 为必填`,
+        };
+        const existing = rulesByTarget.get(targetCode) ?? [];
+        existing.push(rule);
+        rulesByTarget.set(targetCode, existing);
+      }
+    }
+  }
+
+  return rulesByTarget;
 }
 
 function parseDateOnlyParts(value: string): { year: number; month: number; day: number } | null {
@@ -282,11 +402,11 @@ function isMultiValue(widget: YzjApprovalWidget): boolean {
   return widget.option === 'multi';
 }
 
-function isReadOnlyWidget(widget: YzjApprovalWidget): boolean {
-  if (widget.codeId.startsWith('_S_')) {
-    return true;
-  }
+function isSystemFieldCode(codeId: string): boolean {
+  return codeId.startsWith('_S_');
+}
 
+function isReadOnlyWidget(widget: YzjApprovalWidget): boolean {
   if (widget.readOnly === true) {
     return true;
   }
@@ -294,12 +414,70 @@ function isReadOnlyWidget(widget: YzjApprovalWidget): boolean {
   return ALWAYS_READONLY_WIDGET_TYPES.has(widget.type);
 }
 
-function isWritableSystemShadowField(objectKey: ShadowObjectKey, widget: YzjApprovalWidget): boolean {
-  return (
-    objectKey === 'contact' &&
-    widget.type === 'textWidget' &&
-    ['_S_NAME', '_S_TITLE', '_S_ENCODE'].includes(widget.codeId)
-  );
+function isWidgetEditable(widget: YzjApprovalWidget): boolean {
+  return widget.edit !== false;
+}
+
+function isWidgetVisible(widget: YzjApprovalWidget): boolean {
+  return widget.view !== false;
+}
+
+function normalizeWidgetSystemDefault(widget: YzjApprovalWidget): string | null {
+  if (widget.systemDefault === null || widget.systemDefault === undefined) {
+    return null;
+  }
+
+  if (typeof widget.systemDefault === 'string') {
+    return widget.systemDefault;
+  }
+
+  return String(widget.systemDefault);
+}
+
+function normalizeWidgetPlaceholder(widget: YzjApprovalWidget): string | null {
+  return typeof widget.placeholder === 'string' && widget.placeholder.trim() ? widget.placeholder : null;
+}
+
+function parseTitleEntity(widget: YzjApprovalWidget): Record<string, unknown> | null {
+  const extendFieldMap = widget.extendFieldMap;
+  if (!extendFieldMap || typeof extendFieldMap !== 'object') {
+    return null;
+  }
+
+  const titleEntity = extendFieldMap.titleEntity;
+  return titleEntity && typeof titleEntity === 'object'
+    ? (titleEntity as Record<string, unknown>)
+    : null;
+}
+
+function hasAutoDerivedTitle(widget: YzjApprovalWidget): boolean {
+  if (widget.codeId !== '_S_TITLE' || widget.type !== 'textWidget') {
+    return false;
+  }
+
+  const extendFieldMap = widget.extendFieldMap;
+  if (!extendFieldMap || typeof extendFieldMap !== 'object') {
+    return false;
+  }
+
+  const defaultTitle = extendFieldMap.defaultTitle;
+  return Boolean(defaultTitle) || Boolean(parseTitleEntity(widget));
+}
+
+function resolveWritePolicy(widget: YzjApprovalWidget): ShadowFieldWritePolicy {
+  if (widget.codeId === '_S_TITLE' && hasAutoDerivedTitle(widget)) {
+    return 'derived';
+  }
+
+  if (widget.codeId === '_S_NAME' && widget.type === 'textWidget' && isWidgetEditable(widget)) {
+    return 'promptable';
+  }
+
+  if (!isWidgetEditable(widget) || isReadOnlyWidget(widget)) {
+    return 'read_only';
+  }
+
+  return 'promptable';
 }
 
 function normalizeStaticOptions(widget: YzjApprovalWidget) {
@@ -308,6 +486,55 @@ function normalizeStaticOptions(widget: YzjApprovalWidget) {
     key: option.key,
     value: option.value,
   }));
+}
+
+function normalizeComparable(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeSwitchInput(value: unknown): {
+  comparable: string;
+  booleanValue: boolean | null;
+} {
+  if (typeof value === 'boolean') {
+    return {
+      comparable: value ? 'true' : 'false',
+      booleanValue: value,
+    };
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value === 1) {
+      return { comparable: '1', booleanValue: true };
+    }
+    if (value === 0) {
+      return { comparable: '0', booleanValue: false };
+    }
+    return { comparable: String(value), booleanValue: null };
+  }
+
+  const comparable = normalizeComparable(value);
+  if (/^(1|true|yes|y|on|enable|enabled|open|开启|启用|打开|是)$/.test(comparable)) {
+    return { comparable, booleanValue: true };
+  }
+  if (/^(0|false|no|n|off|disable|disabled|close|关闭|停用|禁用|关|否)$/.test(comparable)) {
+    return { comparable, booleanValue: false };
+  }
+
+  return { comparable, booleanValue: null };
+}
+
+function isSwitchOptionForBoolean(
+  option: ShadowStandardizedField['options'][number],
+  expected: boolean,
+): boolean {
+  const values = [option.key, option.title, option.value]
+    .filter((value): value is string => typeof value === 'string')
+    .map(normalizeSwitchInput);
+  return values.some((value) => value.booleanValue === expected);
 }
 
 function getFieldBoundDictionaryKey(widget: Pick<YzjApprovalWidget, 'codeId' | 'type'>): FieldBoundDictionaryKey | null {
@@ -343,7 +570,7 @@ function inferSemanticSlot(
     return 'customer_name';
   }
 
-  if (objectKey === 'opportunity' && /商机名称/.test(label) && widgetType === 'textWidget') {
+  if (objectKey === 'opportunity' && /商机名称|机会名称/.test(label) && widgetType === 'textWidget') {
     return 'opportunity_name';
   }
 
@@ -359,11 +586,11 @@ function inferSemanticSlot(
     return 'customer_type';
   }
 
-  if (objectKey === 'customer' && /客户状态|状态/.test(label)) {
+  if (objectKey === 'customer' && /客户状态/.test(label)) {
     return 'customer_status';
   }
 
-  if (objectKey === 'opportunity' && /商机状态|状态/.test(label)) {
+  if (objectKey === 'opportunity' && /商机状态/.test(label)) {
     return 'opportunity_status';
   }
 
@@ -402,11 +629,74 @@ function buildSchemaHash(fields: ShadowStandardizedField[]): string {
   return createHash('sha256').update(JSON.stringify(fields)).digest('hex');
 }
 
-function getFieldParameterKey(field: ShadowStandardizedField): string {
-  return field.semanticSlot ?? field.fieldCode;
+function assignFieldParameterKeys(
+  objectKey: ShadowObjectKey,
+  fields: ShadowStandardizedField[],
+): ShadowStandardizedField[] {
+  const promptableFields = fields.filter((field) => field.writePolicy === 'promptable');
+  const searchableFields = fields.filter(isFieldEligibleForSearchContract);
+
+  return fields.map((field) => ({
+    ...field,
+    writeParameterKey: resolveWriteParameterKey(objectKey, field, promptableFields),
+    searchParameterKey: resolveSearchParameterKey(field, searchableFields),
+  }));
 }
 
-function getSearchFieldParameterKey(
+function applyCanonicalWritePolicies(fields: ShadowStandardizedField[]): ShadowStandardizedField[] {
+  const primarySystemNameField = fields.find(
+    (field) =>
+      field.fieldCode === '_S_NAME' &&
+      field.writePolicy === 'promptable' &&
+      field.widgetType === 'textWidget' &&
+      field.semanticSlot,
+  );
+  if (!primarySystemNameField?.semanticSlot) {
+    return fields;
+  }
+
+  return fields.map((field) => {
+    if (
+      field.fieldCode !== primarySystemNameField.fieldCode &&
+      field.widgetType === 'textWidget' &&
+      !field.isSystemField &&
+      field.semanticSlot === primarySystemNameField.semanticSlot
+    ) {
+      return {
+        ...field,
+        writePolicy: 'read_only',
+      };
+    }
+
+    return field;
+  });
+}
+
+function resolveWriteParameterKey(
+  objectKey: ShadowObjectKey,
+  field: ShadowStandardizedField,
+  promptableFields: ShadowStandardizedField[],
+): string {
+  if (field.writePolicy !== 'promptable') {
+    return field.fieldCode;
+  }
+
+  const alias = getStableWriteParameterAlias(objectKey, field);
+  if (alias) {
+    return alias;
+  }
+
+  if (!field.semanticSlot) {
+    return field.fieldCode;
+  }
+
+  const semanticSlotMatches = promptableFields.filter(
+    (candidate) => candidate.semanticSlot === field.semanticSlot,
+  );
+  return semanticSlotMatches.length === 1 ? field.semanticSlot : field.fieldCode;
+}
+
+function resolveSearchParameterKey(
   field: ShadowStandardizedField,
   searchableFields: ShadowStandardizedField[],
 ): string {
@@ -417,7 +707,80 @@ function getSearchFieldParameterKey(
   const semanticSlotMatches = searchableFields.filter(
     (candidate) => candidate.semanticSlot === field.semanticSlot,
   );
-  return semanticSlotMatches.length > 1 ? field.fieldCode : field.semanticSlot;
+  return semanticSlotMatches.length === 1 ? field.semanticSlot : field.fieldCode;
+}
+
+function getStableWriteParameterAlias(
+  objectKey: ShadowObjectKey,
+  field: ShadowStandardizedField,
+): string | undefined {
+  if (field.fieldCode === '_S_DISABLE') {
+    return 'enabled_state';
+  }
+
+  if (field.fieldCode === '_S_NAME') {
+    if (objectKey === 'customer') {
+      return 'customer_name';
+    }
+    if (objectKey === 'contact') {
+      return 'contact_name';
+    }
+    if (objectKey === 'opportunity') {
+      return 'opportunity_name';
+    }
+  }
+
+  if (field.semanticSlot === 'phone') {
+    if (/办公电话/.test(field.label)) {
+      return 'office_phone';
+    }
+    if (/公司电话/.test(field.label)) {
+      return 'company_phone';
+    }
+    if (/联系人手机/.test(field.label)) {
+      return 'contact_phone';
+    }
+    if (/^手机$/.test(field.label)) {
+      return 'mobile_phone';
+    }
+  }
+
+  if (/联系人姓名/.test(field.label) && field.widgetType === 'textWidget') {
+    return 'contact_name';
+  }
+
+  if (/(跟进记录|跟进内容)/.test(field.label) && field.widgetType === 'textAreaWidget') {
+    return 'followup_record';
+  }
+
+  if (/跟进方式/.test(field.label) && field.widgetType === 'radioWidget') {
+    return 'followup_method';
+  }
+
+  if (/销售阶段/.test(field.label)) {
+    return 'sales_stage';
+  }
+
+  if (/预算/.test(field.label) && field.widgetType === 'numberWidget') {
+    return 'opportunity_budget';
+  }
+
+  if (/预计成交/.test(field.label) && field.widgetType === 'dateWidget') {
+    return 'expected_close_date';
+  }
+
+  return undefined;
+}
+
+function getFieldParameterKey(field: ShadowStandardizedField): string {
+  return field.writeParameterKey ?? field.semanticSlot ?? field.fieldCode;
+}
+
+function getSearchFieldParameterKey(
+  field: ShadowStandardizedField,
+  _searchableFields: ShadowStandardizedField[],
+): string {
+  return field.searchParameterKey ?? field.fieldCode;
 }
 
 function isIgnoredSkillField(field: ShadowStandardizedField): boolean {
@@ -454,7 +817,7 @@ function describeRelationField(field: ShadowStandardizedField): string {
 function isFieldEligibleForContract(field: ShadowStandardizedField): boolean {
   if (
     isIgnoredSkillField(field) ||
-    field.readOnly ||
+    field.writePolicy !== 'promptable' ||
     !SUPPORTED_WRITABLE_WIDGET_TYPES.has(field.widgetType)
   ) {
     return false;
@@ -466,6 +829,18 @@ function isFieldEligibleForContract(field: ShadowStandardizedField): boolean {
 
   if (field.widgetType === 'basicDataWidget') {
     return Boolean(field.relationBinding?.formCodeId);
+  }
+
+  return true;
+}
+
+function isFieldEligibleForDerivedContract(field: ShadowStandardizedField): boolean {
+  if (
+    isIgnoredSkillField(field) ||
+    field.writePolicy !== 'derived' ||
+    !SUPPORTED_WRITABLE_WIDGET_TYPES.has(field.widgetType)
+  ) {
+    return false;
   }
 
   return true;
@@ -892,7 +1267,10 @@ export class ShadowMetadataService {
   private readonly lightCloudClient: LightCloudClient;
   private readonly dictionaryResolver: DictionaryResolver;
   private readonly skillBundleWriter: ShadowSkillBundleWriter;
+  private readonly publicTemplateProvider: ShadowPublicTemplateProvider;
+  private readonly internalTemplateProvider: ShadowInternalTemplateProvider;
   private readonly now: () => Date;
+  private hasWarnedLockedRegistrySync = false;
 
   constructor(options: ShadowMetadataServiceOptions) {
     this.config = options.config;
@@ -903,12 +1281,23 @@ export class ShadowMetadataService {
     this.skillBundleWriter = options.skillBundleWriter ?? new ShadowSkillBundleWriter({
       outputDir: this.config.shadow.skillOutputDir,
     });
+    this.publicTemplateProvider = options.publicTemplateProvider ?? new ApprovalPublicTemplateProvider({
+      approvalClient: this.approvalClient,
+    });
+    this.internalTemplateProvider = options.internalTemplateProvider ?? new FixtureInternalTemplateProvider({
+      directory: resolve(dirname(this.config.meta.envFilePath), 'yzj-api/getFormByCodeId'),
+    });
     this.now = options.now ?? (() => new Date());
   }
 
   listObjects(): ShadowObjectSummaryResponse[] {
-    this.syncRegistryConfig();
-    return this.repository.listObjectRegistry();
+    const objectsByKey = new Map(
+      this.repository.listObjectRegistry().map((objectItem) => [objectItem.objectKey, objectItem]),
+    );
+
+    return Object.values(this.config.shadow.objects).map(
+      (objectConfig) => objectsByKey.get(objectConfig.key) ?? this.buildObjectSummaryFromConfig(objectConfig),
+    );
   }
 
   getObject(objectKey: ShadowObjectKey): ShadowObjectDetailResponse {
@@ -946,7 +1335,7 @@ export class ShadowMetadataService {
   }
 
   async refreshObject(objectKey: ShadowObjectKey): Promise<ShadowObjectDetailResponse> {
-    const context = this.getObjectContext(objectKey);
+    const context = this.getObjectContext(objectKey, { syncRegistry: true });
     if (context.registry.activationStatus !== 'active') {
       throw new BadRequestError(`${mapShadowObjectLabel(objectKey)}对象当前未激活，不能执行刷新`);
     }
@@ -961,16 +1350,25 @@ export class ShadowMetadataService {
         appId: this.config.yzj.approval.appId,
         secret: this.config.yzj.approval.appSecret,
       });
-      const template = await this.approvalClient.viewFormDef({
+      const publicTemplate = await this.publicTemplateProvider.getTemplate({
         accessToken,
         formCodeId: context.registry.formCodeId,
       });
+      const internalTemplate = await this.internalTemplateProvider.getTemplate({
+        formCodeId: context.registry.formCodeId,
+      });
+      const mergedTemplate = mergeShadowTemplateSnapshots({
+        formCodeId: context.registry.formCodeId,
+        publicTemplate,
+        internalTemplate,
+      });
+      const formDefId = mergedTemplate.formDefId;
 
       const normalized = await this.normalizeTemplate({
         objectKey,
         formCodeId: context.registry.formCodeId,
         accessToken,
-        widgetMap: template.formInfo?.widgetMap ?? {},
+        mergedTemplate,
       });
       const schemaHash = buildSchemaHash(normalized.fields);
       const latestSnapshot = this.repository.getLatestSnapshot(objectKey);
@@ -980,10 +1378,10 @@ export class ShadowMetadataService {
           objectKey,
           objectLabel: context.registry.label,
           formCodeId: context.registry.formCodeId,
-          formDefId: template.formDefId ?? latestSnapshot.formDefId,
+          formDefId: formDefId ?? latestSnapshot.formDefId,
           snapshotVersion: latestSnapshot.snapshotVersion,
           schemaHash,
-          rawTemplate: template,
+          rawTemplate: mergedTemplate.rawTemplate,
           fields: latestSnapshot.normalizedFields,
           dictionaryBindings: latestSnapshot.dictionaryBindings,
         });
@@ -991,7 +1389,7 @@ export class ShadowMetadataService {
         this.repository.markRefreshReady({
           objectKey,
           formCodeId: context.registry.formCodeId,
-          formDefId: template.formDefId ?? null,
+          formDefId,
           snapshotVersion: latestSnapshot.snapshotVersion,
           schemaHash,
           now: this.now().toISOString(),
@@ -1023,10 +1421,10 @@ export class ShadowMetadataService {
         snapshotVersion,
         schemaHash,
         formCodeId: context.registry.formCodeId,
-        formDefId: template.formDefId ?? null,
+        formDefId,
         normalizedFields: normalized.fields,
         dictionaryBindings,
-        rawTemplate: template,
+        rawTemplate: mergedTemplate.rawTemplate,
         createdAt: snapshotVersion,
       });
 
@@ -1034,10 +1432,10 @@ export class ShadowMetadataService {
         objectKey,
         objectLabel: context.registry.label,
         formCodeId: context.registry.formCodeId,
-        formDefId: template.formDefId ?? null,
+        formDefId,
         snapshotVersion,
         schemaHash,
-        rawTemplate: template,
+        rawTemplate: mergedTemplate.rawTemplate,
         fields: normalized.fields,
         dictionaryBindings,
       });
@@ -1045,7 +1443,7 @@ export class ShadowMetadataService {
       this.repository.markRefreshReady({
         objectKey,
         formCodeId: context.registry.formCodeId,
-        formDefId: template.formDefId ?? null,
+        formDefId,
         snapshotVersion,
         schemaHash,
         now: snapshotVersion,
@@ -1429,12 +1827,20 @@ export class ShadowMetadataService {
     }
   }
 
-  private getObjectContext(objectKey: ShadowObjectKey): {
+  private getObjectContext(
+    objectKey: ShadowObjectKey,
+    options?: { syncRegistry?: boolean },
+  ): {
     registry: ShadowObjectSummaryResponse;
     snapshot: ReturnType<ShadowMetadataRepository['getLatestSnapshot']>;
   } {
-    this.syncRegistryConfig();
-    const registry = this.repository.getObjectRegistry(objectKey);
+    if (options?.syncRegistry) {
+      this.trySyncRegistryConfig();
+    }
+    const registry = this.repository.getObjectRegistry(objectKey)
+      ?? (this.config.shadow.objects[objectKey]
+        ? this.buildObjectSummaryFromConfig(this.config.shadow.objects[objectKey])
+        : null);
     if (!registry) {
       throw new NotFoundError(`未找到影子对象: ${objectKey}`);
     }
@@ -1442,6 +1848,38 @@ export class ShadowMetadataService {
     return {
       registry,
       snapshot: this.repository.getLatestSnapshot(objectKey),
+    };
+  }
+
+  private trySyncRegistryConfig(): void {
+    try {
+      this.syncRegistryConfig();
+    } catch (error) {
+      if (!isSqliteLockedError(error)) {
+        throw error;
+      }
+      if (!this.hasWarnedLockedRegistrySync) {
+        console.warn(
+          '[admin-api] sqlite database is locked while syncing shadow registry config; read API falls back to persisted registry/config snapshot.',
+        );
+        this.hasWarnedLockedRegistrySync = true;
+      }
+    }
+  }
+
+  private buildObjectSummaryFromConfig(objectConfig: ShadowObjectConfig): ShadowObjectSummaryResponse {
+    return {
+      objectKey: objectConfig.key,
+      label: objectConfig.label,
+      enabled: objectConfig.enabled,
+      activationStatus: getActivationStatus(objectConfig),
+      formCodeId: objectConfig.formCodeId,
+      formDefId: null,
+      refreshStatus: 'not_started',
+      latestSnapshotVersion: null,
+      latestSchemaHash: null,
+      lastRefreshAt: null,
+      lastError: null,
     };
   }
 
@@ -1453,9 +1891,10 @@ export class ShadowMetadataService {
     if (!context.snapshot || !context.registry.formCodeId) {
       throw new BadRequestError(`${mapShadowObjectLabel(objectKey)}尚未刷新元数据，无法生成写入请求`);
     }
+    const snapshot = context.snapshot;
 
     const params = input.params ?? {};
-    const bindings = context.snapshot.dictionaryBindings ?? [];
+    const bindings = snapshot.dictionaryBindings ?? [];
     const bindingMap = new Map(bindings.map((binding) => [binding.fieldCode, binding]));
     const missingRuntimeInputs: string[] = [];
     const missingRequiredParams: string[] = [];
@@ -1476,22 +1915,25 @@ export class ShadowMetadataService {
 
     const contract = this.getContractForMode(objectKey, input.mode, context.registry.latestSnapshotVersion);
     const requiredParams = new Set(contract?.requiredParams ?? []);
+    const derivedParams = new Set(contract?.derivedParams ?? []);
 
-    for (const field of context.snapshot.normalizedFields) {
+    for (const field of snapshot.normalizedFields) {
       if (isIgnoredSkillField(field)) {
         continue;
       }
 
-      const providedValue =
-        field.readOnly && getFieldParameterKey(field) !== field.fieldCode
-          ? Object.prototype.hasOwnProperty.call(params, field.fieldCode)
-            ? params[field.fieldCode]
-            : undefined
-          : this.readParameterValue(params, field);
+      const providedValue = this.readParameterValue(params, field);
       const parameterKey = getFieldParameterKey(field);
 
-      if (field.readOnly) {
+      if (field.writePolicy === 'read_only') {
         if (providedValue !== undefined) {
+          blockedReadonlyParams.push(parameterKey);
+        }
+        continue;
+      }
+
+      if (field.writePolicy === 'derived') {
+        if (providedValue !== undefined || Object.prototype.hasOwnProperty.call(params, field.fieldCode)) {
           blockedReadonlyParams.push(parameterKey);
         }
         continue;
@@ -1512,7 +1954,7 @@ export class ShadowMetadataService {
       const normalized =
         field.widgetType === 'basicDataWidget'
           ? await this.normalizeBasicDataFieldValue({
-              snapshot: context.snapshot,
+              snapshot,
               field,
               rawValue: providedValue,
               getAccessToken: () => {
@@ -1540,6 +1982,51 @@ export class ShadowMetadataService {
 
       if (normalized.value !== undefined) {
         widgetValue[field.fieldCode] = normalized.value;
+      }
+    }
+
+    for (const field of snapshot.normalizedFields) {
+      if (
+        field.writePolicy !== 'derived' ||
+        !derivedParams.has(getFieldParameterKey(field)) ||
+        isIgnoredSkillField(field)
+      ) {
+        continue;
+      }
+
+      const derivedValue = this.deriveFieldValue({
+        snapshot,
+        field,
+        mode: input.mode,
+        operatorOpenId: input.operatorOpenId?.trim() || '{operatorOpenId}',
+        widgetValue,
+      });
+
+      if (derivedValue !== undefined) {
+        widgetValue[field.fieldCode] = derivedValue;
+      }
+    }
+
+    for (const field of snapshot.normalizedFields) {
+      if (
+        field.writePolicy !== 'promptable' ||
+        field.required ||
+        field.requiredMode !== 'conditional' ||
+        !field.requiredRules?.length
+      ) {
+        continue;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(widgetValue, field.fieldCode)) {
+        continue;
+      }
+
+      const parameterKey = getFieldParameterKey(field);
+      const isTriggered = field.requiredRules.some((rule) =>
+        this.isConditionalRuleTriggered(snapshot, rule, widgetValue),
+      );
+      if (isTriggered && !missingRequiredParams.includes(parameterKey)) {
+        missingRequiredParams.push(parameterKey);
       }
     }
 
@@ -1620,12 +2107,12 @@ export class ShadowMetadataService {
     objectKey: ShadowObjectKey;
     formCodeId: string;
     accessToken: string;
-    widgetMap: Record<string, YzjApprovalWidget>;
+    mergedTemplate: ShadowMergedTemplateSnapshot;
   }): Promise<{
     fields: ShadowStandardizedField[];
     dictionaryBindings: PreparedDictionaryBinding[];
   }> {
-    const widgets = Object.values(params.widgetMap);
+    const widgets = Object.values(params.mergedTemplate.widgetMap);
     const referIds = widgets
       .filter((widget) => widget.type === 'publicOptBoxWidget')
       .map((widget) => parseReferId(widget))
@@ -1640,6 +2127,7 @@ export class ShadowMetadataService {
     const resolvedFieldBoundDictionaries = this.dictionaryResolver.resolveFieldBoundOptions({
       bindingKeys: fieldBoundKeys,
     });
+    const conditionalRequiredRules = extractConditionalRequiredRules(widgets);
 
     const fields: ShadowStandardizedField[] = [];
     const dictionaryBindings: PreparedDictionaryBinding[] = [];
@@ -1657,17 +2145,44 @@ export class ShadowMetadataService {
           : undefined;
       const semanticSlot =
         fieldBoundKey ?? inferSemanticSlot(params.objectKey, widget.title || widget.codeId, widget.type);
+      const staticRequired = isWidgetStaticallyRequired(widget);
+      const requiredRules: ShadowFieldRequiredRule[] = staticRequired
+        ? [
+            {
+              kind: 'static',
+              description: `${widget.title || widget.codeId} 为模板静态必填`,
+            },
+          ]
+        : [];
+      requiredRules.push(...(conditionalRequiredRules.get(widget.codeId) ?? []));
 
       const field: ShadowStandardizedField = {
         fieldCode: widget.codeId,
         label: widget.title || widget.codeId,
         widgetType: widget.type,
-        required: Boolean(widget.required),
-        readOnly: isWritableSystemShadowField(params.objectKey, widget) ? false : isReadOnlyWidget(widget),
+        required: staticRequired,
+        requiredMode: staticRequired ? 'required' : requiredRules.length > 0 ? 'conditional' : 'optional',
+        ...(requiredRules.length > 0 ? { requiredRules } : {}),
+        readOnly: isReadOnlyWidget(widget),
+        edit: isWidgetEditable(widget),
+        view: isWidgetVisible(widget),
+        ...(normalizeWidgetSystemDefault(widget) !== null
+          ? { systemDefault: normalizeWidgetSystemDefault(widget) }
+          : {}),
+        ...(normalizeWidgetPlaceholder(widget) !== null
+          ? { placeholder: normalizeWidgetPlaceholder(widget) }
+          : {}),
+        writePolicy: resolveWritePolicy(widget),
+        isSystemField: isSystemFieldCode(widget.codeId),
+        provenance:
+          params.mergedTemplate.fieldProvenance[widget.codeId] ?? {
+            sources: ['public_view_form_def'],
+            truthSource: 'public_view_form_def',
+          },
         multi: isMultiValue(widget),
         ...(linkCodeId ? { linkCodeId } : {}),
         options:
-          widget.type === 'radioWidget' || widget.type === 'checkboxWidget'
+          widget.type === 'radioWidget' || widget.type === 'checkboxWidget' || widget.type === 'switchWidget'
             ? normalizeStaticOptions(widget)
             : widget.type === 'publicOptBoxWidget'
               ? (dictionaryBinding?.entries ?? []).map((entry) => ({
@@ -1717,7 +2232,7 @@ export class ShadowMetadataService {
     }
 
     return {
-      fields,
+      fields: assignFieldParameterKeys(params.objectKey, applyCanonicalWritePolicies(fields)),
       dictionaryBindings,
     };
   }
@@ -1762,19 +2277,25 @@ export class ShadowMetadataService {
   }): ShadowSkillContract[] {
     const objectLabel = mapShadowObjectLabel(params.objectKey);
     const skillPrefix = `shadow.${params.objectKey}`;
-    const writableFields = params.fields.filter(isFieldEligibleForContract);
+    const promptableFields = params.fields.filter(isFieldEligibleForContract);
+    const derivedFields = params.fields.filter(isFieldEligibleForDerivedContract);
     const searchableFields = params.fields.filter(isFieldEligibleForSearchContract);
     const requiredParams = Array.from(
-      new Set(writableFields.filter((field) => field.required).map(getFieldParameterKey)),
+      new Set(
+        promptableFields
+          .filter((field) => field.required)
+          .map(getFieldParameterKey),
+      ),
     );
+    const derivedParams = Array.from(new Set(derivedFields.map(getFieldParameterKey)));
     const optionalParams = Array.from(
       new Set(
-        writableFields
+        promptableFields
           .filter((field) => !field.required)
           .map(getFieldParameterKey),
       ),
     );
-    const updateOptionalParams = Array.from(new Set(writableFields.map(getFieldParameterKey)));
+    const updateOptionalParams = Array.from(new Set(promptableFields.map(getFieldParameterKey)));
     const searchOptionalParams = Array.from(
       new Set(searchableFields.map((field) => getSearchFieldParameterKey(field, searchableFields))),
     );
@@ -1804,6 +2325,7 @@ export class ShadowMetadataService {
         notWhenToUse: `当用户已经明确给出 formInstId，需要直接获取单条${objectLabel}详情时不要使用。`,
         requiredParams: [],
         optionalParams: searchOptionalParams,
+        derivedParams: [],
         confirmationPolicy: 'no_confirmation_required',
         outputCardType: `${params.objectKey}-search-preview`,
         interactionStrategy: buildSkillInteractionStrategy({
@@ -1830,6 +2352,7 @@ export class ShadowMetadataService {
         notWhenToUse: `当用户只提供模糊条件，需要先搜索${objectLabel}时不要使用。`,
         requiredParams: ['form_inst_id'],
         optionalParams: [],
+        derivedParams: [],
         confirmationPolicy: 'no_confirmation_required',
         outputCardType: `${params.objectKey}-get-preview`,
         interactionStrategy: buildSkillInteractionStrategy({
@@ -1843,7 +2366,7 @@ export class ShadowMetadataService {
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
           operation: 'get',
-          fields: writableFields,
+          fields: promptableFields,
         }),
         ...sharedBase,
       },
@@ -1856,6 +2379,7 @@ export class ShadowMetadataService {
         notWhenToUse: `当用户只是查询${objectLabel}、分析${objectLabel}或未准备写入确认时不要使用。`,
         requiredParams,
         optionalParams,
+        derivedParams,
         confirmationPolicy: 'required_before_write',
         outputCardType: `${params.objectKey}-create-preview`,
         interactionStrategy: buildSkillInteractionStrategy({
@@ -1869,7 +2393,7 @@ export class ShadowMetadataService {
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
           operation: 'create',
-          fields: writableFields,
+          fields: promptableFields,
         }),
         ...sharedBase,
       },
@@ -1882,6 +2406,7 @@ export class ShadowMetadataService {
         notWhenToUse: `当用户没有明确 formInstId 或只是在做查询时不要使用。`,
         requiredParams: ['form_inst_id'],
         optionalParams: updateOptionalParams,
+        derivedParams,
         confirmationPolicy: 'required_before_write',
         outputCardType: `${params.objectKey}-update-preview`,
         interactionStrategy: buildSkillInteractionStrategy({
@@ -1895,7 +2420,7 @@ export class ShadowMetadataService {
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
           operation: 'update',
-          fields: writableFields,
+          fields: promptableFields,
         }),
         ...sharedBase,
       },
@@ -1908,6 +2433,7 @@ export class ShadowMetadataService {
         notWhenToUse: `当用户还在搜索${objectLabel}、核对详情，或未明确确认删除时不要使用。`,
         requiredParams: ['form_inst_ids'],
         optionalParams: [],
+        derivedParams: [],
         confirmationPolicy: 'required_before_write',
         outputCardType: `${params.objectKey}-delete-preview`,
         interactionStrategy: buildSkillInteractionStrategy({
@@ -1921,7 +2447,7 @@ export class ShadowMetadataService {
           objectKey: params.objectKey,
           formCodeId: params.formCodeId,
           operation: 'delete',
-          fields: writableFields,
+          fields: promptableFields,
         }),
         ...sharedBase,
       },
@@ -2191,7 +2717,7 @@ export class ShadowMetadataService {
     return this.selectSearchExampleFields(fields).map((field) => {
       const operator = this.getSearchExampleOperator(field);
       return {
-        field: getFieldParameterKey(field),
+        field: getSearchFieldParameterKey(field, fields),
         value: this.buildSearchFilterValueExample(field),
         ...(operator ? { operator } : {}),
       };
@@ -2303,9 +2829,10 @@ export class ShadowMetadataService {
 
   private buildSearchFilterValueExample(field: ShadowStandardizedField): unknown {
     if (field.widgetType === 'basicDataWidget') {
+      const parameterKey = field.searchParameterKey ?? field.semanticSlot ?? field.fieldCode;
       return (
-        (field.relationBinding?.displayCol && `{${getFieldParameterKey(field)}_${field.relationBinding.displayCol}}`) ||
-        `{${getFieldParameterKey(field)}_showName}`
+        (field.relationBinding?.displayCol && `{${parameterKey}_${field.relationBinding.displayCol}}`) ||
+        `{${parameterKey}_showName}`
       );
     }
 
@@ -2313,7 +2840,7 @@ export class ShadowMetadataService {
       return [1777046400000, 1777132799999];
     }
 
-    return this.buildParameterPlaceholder(field);
+    return `{${field.searchParameterKey ?? field.semanticSlot ?? field.fieldCode}}`;
   }
 
   private normalizeSearchOperator(field: ShadowStandardizedField, operator?: string): string | undefined {
@@ -2414,7 +2941,7 @@ export class ShadowMetadataService {
         return value;
       }
 
-      const parameterKey = getFieldParameterKey(field);
+      const parameterKey = field.searchParameterKey ?? field.semanticSlot ?? field.fieldCode;
       const relationBinding = field.relationBinding;
       const objectValue =
         value && typeof value === 'object' && !Array.isArray(value)
@@ -2478,7 +3005,11 @@ export class ShadowMetadataService {
 
   private findField(fields: ShadowStandardizedField[], inputKey: string): ShadowStandardizedField | undefined {
     return fields.find(
-      (field) => field.fieldCode === inputKey || field.semanticSlot === inputKey,
+      (field) =>
+        field.fieldCode === inputKey ||
+        field.semanticSlot === inputKey ||
+        field.writeParameterKey === inputKey ||
+        field.searchParameterKey === inputKey,
     );
   }
 
@@ -2551,13 +3082,7 @@ export class ShadowMetadataService {
     snapshot: ShadowObjectSnapshotRecord,
     fieldCode: string,
   ): YzjApprovalWidget | undefined {
-    const rawTemplate = snapshot.rawTemplate as
-      | {
-          formInfo?: {
-            widgetMap?: Record<string, unknown>;
-          };
-        }
-      | undefined;
+    const rawTemplate = snapshot.rawTemplate as ShadowMergedTemplateRaw | undefined;
     const widgetMap = rawTemplate?.formInfo?.widgetMap;
     if (!widgetMap || typeof widgetMap !== 'object') {
       return undefined;
@@ -2565,6 +3090,182 @@ export class ShadowMetadataService {
 
     const widget = (widgetMap as Record<string, unknown>)[fieldCode];
     return widget && typeof widget === 'object' ? (widget as YzjApprovalWidget) : undefined;
+  }
+
+  private deriveFieldValue(params: {
+    snapshot: ShadowObjectSnapshotRecord;
+    field: ShadowStandardizedField;
+    mode: ShadowPreviewUpsertInput['mode'];
+    operatorOpenId: string;
+    widgetValue: Record<string, unknown>;
+  }): unknown {
+    const widget = this.getSnapshotWidget(params.snapshot, params.field.fieldCode);
+    if (!widget) {
+      return undefined;
+    }
+
+    if (params.field.fieldCode !== '_S_TITLE') {
+      return undefined;
+    }
+
+    const titleEntity = parseTitleEntity(widget);
+    const sourceFieldCodes = Array.isArray(titleEntity?.list)
+      ? titleEntity.list
+          .map((item) =>
+            item && typeof item === 'object' && item.kind === 'ITEM_FORM_ITEM' && typeof item.formItem === 'string'
+              ? item.formItem
+              : null,
+          )
+          .filter((value): value is string => Boolean(value))
+      : [];
+    if (
+      params.mode === 'update' &&
+      sourceFieldCodes.length > 0 &&
+      !sourceFieldCodes.some((fieldCode) => Object.prototype.hasOwnProperty.call(params.widgetValue, fieldCode))
+    ) {
+      return undefined;
+    }
+
+    const templateTitle = this.getSnapshotTemplateTitle(params.snapshot) ?? mapShadowObjectLabel(params.snapshot.objectKey);
+
+    if (!titleEntity || !Array.isArray(titleEntity.list)) {
+      return hasAutoDerivedTitle(widget) ? templateTitle : undefined;
+    }
+
+    const segments = titleEntity.list
+      .map((item) => {
+        if (!item || typeof item !== 'object') {
+          return null;
+        }
+
+        const typedItem = item as Record<string, unknown>;
+        const formItem = typeof typedItem.formItem === 'string' ? typedItem.formItem : '';
+        switch (typedItem.kind) {
+          case 'ITEM_FORM_ITEM':
+            if (formItem === '_S_APPLY') {
+              return params.operatorOpenId;
+            }
+            return this.stringifyDerivedValue(params.widgetValue[formItem]);
+          case 'ITEM_STRING':
+            return formItem;
+          case 'ITEM_TEMPLATENAME':
+            return templateTitle;
+          default:
+            return null;
+        }
+      })
+      .filter((value): value is string => Boolean(value?.trim()));
+
+    if (segments.length === 0) {
+      return undefined;
+    }
+
+    return segments.join('').trim() || undefined;
+  }
+
+  private getSnapshotTemplateTitle(snapshot: ShadowObjectSnapshotRecord): string | null {
+    const rawTemplate = snapshot.rawTemplate as ShadowMergedTemplateRaw | undefined;
+    return typeof rawTemplate?.templateTitle === 'string' && rawTemplate.templateTitle.trim()
+      ? rawTemplate.templateTitle.trim()
+      : null;
+  }
+
+  private isConditionalRuleTriggered(
+    snapshot: ShadowObjectSnapshotRecord,
+    rule: ShadowFieldRequiredRule,
+    widgetValue: Record<string, unknown>,
+  ): boolean {
+    if (!rule.sourceFieldCode || !Object.prototype.hasOwnProperty.call(widgetValue, rule.sourceFieldCode)) {
+      return false;
+    }
+
+    if (!rule.optionLabels || rule.optionLabels.length === 0) {
+      return true;
+    }
+
+    const sourceWidget = this.getSnapshotWidget(snapshot, rule.sourceFieldCode);
+    const acceptedValues = new Set<string>();
+    for (const optionLabel of rule.optionLabels) {
+      acceptedValues.add(optionLabel);
+      if (!sourceWidget?.options) {
+        continue;
+      }
+      for (const option of sourceWidget.options) {
+        const optionLabelValue = typeof option.value === 'string' ? option.value : '';
+        if (optionLabelValue === optionLabel) {
+          if (typeof option.key === 'string') {
+            acceptedValues.add(option.key);
+          }
+          acceptedValues.add(optionLabelValue);
+        }
+      }
+    }
+
+    return this.collectComparableValues(widgetValue[rule.sourceFieldCode]).some((value) => acceptedValues.has(value));
+  }
+
+  private collectComparableValues(value: unknown): string[] {
+    if (typeof value === 'string' && value.trim()) {
+      return [value.trim()];
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return [String(value)];
+    }
+
+    if (Array.isArray(value)) {
+      return value.flatMap((item) => this.collectComparableValues(item));
+    }
+
+    if (!value || typeof value !== 'object') {
+      return [];
+    }
+
+    const record = value as Record<string, unknown>;
+    return [record.value, record.title, record.dicId]
+      .flatMap((item) => this.collectComparableValues(item))
+      .filter((item, index, items) => items.indexOf(item) === index);
+  }
+
+  private stringifyDerivedValue(value: unknown): string | null {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+
+    if (Array.isArray(value)) {
+      const rendered = value
+        .map((item) => this.stringifyDerivedValue(item))
+        .filter((item): item is string => Boolean(item));
+      return rendered.length > 0 ? rendered.join('/') : null;
+    }
+
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const candidates = [
+      record.showName,
+      record.title,
+      record.value,
+      record._name_,
+      record._S_TITLE,
+      record._S_NAME,
+      record.open_id,
+      record.formInstId,
+      record.id,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+
+    return null;
   }
 
   private async normalizeBasicDataFieldValue(params: {
@@ -2919,6 +3620,11 @@ export class ShadowMetadataService {
           validationErrors,
         };
       }
+      case 'switchWidget':
+        return this.normalizeSwitchFieldValue({
+          field,
+          rawValue,
+        });
       case 'publicOptBoxWidget':
         return this.normalizePublicOptionValue({
           field,
@@ -2936,6 +3642,48 @@ export class ShadowMetadataService {
           validationErrors,
         };
     }
+  }
+
+  private normalizeSwitchFieldValue(params: {
+    field: ShadowStandardizedField;
+    rawValue: unknown;
+  }): {
+    value: unknown;
+    validationErrors: string[];
+  } {
+    const { field, rawValue } = params;
+    const validationErrors: string[] = [];
+    const normalized = normalizeSwitchInput(rawValue);
+
+    const option = field.options.find((item) => {
+      const values = [
+        item.key,
+        item.title,
+        item.value,
+      ].filter((value): value is string => typeof value === 'string');
+      return values.some((value) => normalizeComparable(value) === normalized.comparable)
+        || normalized.booleanValue !== null && isSwitchOptionForBoolean(item, normalized.booleanValue);
+    });
+
+    if (option?.key !== undefined) {
+      return {
+        value: option.key,
+        validationErrors,
+      };
+    }
+
+    if (normalized.booleanValue !== null) {
+      return {
+        value: normalized.booleanValue ? '1' : '0',
+        validationErrors,
+      };
+    }
+
+    validationErrors.push(`${field.label} 的开关值未命中模板选项`);
+    return {
+      value: undefined,
+      validationErrors,
+    };
   }
 
   private async normalizeSearchFieldValue(params: {

@@ -3,6 +3,7 @@ import { ApprovalFileClient } from './approval-file-client.js';
 import { ApprovalFileService } from './approval-file-service.js';
 import { ApprovalClient } from './approval-client.js';
 import { AgentRunRepository } from './agent-run-repository.js';
+import { MainAgentRuntime } from './agent-runtime.js';
 import { AgentService } from './agent-service.js';
 import { ArtifactPresentationRepository } from './artifact-presentation-repository.js';
 import { ArtifactPresentationService } from './artifact-presentation-service.js';
@@ -10,6 +11,7 @@ import { ArtifactRepository } from './artifact-repository.js';
 import { ArtifactService } from './artifact-service.js';
 import { createAdminApiServer } from './app.js';
 import { loadAppConfig } from './config.js';
+import { createCrmAgentRuntimeParts } from './crm-agent-pack.js';
 import { openDatabase } from './database.js';
 import { DashScopeEmbeddingService } from './dashscope-embedding-service.js';
 import { DeepSeekChatClient } from './deepseek-chat-client.js';
@@ -31,7 +33,18 @@ const config = loadAppConfig();
 const database = openDatabase(config.storage.sqlitePath);
 
 const orgSyncRepository = new OrgSyncRepository(database);
-orgSyncRepository.markRunningRunsAsFailed('admin-api 重启前有同步未完成，已自动标记为失败');
+try {
+  orgSyncRepository.markRunningRunsAsFailed('admin-api 重启前有同步未完成，已自动标记为失败');
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('database is locked')) {
+    console.warn(
+      '[admin-api] sqlite database is locked while closing stale org sync runs; startup continues. Close DB Browser or other sqlite clients before running write tests.',
+    );
+  } else {
+    throw error;
+  }
+}
 
 const orgSyncService = new OrgSyncService({
   config,
@@ -81,10 +94,11 @@ const externalSkillService = new ExternalSkillService({
   config,
   enterprisePptTemplateResolver: enterprisePptTemplateService,
 });
+const embeddingService = new DashScopeEmbeddingService(config);
 const artifactService = new ArtifactService({
   config,
   repository: new ArtifactRepository(config),
-  embeddingService: new DashScopeEmbeddingService(config),
+  embeddingService,
   vectorService: new QdrantVectorService(config),
 });
 const artifactPresentationService = new ArtifactPresentationService({
@@ -93,15 +107,33 @@ const artifactPresentationService = new ArtifactPresentationService({
   artifactService,
   externalSkillService,
 });
-const agentService = new AgentService({
+const agentRunRepository = new AgentRunRepository(database);
+const agentRuntimeParts = createCrmAgentRuntimeParts({
   config,
-  repository: new AgentRunRepository(database),
+  repository: agentRunRepository,
   intentFrameService: new IntentFrameService({
     config,
     chatClient: new DeepSeekChatClient(config),
   }),
+  shadowMetadataService,
   externalSkillService,
   artifactService,
+});
+const agentRuntime = new MainAgentRuntime({
+  config,
+  registry: agentRuntimeParts.registry,
+  intentResolver: agentRuntimeParts.intentResolver,
+  planner: agentRuntimeParts.planner,
+  embeddingProvider: {
+    providerName: 'dashscope.embedding',
+    isConfigured: () => embeddingService.isConfigured(),
+    embedTexts: (texts) => embeddingService.embedTexts(texts),
+  },
+});
+const agentService = new AgentService({
+  config,
+  repository: agentRunRepository,
+  runtime: agentRuntime,
 });
 
 const server = createAdminApiServer({

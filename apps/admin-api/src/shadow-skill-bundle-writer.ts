@@ -24,7 +24,7 @@ interface WriteShadowSkillBundlesParams {
   skills: ShadowSkillContract[];
 }
 
-const SHADOW_SKILL_PHASE = '0.2.21';
+const SHADOW_SKILL_PHASE = '0.6.0';
 
 function toJsonFile(payload: unknown): string {
   return `${JSON.stringify(payload, null, 2)}\n`;
@@ -63,6 +63,46 @@ function renderClarificationRuleLines(
   return rules.map((rule) => `- 当 ${rule.when} 时：${rule.response}`);
 }
 
+function getFieldParameterKey(field: ShadowStandardizedField): string {
+  return field.writeParameterKey ?? field.semanticSlot ?? field.fieldCode;
+}
+
+function formatFieldAuditEntry(field: ShadowStandardizedField): string {
+  const parameterKey = getFieldParameterKey(field);
+  const source = field.provenance?.truthSource ?? 'unknown';
+  return `\`${parameterKey}\` -> ${field.label}(\`${field.fieldCode}\`, ${field.widgetType}, source=${source})`;
+}
+
+function renderFieldAuditLines(fields: ShadowStandardizedField[]): string[] {
+  const templateRequired = fields
+    .filter((field) => field.required && field.writePolicy === 'promptable')
+    .map(formatFieldAuditEntry);
+  const conditionalRequired = fields
+    .filter((field) => field.requiredMode === 'conditional' && field.writePolicy === 'promptable')
+    .map((field) => {
+      const ruleSummary = field.requiredRules?.map((rule) => rule.description).join('; ') || 'conditional';
+      return `${formatFieldAuditEntry(field)}; ${ruleSummary}`;
+    });
+  const derived = fields
+    .filter((field) => field.writePolicy === 'derived')
+    .map(formatFieldAuditEntry);
+  const readOnly = fields
+    .filter((field) => field.writePolicy === 'read_only')
+    .map(formatFieldAuditEntry);
+
+  return [
+    '## Field Audit',
+    '',
+    `- 模板必填（需用户补齐）: ${templateRequired.length > 0 ? templateRequired.join(', ') : '(none)'}`,
+    `- 条件必填（preview 触发校验）: ${
+      conditionalRequired.length > 0 ? conditionalRequired.join(', ') : '(none)'
+    }`,
+    `- 自动派生（preview/live 自动生成）: ${derived.length > 0 ? derived.join(', ') : '(none)'}`,
+    `- 只读不暴露（用户输入会被阻断）: ${readOnly.length > 0 ? readOnly.join(', ') : '(none)'}`,
+    '',
+  ];
+}
+
 function getSearchCoverageSummary(
   skill: ShadowSkillContract,
   fields: ShadowStandardizedField[],
@@ -77,9 +117,10 @@ function getSearchCoverageSummary(
   const excludedFieldSummaries: string[] = [];
 
   for (const field of fields) {
-    const parameterKey = field.semanticSlot ?? field.fieldCode;
+    const parameterKey = field.searchParameterKey ?? field.semanticSlot ?? field.fieldCode;
     if (field.widgetType === 'basicDataWidget') {
       const resolvedParamKey =
+        (optionalParamSet.has(parameterKey) && parameterKey) ||
         (optionalParamSet.has(field.fieldCode) && field.fieldCode) ||
         (typeof field.semanticSlot === 'string' && optionalParamSet.has(field.semanticSlot)
           ? field.semanticSlot
@@ -141,7 +182,7 @@ function getRelationFieldNotes(fields: ShadowStandardizedField[]): string[] {
   return fields
     .filter((field) => field.widgetType === 'basicDataWidget' && field.relationBinding?.formCodeId)
     .map((field) => {
-      const parameterKey = field.semanticSlot ?? field.fieldCode;
+      const parameterKey = getFieldParameterKey(field);
       const displayCol = field.relationBinding?.displayCol ?? 'unknown';
       const relationFormCodeId = field.relationBinding?.formCodeId ?? 'unknown';
 
@@ -212,6 +253,7 @@ function renderSkillMarkdown(params: {
   const relationFieldNotes = skill.operation === 'delete' ? [] : getRelationFieldNotes(fields);
   const requiredParams = skill.requiredParams.length > 0 ? skill.requiredParams.join(', ') : '(none)';
   const optionalParams = skill.optionalParams.length > 0 ? skill.optionalParams.join(', ') : '(none)';
+  const derivedParams = skill.derivedParams.length > 0 ? skill.derivedParams.join(', ') : '(none)';
   const confirmationNote =
     skill.confirmationPolicy === 'required_before_write'
       ? skill.executionBinding.phase === 'live_write_enabled'
@@ -321,6 +363,7 @@ function renderSkillMarkdown(params: {
     '',
     `- Required params: ${requiredParams}`,
     `- Optional params: ${optionalParams}`,
+    `- Derived params: ${derivedParams}`,
     `- Confirmation policy: \`${skill.confirmationPolicy}\``,
     confirmationNote ? `- ${confirmationNote}` : '',
     getFormInstIdNote ?? '',
@@ -335,6 +378,7 @@ function renderSkillMarkdown(params: {
     fieldBoundDictionaryNote ?? '',
     ignoredFieldNote ?? '',
     '',
+    ...(isWriteFieldSkill ? renderFieldAuditLines(fields) : []),
     searchCoverage ? '## Search Coverage' : null,
     searchCoverage
       ? `- Base searchable params (${searchCoverage.baseParamKeys.length}): ${formatCodeList(
@@ -449,6 +493,7 @@ export class ShadowSkillBundleWriter {
           notWhenToUse: enrichedSkill.notWhenToUse,
           requiredParams: enrichedSkill.requiredParams,
           optionalParams: enrichedSkill.optionalParams,
+          derivedParams: enrichedSkill.derivedParams,
           confirmationPolicy: enrichedSkill.confirmationPolicy,
           outputCardType: enrichedSkill.outputCardType,
           interactionStrategy: enrichedSkill.interactionStrategy,

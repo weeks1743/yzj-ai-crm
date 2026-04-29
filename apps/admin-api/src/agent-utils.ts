@@ -17,9 +17,16 @@ export function extractCompanyName(query: string): string {
     .replace(/^\/客户分析\s*/, '')
     .replace(/^\/计划\s*/, '')
     .trim();
+  const bracketCompany = normalized.match(/[【\[]([^】\]]*(?:公司|集团|有限|股份)[^】\]]*)[】\]]/)?.[1];
+  const bracketCandidate = cleanupCompanyName(bracketCompany ?? '');
+  if (bracketCandidate) {
+    return bracketCandidate;
+  }
+
   const patterns = [
     /(?:研究|分析一下|分析|公司分析|客户分析)\s*(?:这家(?:公司|客户)|这个(?:公司|客户))?\s*([^，。！？\n]+)/,
     /(?:查询|查一下)\s*([^，。！？\n]+?)(?:客户|公司|联系人|$)/,
+    /(?:给出|提供|展示|查看|打开)\s*([^，。！？\n]+?)(?:公司信息|客户信息|公司资料|客户资料|信息|资料|详情|$)/,
   ];
 
   for (const pattern of patterns) {
@@ -37,9 +44,11 @@ export function extractCompanyName(query: string): string {
 export function cleanupCompanyName(value: string): string {
   return value
     .replace(/^(?:研究|分析一下|分析|公司分析|客户分析)\s*/, '')
+    .replace(/^(?:给出|提供|展示|查看|打开|查询|查一下)\s*/, '')
     .replace(/^这家(?:公司|客户)\s*/, '')
     .replace(/^这个(?:公司|客户)\s*/, '')
     .replace(/^(公司|客户)\s*/, '')
+    .replace(/(?:公司信息|客户信息|公司资料|客户资料|信息|资料|详情)$/g, '')
     .replace(/^[：:，。！？、\s]+/g, '')
     .replace(/\s+/g, '')
     .replace(/[：:，。！？、]+$/g, '')

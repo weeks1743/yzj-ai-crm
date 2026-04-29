@@ -10,8 +10,8 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 ## Snapshot
 
 - `formCodeId`: `b1869173654e49fbac0b1fc6ad37e761`
-- `source_version`: `2026-04-24T08:59:16.425Z`
-- `schema_hash`: `b756c899b70ec303bda1afb5be00c376c22341eb62bf05be0b67d6a7c2315e39`
+- `source_version`: `2026-04-28T10:39:48.776Z`
+- `schema_hash`: `6a797384d8b4c6f40ec31bf11b2e38b081dd6a4f1e012e5b1d59a07f2229cb24`
 - `field_count`: `35`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -33,7 +33,7 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 - 向用户展示将要写入的关键字段摘要，得到明确确认后才执行 live write。
 
 ### Parameter Collection
-- 追问时使用业务标签，例如 商机关键字段，不要直接暴露 `codeId`。
+- 追问时使用业务标签，例如 linked_customer_form_inst_id (客户编号)、opportunity_name (机会名称)、sales_stage (销售阶段) 等 5 项，不要直接暴露 `codeId`。
 - 允许用户分多轮补充信息，不要一次性索要全部可选字段。
 - 用户只给自然语言描述时，先保留原意图，再补齐必填和引用信息。
 - 当用户只说“关联松井客户/挂到某联系人”这类口语化关系时，先 search 关联对象拿到精确记录，再回填。
@@ -58,8 +58,9 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 
 ## Input Rules
 
-- Required params: (none)
-- Optional params: Te_11, Te_10, linked_contact_form_inst_id, linked_customer_form_inst_id, Ta_1, Ta_0, At_0, Te_17, Te_16, Ra_6, Te_5, Ra_5, Te_1, Te_0, Ra_0, Ra_1, Te_9, Te_8, Da_0, Te_7, Te_6, owner_open_id, Nu_1, Nu_0
+- Required params: linked_customer_form_inst_id, opportunity_name, sales_stage, expected_close_date, opportunity_budget
+- Optional params: Te_11, Te_10, linked_contact_form_inst_id, Ta_1, Ta_0, At_0, Ra_6, Te_5, Te_1, Te_0, Ra_0, Ra_1, Te_9, Te_8, Te_7, Te_6, owner_open_id, Nu_0
+- Derived params: _S_TITLE
 - Confirmation policy: `required_before_write`
 - This write skill now exposes a live write API. Use preview first, then call live write only after explicit user confirmation.
 
@@ -68,6 +69,13 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 - `basicDataWidget` relation fields accept a linked `formInstId`/`id` string, a `{formInstId}`/`{id}` object, or a full relation object. Write paths resolve them into LightCloud relation objects; search exact-match paths normalize them into `[{_id_,_name_}]`, while display-text search uses the linked display field value directly.
 - Relation field `linked_contact_form_inst_id` maps to `Bd_2`; exact search uses `_S_NAME` as `_name_`, target `formCodeId` is `a3ccc61c75c34cb28a7113a311418080`.
 - Relation field `linked_customer_form_inst_id` maps to `Bd_1`; exact search uses `_S_ENCODE` as `_name_`, target `formCodeId` is `e2cfd2aef9bf4576a760aa1c6a557170`.
+
+## Field Audit
+
+- 模板必填（需用户补齐）: `linked_customer_form_inst_id` -> 客户编号(`Bd_1`, basicDataWidget, source=internal_get_form_by_code_id), `opportunity_name` -> 机会名称(`Te_16`, textWidget, source=internal_get_form_by_code_id), `sales_stage` -> 销售阶段(`Ra_5`, radioWidget, source=internal_get_form_by_code_id), `expected_close_date` -> 预计成交时间(`Da_0`, dateWidget, source=internal_get_form_by_code_id), `opportunity_budget` -> 商机预算（元）(`Nu_1`, numberWidget, source=internal_get_form_by_code_id)
+- 条件必填（preview 触发校验）: (none)
+- 自动派生（preview/live 自动生成）: `_S_TITLE` -> 标题(`_S_TITLE`, textWidget, source=internal_get_form_by_code_id)
+- 只读不暴露（用户输入会被阻断）: `_S_SERIAL` -> 商机编号(`_S_SERIAL`, serialNumWidget, source=internal_get_form_by_code_id), `_S_DATE` -> 申请日期(`_S_DATE`, dateWidget, source=internal_get_form_by_code_id), `Te_17` -> 客户名称(`Te_17`, textWidget, source=internal_get_form_by_code_id), `_S_APPLY` -> 提交人(`_S_APPLY`, personSelectWidget, source=internal_get_form_by_code_id), `De_0` -> 说明文字(`De_0`, describeWidget, source=internal_get_form_by_code_id), `De_1` -> 说明文字(`De_1`, describeWidget, source=internal_get_form_by_code_id), `De_2` -> 说明文字(`De_2`, describeWidget, source=internal_get_form_by_code_id), `De_3` -> 说明文字(`De_3`, describeWidget, source=internal_get_form_by_code_id), `De_5` -> 说明文字(`De_5`, describeWidget, source=internal_get_form_by_code_id), `De_6` -> 说明文字(`De_6`, describeWidget, source=internal_get_form_by_code_id), `_S_DEPT` -> 所属部门(`_S_DEPT`, departmentSelectWidget, source=internal_get_form_by_code_id)
 
 ## Public Option Rules
 
@@ -81,7 +89,7 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 - Internal live API: `POST /api/shadow/objects/opportunity/execute/upsert`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; live write is enabled and should only be used after explicit user confirmation.
+- This bundle is generated for phase `0.6.0`; live write is enabled and should only be used after explicit user confirmation.
 
 ## References
 

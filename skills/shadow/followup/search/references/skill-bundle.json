@@ -26,6 +26,7 @@
     "_S_DEPT",
     "_S_TITLE"
   ],
+  "derivedParams": [],
   "confirmationPolicy": "no_confirmation_required",
   "outputCardType": "followup-search-preview",
   "interactionStrategy": {
@@ -67,5 +68,5 @@
   },
   "sourceObject": "followup",
   "sourceFormCodeId": "0a618c5d806545b997f60e8461b3f504",
-  "sourceVersion": "2026-04-24T08:59:16.696Z"
+  "sourceVersion": "2026-04-28T10:37:10.888Z"
 }

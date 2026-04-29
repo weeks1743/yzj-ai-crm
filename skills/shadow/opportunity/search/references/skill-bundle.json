@@ -16,7 +16,7 @@
     "Ta_1",
     "Ta_0",
     "Te_17",
-    "Te_16",
+    "opportunity_name",
     "_S_TITLE",
     "Ra_6",
     "Te_5",
@@ -36,6 +36,7 @@
     "_S_DEPT",
     "Nu_0"
   ],
+  "derivedParams": [],
   "confirmationPolicy": "no_confirmation_required",
   "outputCardType": "opportunity-search-preview",
   "interactionStrategy": {
@@ -77,5 +78,5 @@
   },
   "sourceObject": "opportunity",
   "sourceFormCodeId": "b1869173654e49fbac0b1fc6ad37e761",
-  "sourceVersion": "2026-04-24T08:59:16.425Z"
+  "sourceVersion": "2026-04-28T10:39:48.776Z"
 }

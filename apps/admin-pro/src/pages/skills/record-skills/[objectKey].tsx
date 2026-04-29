@@ -91,6 +91,35 @@ function getExecutionPhaseColor(phase: ShadowSkillView['executionBinding']['phas
   return 'default';
 }
 
+function renderRequiredState(record: ShadowStandardizedFieldView) {
+  if (record.required) {
+    return <Tag color="error">是</Tag>;
+  }
+
+  if (record.requiredMode === 'conditional') {
+    const tooltip = record.requiredRules?.map((rule) => rule.description).join('\n');
+    return (
+      <Text title={tooltip}>
+        <Tag color="warning">条件必填</Tag>
+      </Text>
+    );
+  }
+
+  return '否';
+}
+
+function renderWritePolicy(record: ShadowStandardizedFieldView) {
+  if (record.writePolicy === 'derived') {
+    return <Tag color="gold">自动派生</Tag>;
+  }
+
+  if (record.writePolicy === 'promptable') {
+    return <Tag color="processing">可追问</Tag>;
+  }
+
+  return <Tag>只读不暴露</Tag>;
+}
+
 const fieldColumns: ProColumns<ShadowStandardizedFieldView>[] = [
   { title: 'fieldCode', dataIndex: 'fieldCode', width: 180, copyable: true },
   { title: '字段名', dataIndex: 'label', width: 180 },
@@ -98,14 +127,38 @@ const fieldColumns: ProColumns<ShadowStandardizedFieldView>[] = [
   {
     title: '必填',
     dataIndex: 'required',
-    width: 80,
-    render: (_, record) => (record.required ? <Tag color="error">是</Tag> : '否'),
+    width: 100,
+    render: (_, record) => renderRequiredState(record),
   },
   {
     title: '只读',
     dataIndex: 'readOnly',
     width: 80,
     render: (_, record) => (record.readOnly ? <Tag>是</Tag> : '否'),
+  },
+  {
+    title: '写入策略',
+    dataIndex: 'writePolicy',
+    width: 120,
+    render: (_, record) => renderWritePolicy(record),
+  },
+  {
+    title: 'writeParam',
+    dataIndex: 'writeParameterKey',
+    width: 160,
+    render: (_, record) => record.writeParameterKey ?? '-',
+  },
+  {
+    title: 'searchParam',
+    dataIndex: 'searchParameterKey',
+    width: 160,
+    render: (_, record) => record.searchParameterKey ?? '-',
+  },
+  {
+    title: '模板编辑',
+    dataIndex: 'edit',
+    width: 90,
+    render: (_, record) => (record.edit ? <Tag color="success">可编辑</Tag> : '否'),
   },
   {
     title: '多值',
@@ -118,6 +171,12 @@ const fieldColumns: ProColumns<ShadowStandardizedFieldView>[] = [
     dataIndex: 'semanticSlot',
     width: 180,
     render: (_, record) => record.semanticSlot ?? '-',
+  },
+  {
+    title: '系统字段',
+    dataIndex: 'isSystemField',
+    width: 100,
+    render: (_, record) => (record.isSystemField ? <Tag color="purple">是</Tag> : '否'),
   },
   {
     title: 'referId',
@@ -416,6 +475,7 @@ const RecordSkillDetailPage = () => {
                         <Space wrap>
                           <Tag color="error">必填 {skill.requiredParams.length}</Tag>
                           <Tag color="blue">可选 {skill.optionalParams.length}</Tag>
+                          <Tag color="gold">派生 {skill.derivedParams.length}</Tag>
                           <Tag>{skill.confirmationPolicy}</Tag>
                         </Space>
                         <div>
@@ -533,6 +593,9 @@ const RecordSkillDetailPage = () => {
               </ProDescriptions.Item>
               <ProDescriptions.Item label="optionalParams">
                 {renderTagList(selectedSkill.optionalParams, 'blue')}
+              </ProDescriptions.Item>
+              <ProDescriptions.Item label="derivedParams">
+                {renderTagList(selectedSkill.derivedParams, 'gold')}
               </ProDescriptions.Item>
               <ProDescriptions.Item label="previewApi">
                 <Space direction="vertical" size={4}>

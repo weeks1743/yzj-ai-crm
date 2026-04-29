@@ -10,8 +10,8 @@ Use this bundle only for the `contact` object. It is generated from the current 
 ## Snapshot
 
 - `formCodeId`: `a3ccc61c75c34cb28a7113a311418080`
-- `source_version`: `2026-04-24T08:59:16.078Z`
-- `schema_hash`: `7c459d4595458c31a6fe4dde23fa1ceb35d42e579beacf26a69be9260fc9985e`
+- `source_version`: `2026-04-28T10:37:10.165Z`
+- `schema_hash`: `100ee87c8e418ef11dcbdcada90a58602395208aec86b1374dfacf772cd3110a`
 - `field_count`: `29`
 - `resolved_public_option_fields`: `3`
 - `pending_public_option_fields`: `0`
@@ -60,7 +60,8 @@ Use this bundle only for the `contact` object. It is generated from the current 
 ## Input Rules
 
 - Required params: form_inst_id
-- Optional params: linked_customer_form_inst_id, Ta_1, Ta_0, At_0, _S_ENCODE, _S_TITLE, Te_5, Te_4, Te_3, phone, Te_1, Ra_0, Ra_1, _S_NAME, Da_0, district, province, city
+- Optional params: linked_customer_form_inst_id, _S_ORDER, Ta_1, Ta_0, At_0, Te_5, Te_4, Te_3, office_phone, Te_1, Ra_0, Ra_1, contact_name, Da_0, enabled_state, district, _S_DEPT, mobile_phone, province, city
+- Derived params: _S_TITLE
 - Confirmation policy: `required_before_write`
 - This write skill now exposes a live write API. Use preview first, then call live write only after explicit user confirmation.
 
@@ -70,6 +71,13 @@ Use this bundle only for the `contact` object. It is generated from the current 
 - Relation field `linked_customer_form_inst_id` maps to `Bd_0`; exact search uses `_S_NAME` as `_name_`, target `formCodeId` is `e2cfd2aef9bf4576a760aa1c6a557170`.
 
 - `province`, `city`, and `district` are backed by field-bound workbook dictionaries. Template `linkCodeId` metadata is preserved in references, but the current runtime still does not perform real province-city-district cascade filtering. Title-only mapping is allowed only when the title is unique; for repeated labels such as `城区`, pass a full `{title,dicId}` object.
+
+## Field Audit
+
+- 模板必填（需用户补齐）: `contact_name` -> 联系人姓名(`_S_NAME`, textWidget, source=internal_get_form_by_code_id), `enabled_state` -> 启用状态(`_S_DISABLE`, switchWidget, source=internal_get_form_by_code_id), `mobile_phone` -> 手机(`Nu_0`, numberWidget, source=internal_get_form_by_code_id)
+- 条件必填（preview 触发校验）: (none)
+- 自动派生（preview/live 自动生成）: `_S_TITLE` -> 标题(`_S_TITLE`, textWidget, source=internal_get_form_by_code_id)
+- 只读不暴露（用户输入会被阻断）: `_S_SERIAL` -> 联系人编号(`_S_SERIAL`, serialNumWidget, source=internal_get_form_by_code_id), `_S_DATE` -> 申请日期(`_S_DATE`, dateWidget, source=internal_get_form_by_code_id), `_S_ENCODE` -> 编码(`_S_ENCODE`, textWidget, source=internal_get_form_by_code_id), `_S_APPLY` -> 提交人(`_S_APPLY`, personSelectWidget, source=internal_get_form_by_code_id), `De_0` -> 说明文字(`De_0`, describeWidget, source=internal_get_form_by_code_id), `De_1` -> 说明文字(`De_1`, describeWidget, source=internal_get_form_by_code_id), `De_2` -> 说明文字(`De_2`, describeWidget, source=internal_get_form_by_code_id), `De_3` -> 说明文字(`De_3`, describeWidget, source=internal_get_form_by_code_id)
 
 ## Public Option Rules
 
@@ -83,7 +91,7 @@ Use this bundle only for the `contact` object. It is generated from the current 
 - Internal live API: `POST /api/shadow/objects/contact/execute/upsert`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/batchSave?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; live write is enabled and should only be used after explicit user confirmation.
+- This bundle is generated for phase `0.6.0`; live write is enabled and should only be used after explicit user confirmation.
 
 ## References
 

@@ -9,7 +9,7 @@
 - 为什么不再把 `scene.*` 作为运行时技能类型
 - `/计划`、普通 slash 技能入口和自然语言入口如何协同
 
-## 0.4.6 核心链路
+## 0.5.0 核心链路
 
 用户意图统一落到：
 
@@ -18,6 +18,22 @@ UserInput -> IntentFrame -> TaskPlan -> Tool Selection -> ExecutionState
 ```
 
 这条链路不绑定 CRM。CRM 只提供一组业务对象、工具和样例话术。
+
+0.5.1 起，链路在 IntentFrame 后增加业务无关的上下文承接：
+
+```text
+UserInput -> IntentFrame -> ContextFrame / ReferenceResolver -> TaskPlan -> Tool Selection -> ExecutionState
+```
+
+`ContextFrame` 只描述当前会话主体，不承载 CRM 字段：`subject.kind`、`subject.type`、`subject.name`、`sourceRunId`、`evidenceRefs`。当用户说“这个”“该客户”“上面这个”时，`ReferenceResolver` 可用最近 run、IntentFrame 和 Evidence Card 补齐目标名称，并通过 `agentTrace.resolvedContext` 解释解析来源。
+
+0.5.0 起，主 Agent 按业务无关分层落地：
+
+- `agent-core`：只定义 `IntentFrame`、`TaskPlan`、`ExecutionState`、`ToolDefinition`、`PolicyDecision`、`ConfirmationRequest`、`EvidenceRef` 等通用契约，不出现客户、联系人、商机、跟进记录等业务类型。
+- `agent-runtime`：基于 LangGraph / LangChain JS 编排状态图，负责解析意图、生成计划、选择工具、执行工具、策略守卫、挂起、确认、恢复和审计。
+- `tool-registry`：只认识 `record / external / meta / artifact` 四类工具，通过 schema、riskLevel、confirmationPolicy、provider、displayCardType 暴露能力。
+- `crm-agent-pack`：CRM 业务适配层，把轻云客户、联系人、商机、跟进记录注册为 record 工具，把公司研究注册为 external 工具，把 Artifact 检索注册为 artifact 工具。
+- `apps/admin-api`：组合入口层，只负责注入 config、SQLite、ShadowMetadataService、ExternalSkillService、ArtifactService 和 Agent Runtime，不承载 Agent 决策逻辑。
 
 ### IntentFrame
 
@@ -50,6 +66,7 @@ UserInput -> IntentFrame -> TaskPlan -> Tool Selection -> ExecutionState
 - `record`：结构化记录对象工具
 - `external`：外部研究、分析、生成、导出工具
 - `meta`：澄清、候选选择、计划生成、确认写回工具
+- `artifact`：检索和消费已有非结构化证据资产
 
 不再选择 `scene.*`。
 
@@ -60,8 +77,9 @@ UserInput -> IntentFrame -> TaskPlan -> Tool Selection -> ExecutionState
 ```text
 UserInput
   -> IntentFrame(analyze / query)
-  -> TaskPlan
-  -> ext.company_research
+  -> TaskPlan(tool_execution)
+  -> external.company_research
+  -> ext.company_research_pm
   -> Markdown Artifact
   -> MongoDB
   -> text-embedding-v4
@@ -80,6 +98,8 @@ UserInput
 - Vector Service 写入 Qdrant `yzj_artifact_chunks`。
 - 对话侧展示证据卡，而不是只返回一次性文本。
 
+如果公司研究外部 Skill 失败，主 Agent 返回真实失败状态和原因，不生成降级 Artifact，也不返回伪造 Evidence Card。
+
 当用户后续问“这个客户最近有什么值得关注”：
 
 - Main Agent 识别为 `query artifact`。
@@ -96,6 +116,8 @@ UserInput
 - `sceneKey`
 - `attachments`
 - `tenantContext`
+  - `operatorOpenId?: string`
+- `resume?: { runId, action: 'confirm_writeback', decision: 'approve' | 'reject', confirmationId? }`
 
 返回：
 
@@ -106,6 +128,10 @@ UserInput
 - `ExecutionState`
 - tool calls
 - evidence cards
+- `agentTrace.pendingConfirmation`
+- `agentTrace.selectedTool`
+- `agentTrace.policyDecisions`
+- `agentTrace.resolvedContext`
 
 ### Agent Run Store
 
@@ -114,8 +140,13 @@ UserInput
 - `agent_runs`
 - `agent_messages`
 - `agent_tool_calls`
+- `agent_confirmations`
 
 这些数据服务于运行观测，不替代 MongoDB Artifact 主存，也不替代记录系统主数据。
+
+写回记录系统时，运行时必须先调用 `record.<object>.preview_create` 或 `record.<object>.preview_update`，生成 `pendingConfirmation` 后进入 `waiting_confirmation`。用户 approve 后使用同一个 `runId` resume，恢复 LangGraph checkpoint 并调用 `record.<object>.commit_create/update`；用户 reject 后标记 cancelled，不写轻云。
+
+对配置了 `duplicateCheckPolicy` 的 record create，运行时必须先调用对应 search 工具做写前查重。0 条命中才继续 preview；存在候选记录时进入 `waiting_selection`，引用 `meta.candidate_selection`，不创建重复记录。
 
 ### ExecutionState
 
@@ -218,6 +249,7 @@ v1 固定保留：
 如 `/客户分析`、`/问题陈述`、`/方案匹配`。
 
 它们是用户体验入口和 Plan 模板提示，不是运行时 `scene.*` 技能。
+CRM 场景只能作为 slash 入口、计划模板、测试样例和业务工具包存在，不能回流成主 Agent 的核心分支。
 
 ## MVP 对录音的处理
 

@@ -123,6 +123,7 @@ export function openDatabase(databasePath: string): DatabaseSync {
 
   const database = new DatabaseSync(databasePath);
   database.exec(`
+    PRAGMA busy_timeout = 5000;
     PRAGMA journal_mode = WAL;
 
     CREATE TABLE IF NOT EXISTS org_sync_runs (
@@ -214,6 +215,7 @@ export function openDatabase(databasePath: string): DatabaseSync {
       scene_key TEXT NOT NULL,
       user_input TEXT NOT NULL,
       intent_frame_json TEXT NOT NULL,
+      context_subject_json TEXT,
       task_plan_json TEXT NOT NULL,
       execution_state_json TEXT NOT NULL,
       evidence_refs_json TEXT NOT NULL,
@@ -245,11 +247,27 @@ export function openDatabase(databasePath: string): DatabaseSync {
       error_message TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS agent_confirmations (
+      confirmation_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      tool_code TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      preview_json TEXT NOT NULL,
+      request_input_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      decided_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_agent_runs_conversation_recent
     ON agent_runs(conversation_key, created_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_agent_tool_calls_run
     ON agent_tool_calls(run_id, started_at ASC);
+
+    CREATE INDEX IF NOT EXISTS idx_agent_confirmations_run_status
+    ON agent_confirmations(run_id, status, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS artifact_ppt_generations (
       generation_id TEXT PRIMARY KEY,
@@ -269,6 +287,7 @@ export function openDatabase(databasePath: string): DatabaseSync {
     ON artifact_ppt_generations(artifact_id, updated_at DESC);
   `);
   migrateSnapshotDictionaryBindings(database);
+  ensureColumn(database, 'agent_runs', 'context_subject_json', 'TEXT');
 
   return database;
 }

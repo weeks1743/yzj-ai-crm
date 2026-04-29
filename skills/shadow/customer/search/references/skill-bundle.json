@@ -41,7 +41,7 @@
     "Ra_4",
     "Ra_5",
     "customer_type",
-    "Ra_0",
+    "customer_status",
     "Ra_1",
     "customer_name",
     "industry",
@@ -49,6 +49,7 @@
     "Nu_1",
     "Nu_0"
   ],
+  "derivedParams": [],
   "confirmationPolicy": "no_confirmation_required",
   "outputCardType": "customer-search-preview",
   "interactionStrategy": {
@@ -91,5 +92,5 @@
   },
   "sourceObject": "customer",
   "sourceFormCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
-  "sourceVersion": "2026-04-24T08:38:15.214Z"
+  "sourceVersion": "2026-04-28T10:37:09.782Z"
 }

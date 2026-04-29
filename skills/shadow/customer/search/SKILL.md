@@ -10,8 +10,8 @@ Use this bundle only for the `customer` object. It is generated from the current
 ## Snapshot
 
 - `formCodeId`: `e2cfd2aef9bf4576a760aa1c6a557170`
-- `source_version`: `2026-04-24T08:38:15.214Z`
-- `schema_hash`: `2b3dbf9bf600e5e3f832c77ac7df6333131255a3634c235b7e8349b5be991027`
+- `source_version`: `2026-04-28T10:37:09.782Z`
+- `schema_hash`: `43a0770956662ca117bb070bb02d0f5eb26a8557f90b0c55f4be149e29024414`
 - `field_count`: `49`
 - `resolved_public_option_fields`: `3`
 - `pending_public_option_fields`: `0`
@@ -56,7 +56,8 @@ Use this bundle only for the `customer` object. It is generated from the current
 ## Input Rules
 
 - Required params: (none)
-- Optional params: linked_contact_form_inst_id, _S_ENCODE, _S_TITLE, Te_5, Te_4, Te_3, Ta_4, Ta_3, Ta_2, _S_APPLY, Te_8, last_followup_date, Te_7, Da_1, Te_6, Da_2, owner_open_id, service_rep_open_id, _S_DISABLE, district, _S_DEPT, province, Ra_10, city, _S_ORDER, _S_SERIAL, _S_DATE, Ta_1, Ta_0, Ra_6, Ra_7, Ra_4, Ra_5, customer_type, Ra_0, Ra_1, customer_name, industry, Ra_9, Nu_1, Nu_0
+- Optional params: linked_contact_form_inst_id, _S_ENCODE, _S_TITLE, Te_5, Te_4, Te_3, Ta_4, Ta_3, Ta_2, _S_APPLY, Te_8, last_followup_date, Te_7, Da_1, Te_6, Da_2, owner_open_id, service_rep_open_id, _S_DISABLE, district, _S_DEPT, province, Ra_10, city, _S_ORDER, _S_SERIAL, _S_DATE, Ta_1, Ta_0, Ra_6, Ra_7, Ra_4, Ra_5, customer_type, customer_status, Ra_1, customer_name, industry, Ra_9, Nu_1, Nu_0
+- Derived params: (none)
 - Confirmation policy: `no_confirmation_required`
 - This is a read / preview skill and does not require write confirmation.
 
@@ -67,7 +68,7 @@ Use this bundle only for the `customer` object. It is generated from the current
 - `province`, `city`, and `district` are backed by field-bound workbook dictionaries. Template `linkCodeId` metadata is preserved in references, but the current runtime still does not perform real province-city-district cascade filtering. Title-only mapping is allowed only when the title is unique; for repeated labels such as `城区`, pass a full `{title,dicId}` object.
 
 ## Search Coverage
-- Base searchable params (40): `_S_ENCODE`, `_S_TITLE`, `Te_5`, `Te_4`, `Te_3`, `Ta_4`, `Ta_3`, `Ta_2`, `_S_APPLY`, `Te_8`, `last_followup_date`, `Te_7`, `Da_1`, `Te_6`, `Da_2`, `owner_open_id`, `service_rep_open_id`, `_S_DISABLE`, `district`, `_S_DEPT`, `province`, `Ra_10`, `city`, `_S_ORDER`, `_S_SERIAL`, `_S_DATE`, `Ta_1`, `Ta_0`, `Ra_6`, `Ra_7`, `Ra_4`, `Ra_5`, `customer_type`, `Ra_0`, `Ra_1`, `customer_name`, `industry`, `Ra_9`, `Nu_1`, `Nu_0`
+- Base searchable params (40): `_S_ENCODE`, `_S_TITLE`, `Te_5`, `Te_4`, `Te_3`, `Ta_4`, `Ta_3`, `Ta_2`, `_S_APPLY`, `Te_8`, `last_followup_date`, `Te_7`, `Da_1`, `Te_6`, `Da_2`, `owner_open_id`, `service_rep_open_id`, `_S_DISABLE`, `district`, `_S_DEPT`, `province`, `Ra_10`, `city`, `_S_ORDER`, `_S_SERIAL`, `_S_DATE`, `Ta_1`, `Ta_0`, `Ra_6`, `Ra_7`, `Ra_4`, `Ra_5`, `customer_type`, `customer_status`, `Ra_1`, `customer_name`, `industry`, `Ra_9`, `Nu_1`, `Nu_0`
 - Relation searchable params (1): `linked_contact_form_inst_id -> Bd_1 (displayCol: _S_SERIAL, formCodeId: a3ccc61c75c34cb28a7113a311418080)`
 - Not auto-generated for search: `说明文字(De_0, describeWidget)`, `说明文字(De_1, describeWidget)`, `说明文字(De_2, describeWidget)`, `说明文字(De_3, describeWidget)`, `说明文字(De_4, describeWidget)`, `说明文字(De_5, describeWidget)`, `说明文字(De_6, describeWidget)`, `附件(At_0, attachmentWidget)`
 
@@ -83,7 +84,7 @@ Use this bundle only for the `customer` object. It is generated from the current
 - Internal live API: `POST /api/shadow/objects/customer/execute/search`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.6.0`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

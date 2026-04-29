@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AgentRunRepository } from '../src/agent-run-repository.js';
+import { MainAgentRuntime } from '../src/agent-runtime.js';
 import { AgentService } from '../src/agent-service.js';
 import { inferFallbackIntent } from '../src/agent-utils.js';
+import { createCrmAgentRuntimeParts } from '../src/crm-agent-pack.js';
 import { IntentFrameService } from '../src/intent-frame-service.js';
 import { createInMemoryDatabase, createTestConfig } from './test-helpers.js';
-import type { IntentFrame } from '../src/contracts.js';
+import type { AppConfig, IntentFrame } from '../src/contracts.js';
 
 function companyIntent(companyName: string, source: IntentFrame['source'] = 'llm'): IntentFrame {
   return {
@@ -19,6 +21,63 @@ function companyIntent(companyName: string, source: IntentFrame['source'] = 'llm
     confidence: 0.9,
     source,
   };
+}
+
+function createAgentTestService(input: {
+  config?: AppConfig;
+  repository: AgentRunRepository;
+  intentFrameService: Pick<IntentFrameService, 'createIntentFrame'>;
+  externalSkillService?: unknown;
+  artifactService?: unknown;
+  shadowMetadataService?: unknown;
+  companyResearchMaxWaitMs?: number;
+}) {
+  const config = input.config ?? createTestConfig();
+  const runtimeParts = createCrmAgentRuntimeParts({
+    config,
+    repository: input.repository,
+    intentFrameService: input.intentFrameService as IntentFrameService,
+    shadowMetadataService: (input.shadowMetadataService ?? {
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => ({
+        readyToSend: false,
+        missingRequiredParams: [],
+        missingRuntimeInputs: ['operatorOpenId'],
+        validationErrors: [],
+      }),
+      executeUpsert: async () => ({ formInstIds: [] }),
+    }) as any,
+    externalSkillService: (input.externalSkillService ?? {
+      createSkillJob: async () => {
+        throw new Error('external skill service not stubbed');
+      },
+      getSkillJob: async () => {
+        throw new Error('external skill service not stubbed');
+      },
+      getSkillJobArtifact: async () => {
+        throw new Error('external skill service not stubbed');
+      },
+    }) as any,
+    artifactService: (input.artifactService ?? {
+      createCompanyResearchArtifact: async () => {
+        throw new Error('artifact service not stubbed');
+      },
+      search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
+    }) as any,
+    companyResearchMaxWaitMs: input.companyResearchMaxWaitMs,
+  });
+
+  return new AgentService({
+    config,
+    repository: input.repository,
+    runtime: new MainAgentRuntime({
+      config,
+      registry: runtimeParts.registry,
+      intentResolver: runtimeParts.intentResolver,
+      planner: runtimeParts.planner,
+    }),
+  });
 }
 
 test('IntentFrameService parses DeepSeek JSON into normalized IntentFrame', async () => {
@@ -178,7 +237,7 @@ test('AgentService runs company research, persists run, and returns evidence car
   const config = createTestConfig();
   const database = createInMemoryDatabase();
   const repository = new AgentRunRepository(database);
-  const service = new AgentService({
+  const service = createAgentTestService({
     config,
     repository,
     intentFrameService: {
@@ -262,7 +321,8 @@ test('AgentService runs company research, persists run, and returns evidence car
   });
 
   assert.equal(response.success, true);
-  assert.equal(response.taskPlan.kind, 'company_research');
+  assert.equal(response.taskPlan.kind, 'tool_execution');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'external.company_research');
   assert.equal(response.executionState.status, 'completed');
   assert.equal(response.message.extraInfo.evidence?.[0]?.artifactId, 'artifact-001');
 
@@ -290,7 +350,7 @@ test('AgentService keeps long-running company research as running instead of too
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   } as const;
-  const service = new AgentService({
+  const service = createAgentTestService({
     config,
     repository,
     companyResearchMaxWaitMs: 0,
@@ -321,7 +381,7 @@ test('AgentService keeps long-running company research as running instead of too
 
   assert.equal(response.success, true);
   assert.equal(response.executionState.status, 'running');
-  assert.equal(response.executionState.currentStepKey, 'run-company-research');
+  assert.equal(response.executionState.currentStepKey, 'execute-tool');
   assert.match(response.message.content, /公司研究仍在运行/);
   assert.match(response.message.content, /job-running-001/);
   assert.equal(response.toolCalls.length, 1);
@@ -335,12 +395,12 @@ test('AgentService keeps long-running company research as running instead of too
   assert.equal(toolCalls[0]?.finished_at, null);
 });
 
-test('AgentService degrades to artifact persistence when company research skill dependencies are missing', async () => {
+test('AgentService surfaces company research dependency failure without degraded artifact', async () => {
   const config = createTestConfig();
   const database = createInMemoryDatabase();
   const repository = new AgentRunRepository(database);
-  let savedMarkdown = '';
-  const service = new AgentService({
+  let artifactCreated = false;
+  const service = createAgentTestService({
     config,
     repository,
     intentFrameService: {
@@ -358,22 +418,9 @@ test('AgentService degrades to artifact persistence when company research skill 
       },
     } as any,
     artifactService: {
-      createCompanyResearchArtifact: async (input: any) => {
-        savedMarkdown = input.markdown;
-        return {
-          artifact: {
-            artifactId: 'artifact-fallback-001',
-            versionId: 'version-fallback-001',
-            version: 1,
-            title: input.title,
-            sourceToolCode: input.sourceToolCode,
-            vectorStatus: 'pending_config',
-            anchors: input.anchors,
-            chunkCount: 1,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          },
-        };
+      createCompanyResearchArtifact: async () => {
+        artifactCreated = true;
+        throw new Error('should not persist degraded company research artifact');
       },
       search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
     } as any,
@@ -386,14 +433,17 @@ test('AgentService degrades to artifact persistence when company research skill 
   });
 
   assert.equal(response.success, true);
-  assert.equal(response.executionState.status, 'completed');
-  assert.match(response.message.content, /已生成降级 Artifact/);
-  assert.match(response.message.content, /DEEPSEEK_API_KEY/);
-  assert.match(savedMarkdown, /上海松井机械有限公司 公司研究（MVP降级）/);
-  assert.equal(response.message.extraInfo.evidence?.[0]?.artifactId, 'artifact-fallback-001');
+  assert.equal(response.executionState.status, 'tool_unavailable');
+  assert.match(response.message.content, /公司研究 Skill 执行失败/);
+  assert.match(response.message.content, /未生成降级 Artifact/);
+  assert.match(response.message.content, /skill 依赖未满足/);
+  assert.equal(response.message.extraInfo.evidence?.length, 0);
+  assert.equal(artifactCreated, false);
   assert.equal(response.toolCalls[0]?.status, 'failed');
-  assert.equal(response.toolCalls[1]?.status, 'succeeded');
+  assert.equal(response.message.extraInfo.agentTrace.policyDecisions.some((item) => (
+    item.policyCode === 'external.company_research.no_degraded_artifact'
+  )), true);
 
   const toolCalls = database.prepare('SELECT * FROM agent_tool_calls ORDER BY started_at').all();
-  assert.equal(toolCalls.length, 2);
+  assert.equal(toolCalls.length, 1);
 });

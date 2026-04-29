@@ -2,9 +2,9 @@
   "objectKey": "opportunity",
   "objectLabel": "商机",
   "formCodeId": "b1869173654e49fbac0b1fc6ad37e761",
-  "formDefId": null,
-  "sourceVersion": "2026-04-24T08:59:16.425Z",
-  "schemaHash": "b756c899b70ec303bda1afb5be00c376c22341eb62bf05be0b67d6a7c2315e39",
+  "formDefId": "69e891940b98dd0001446f6b",
+  "sourceVersion": "2026-04-28T10:39:48.776Z",
+  "schemaHash": "6a797384d8b4c6f40ec31bf11b2e38b081dd6a4f1e012e5b1d59a07f2229cb24",
   "fieldCount": 35,
   "normalizedFields": [
     {
@@ -12,25 +12,71 @@
       "label": "关键决定因素有哪些（what）",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_11",
+      "searchParameterKey": "Te_11"
     },
     {
       "fieldCode": "Te_10",
       "label": "关键决策人是谁（who）",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_10",
+      "searchParameterKey": "Te_10"
     },
     {
       "fieldCode": "Bd_2",
       "label": "联系人姓名",
       "widgetType": "basicDataWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
       "options": [],
       "semanticSlot": "linked_contact_form_inst_id",
@@ -39,14 +85,36 @@
         "formCodeId": "a3ccc61c75c34cb28a7113a311418080",
         "modelName": "联系人",
         "displayCol": "_S_NAME"
-      }
+      },
+      "writeParameterKey": "linked_contact_form_inst_id",
+      "searchParameterKey": "linked_contact_form_inst_id"
     },
     {
       "fieldCode": "Bd_1",
       "label": "客户编号",
       "widgetType": "basicDataWidget",
-      "required": false,
+      "required": true,
+      "requiredMode": "required",
+      "requiredRules": [
+        {
+          "kind": "static",
+          "description": "客户编号 为模板静态必填"
+        }
+      ],
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
       "options": [],
       "semanticSlot": "linked_customer_form_inst_id",
@@ -55,86 +123,242 @@
         "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
         "modelName": "客户",
         "displayCol": "_S_ENCODE"
-      }
+      },
+      "writeParameterKey": "linked_customer_form_inst_id",
+      "searchParameterKey": "linked_customer_form_inst_id"
     },
     {
       "fieldCode": "_S_SERIAL",
       "label": "商机编号",
       "widgetType": "serialNumWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": true,
+      "view": true,
+      "systemDefault": "1",
+      "placeholder": "系统自动生成",
+      "writePolicy": "read_only",
+      "isSystemField": true,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "_S_SERIAL",
+      "searchParameterKey": "_S_SERIAL"
     },
     {
       "fieldCode": "_S_DATE",
       "label": "申请日期",
       "widgetType": "dateWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": true,
+      "view": true,
+      "systemDefault": "1",
+      "writePolicy": "read_only",
+      "isSystemField": true,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "_S_DATE",
+      "searchParameterKey": "_S_DATE"
     },
     {
       "fieldCode": "Ta_1",
       "label": "项目简介",
       "widgetType": "textAreaWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Ta_1",
+      "searchParameterKey": "Ta_1"
     },
     {
       "fieldCode": "Ta_0",
       "label": "备注",
       "widgetType": "textAreaWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Ta_0",
+      "searchParameterKey": "Ta_0"
     },
     {
       "fieldCode": "At_0",
       "label": "附件",
       "widgetType": "attachmentWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "At_0",
+      "searchParameterKey": "At_0"
     },
     {
       "fieldCode": "Te_17",
       "label": "客户名称",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": false,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "read_only",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_17",
+      "searchParameterKey": "Te_17"
     },
     {
       "fieldCode": "Te_16",
       "label": "机会名称",
       "widgetType": "textWidget",
-      "required": false,
+      "required": true,
+      "requiredMode": "required",
+      "requiredRules": [
+        {
+          "kind": "static",
+          "description": "机会名称 为模板静态必填"
+        }
+      ],
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "semanticSlot": "opportunity_name",
+      "writeParameterKey": "opportunity_name",
+      "searchParameterKey": "opportunity_name"
     },
     {
       "fieldCode": "_S_TITLE",
       "label": "标题",
       "widgetType": "textWidget",
-      "required": false,
-      "readOnly": true,
+      "required": true,
+      "requiredMode": "required",
+      "requiredRules": [
+        {
+          "kind": "static",
+          "description": "标题 为模板静态必填"
+        }
+      ],
+      "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "1",
+      "placeholder": "请输入",
+      "writePolicy": "derived",
+      "isSystemField": true,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "_S_TITLE",
+      "searchParameterKey": "_S_TITLE"
     },
     {
       "fieldCode": "Ra_6",
       "label": "可能性（%）",
       "widgetType": "radioWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
       "options": [
         {
@@ -187,23 +411,61 @@
           "key": "D5Q4nm5f",
           "value": "100"
         }
-      ]
+      ],
+      "writeParameterKey": "Ra_6",
+      "searchParameterKey": "Ra_6"
     },
     {
       "fieldCode": "Te_5",
       "label": "竞争对手提供的方案（what）",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_5",
+      "searchParameterKey": "Te_5"
     },
     {
       "fieldCode": "Ra_5",
       "label": "销售阶段",
       "widgetType": "radioWidget",
-      "required": false,
+      "required": true,
+      "requiredMode": "required",
+      "requiredRules": [
+        {
+          "kind": "static",
+          "description": "销售阶段 为模板静态必填"
+        }
+      ],
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
       "options": [
         {
@@ -236,32 +498,80 @@
           "key": "v4uYZML7",
           "value": "失败结案"
         }
-      ]
+      ],
+      "writeParameterKey": "sales_stage",
+      "searchParameterKey": "Ra_5"
     },
     {
       "fieldCode": "Te_1",
       "label": "项目所在地",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_1",
+      "searchParameterKey": "Te_1"
     },
     {
       "fieldCode": "Te_0",
       "label": "竞争对手",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_0",
+      "searchParameterKey": "Te_0"
     },
     {
       "fieldCode": "Ra_0",
       "label": "商机类型",
       "widgetType": "radioWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
       "options": [
         {
@@ -279,14 +589,30 @@
           "key": "IiJjKkLl",
           "value": "特殊商机"
         }
-      ]
+      ],
+      "writeParameterKey": "Ra_0",
+      "searchParameterKey": "Ra_0"
     },
     {
       "fieldCode": "Ra_1",
       "label": "商机来源",
       "widgetType": "radioWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
       "options": [
         {
@@ -319,152 +645,414 @@
           "key": "D4kTEe0D",
           "value": "其他"
         }
-      ]
+      ],
+      "writeParameterKey": "Ra_1",
+      "searchParameterKey": "Ra_1"
     },
     {
       "fieldCode": "_S_APPLY",
       "label": "提交人",
       "widgetType": "personSelectWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": true,
+      "view": true,
+      "systemDefault": "1",
+      "writePolicy": "read_only",
+      "isSystemField": true,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "_S_APPLY",
+      "searchParameterKey": "_S_APPLY"
     },
     {
       "fieldCode": "Te_9",
       "label": "资金预算是多少（plan）",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_9",
+      "searchParameterKey": "Te_9"
     },
     {
       "fieldCode": "Te_8",
       "label": "决策流程是怎样的（what）",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_8",
+      "searchParameterKey": "Te_8"
     },
     {
       "fieldCode": "Da_0",
       "label": "预计成交时间",
       "widgetType": "dateWidget",
-      "required": false,
+      "required": true,
+      "requiredMode": "required",
+      "requiredRules": [
+        {
+          "kind": "static",
+          "description": "预计成交时间 为模板静态必填"
+        }
+      ],
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "expected_close_date",
+      "searchParameterKey": "Da_0"
     },
     {
       "fieldCode": "Te_7",
       "label": "客户需求或痛点（why）",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_7",
+      "searchParameterKey": "Te_7"
     },
     {
       "fieldCode": "Te_6",
       "label": "是否已经立项（plan）",
       "widgetType": "textWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Te_6",
+      "searchParameterKey": "Te_6"
     },
     {
       "fieldCode": "De_0",
       "label": "说明文字",
       "widgetType": "describeWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": false,
+      "view": true,
+      "systemDefault": "0",
+      "writePolicy": "read_only",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "De_0",
+      "searchParameterKey": "De_0"
     },
     {
       "fieldCode": "Ps_0",
       "label": "销售负责人",
       "widgetType": "personSelectWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请选择",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
       "options": [],
-      "semanticSlot": "owner_open_id"
+      "semanticSlot": "owner_open_id",
+      "writeParameterKey": "owner_open_id",
+      "searchParameterKey": "owner_open_id"
     },
     {
       "fieldCode": "De_1",
       "label": "说明文字",
       "widgetType": "describeWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": false,
+      "view": true,
+      "systemDefault": "0",
+      "writePolicy": "read_only",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "De_1",
+      "searchParameterKey": "De_1"
     },
     {
       "fieldCode": "De_2",
       "label": "说明文字",
       "widgetType": "describeWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": false,
+      "view": true,
+      "systemDefault": "0",
+      "writePolicy": "read_only",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "De_2",
+      "searchParameterKey": "De_2"
     },
     {
       "fieldCode": "De_3",
       "label": "说明文字",
       "widgetType": "describeWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": false,
+      "view": true,
+      "systemDefault": "0",
+      "writePolicy": "read_only",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "De_3",
+      "searchParameterKey": "De_3"
     },
     {
       "fieldCode": "De_5",
       "label": "说明文字",
       "widgetType": "describeWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": false,
+      "view": true,
+      "systemDefault": "0",
+      "writePolicy": "read_only",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "De_5",
+      "searchParameterKey": "De_5"
     },
     {
       "fieldCode": "De_6",
       "label": "说明文字",
       "widgetType": "describeWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": false,
+      "view": true,
+      "systemDefault": "0",
+      "writePolicy": "read_only",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "De_6",
+      "searchParameterKey": "De_6"
     },
     {
       "fieldCode": "Nu_1",
       "label": "商机预算（元）",
       "widgetType": "numberWidget",
-      "required": false,
+      "required": true,
+      "requiredMode": "required",
+      "requiredRules": [
+        {
+          "kind": "static",
+          "description": "商机预算（元） 为模板静态必填"
+        }
+      ],
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "opportunity_budget",
+      "searchParameterKey": "Nu_1"
     },
     {
       "fieldCode": "_S_DEPT",
       "label": "所属部门",
       "widgetType": "departmentSelectWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": true,
+      "edit": true,
+      "view": true,
+      "systemDefault": "1",
+      "writePolicy": "read_only",
+      "isSystemField": true,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "_S_DEPT",
+      "searchParameterKey": "_S_DEPT"
     },
     {
       "fieldCode": "Nu_0",
       "label": "预计合同金额",
       "widgetType": "numberWidget",
       "required": false,
+      "requiredMode": "optional",
       "readOnly": false,
+      "edit": true,
+      "view": true,
+      "systemDefault": "0",
+      "placeholder": "请输入",
+      "writePolicy": "promptable",
+      "isSystemField": false,
+      "provenance": {
+        "sources": [
+          "public_view_form_def",
+          "internal_get_form_by_code_id"
+        ],
+        "truthSource": "internal_get_form_by_code_id"
+      },
       "multi": false,
-      "options": []
+      "options": [],
+      "writeParameterKey": "Nu_0",
+      "searchParameterKey": "Nu_0"
     }
   ]
 }

@@ -9,6 +9,7 @@ import { DictionaryResolver } from '../src/dictionary-resolver.js';
 import { LightCloudClient } from '../src/lightcloud-client.js';
 import { ShadowMetadataRepository } from '../src/shadow-metadata-repository.js';
 import { ShadowMetadataService } from '../src/shadow-metadata-service.js';
+import type { ShadowInternalTemplateProvider } from '../src/shadow-template-providers.js';
 import { createInMemoryDatabase, createTestConfig } from './test-helpers.js';
 
 const CUSTOMER_FORM_CODE_ID = 'customer-form-001';
@@ -94,6 +95,33 @@ const CUSTOMER_WIDGET_MAP = {
       {
         key: 'customer-pending',
         value: '待跟进',
+      },
+    ],
+    displaylinkageVos: [
+      {
+        additional: {
+          targetList: [
+            {
+              label: '售后服务代表',
+              value: 'Ps_1',
+            },
+          ],
+          option: [
+            {
+              label: '活跃',
+              value: 'customer-active',
+            },
+          ],
+          state: {
+            label: '必填',
+            value: 'required',
+          },
+        },
+        behavior: {
+          Ps_1: {
+            state: 'required',
+          },
+        },
       },
     ],
   },
@@ -518,6 +546,237 @@ const FOLLOWUP_WIDGET_MAP = {
     title: '跟进定位',
     type: 'locationWidget',
     required: false,
+  },
+} satisfies Record<string, unknown>;
+
+const CUSTOMER_INTERNAL_WIDGET_MAP = {
+  _S_NAME: {
+    ...CUSTOMER_WIDGET_MAP._S_NAME,
+    required: true,
+    readOnly: true,
+    edit: true,
+    view: true,
+    placeholder: '请输入',
+    extendFieldMap: {
+      wordLimit: 200,
+    },
+  },
+  _S_DISABLE: {
+    ...CUSTOMER_WIDGET_MAP._S_DISABLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+    placeholder: '请选择',
+  },
+  _S_TITLE: {
+    ...CUSTOMER_WIDGET_MAP._S_TITLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: false,
+    systemDefault: '1',
+    placeholder: '标题自动生成',
+    extendFieldMap: {
+      titleEntity: {
+        kind: 'TITLE_DYNAMIC',
+        list: [
+          {
+            formItem: '_S_NAME',
+            kind: 'ITEM_FORM_ITEM',
+          },
+        ],
+      },
+      defaultTitle: true,
+    },
+  },
+  Nu_1: {
+    ...CUSTOMER_WIDGET_MAP.Nu_1,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Te_5: {
+    codeId: 'Te_5',
+    title: '联系人姓名',
+    type: 'textWidget',
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ra_0: {
+    ...CUSTOMER_WIDGET_MAP.Ra_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ra_3: {
+    ...CUSTOMER_WIDGET_MAP.Ra_3,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ra_1: {
+    codeId: 'Ra_1',
+    title: '客户是否分配',
+    type: 'radioWidget',
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+    options: [
+      {
+        key: 'customer-assigned',
+        value: '已分配',
+      },
+      {
+        key: 'customer-unassigned',
+        value: '未分配',
+      },
+    ],
+  },
+} satisfies Record<string, unknown>;
+
+const CONTACT_INTERNAL_WIDGET_MAP = {
+  _S_NAME: {
+    ...CONTACT_WIDGET_MAP._S_NAME,
+    required: true,
+    readOnly: true,
+    edit: true,
+    view: true,
+    placeholder: '请输入',
+  },
+  _S_TITLE: {
+    ...CONTACT_WIDGET_MAP._S_TITLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: false,
+    systemDefault: '1',
+    placeholder: '请输入',
+    extendFieldMap: {
+      titleEntity: {
+        kind: 'TITLE_DYNAMIC',
+        list: [
+          {
+            formItem: '_S_NAME',
+            kind: 'ITEM_FORM_ITEM',
+          },
+        ],
+      },
+      defaultTitle: true,
+    },
+  },
+  _S_ENCODE: {
+    ...CONTACT_WIDGET_MAP._S_ENCODE,
+    readOnly: true,
+    edit: false,
+  },
+} satisfies Record<string, unknown>;
+
+const OPPORTUNITY_INTERNAL_WIDGET_MAP = {
+  _S_NAME: {
+    ...OPPORTUNITY_WIDGET_MAP._S_NAME,
+    readOnly: true,
+    edit: false,
+  },
+  _S_TITLE: {
+    ...OPPORTUNITY_WIDGET_MAP._S_TITLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+    systemDefault: '1',
+    extendFieldMap: {
+      titleEntity: {
+        kind: 'TITLE_DEFAULT',
+        list: [
+          {
+            formItem: '_S_APPLY',
+            kind: 'ITEM_FORM_ITEM',
+          },
+          {
+            formItem: '的',
+            kind: 'ITEM_STRING',
+          },
+          {
+            formItem: '商机',
+            kind: 'ITEM_TEMPLATENAME',
+          },
+        ],
+      },
+      defaultTitle: true,
+    },
+  },
+  Te_0: {
+    ...OPPORTUNITY_WIDGET_MAP.Te_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+} satisfies Record<string, unknown>;
+
+const FOLLOWUP_INTERNAL_WIDGET_MAP = {
+  _S_TITLE: {
+    ...FOLLOWUP_WIDGET_MAP._S_TITLE,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+    systemDefault: '1',
+    extendFieldMap: {
+      titleEntity: {
+        kind: 'TITLE_DEFAULT',
+        list: [
+          {
+            formItem: '_S_APPLY',
+            kind: 'ITEM_FORM_ITEM',
+          },
+          {
+            formItem: '的',
+            kind: 'ITEM_STRING',
+          },
+          {
+            formItem: '商机跟进记录',
+            kind: 'ITEM_TEMPLATENAME',
+          },
+        ],
+      },
+      defaultTitle: true,
+    },
+  },
+  Te_0: {
+    ...FOLLOWUP_WIDGET_MAP.Te_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ps_0: {
+    ...FOLLOWUP_WIDGET_MAP.Ps_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Ra_0: {
+    ...FOLLOWUP_WIDGET_MAP.Ra_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
+  },
+  Bd_0: {
+    ...FOLLOWUP_WIDGET_MAP.Bd_0,
+    required: true,
+    readOnly: false,
+    edit: true,
+    view: true,
   },
 } satisfies Record<string, unknown>;
 
@@ -970,6 +1229,54 @@ class StubApprovalClient extends ApprovalClient {
   }
 }
 
+class StubInternalTemplateProvider implements ShadowInternalTemplateProvider {
+  async getTemplate(params: { formCodeId: string }) {
+    const templateByFormCodeId: Record<string, { formDefId: string; templateTitle: string; widgetMap: Record<string, unknown> }> = {
+      [CUSTOMER_FORM_CODE_ID]: {
+        formDefId: 'form-def-customer',
+        templateTitle: '客户',
+        widgetMap: CUSTOMER_INTERNAL_WIDGET_MAP,
+      },
+      [CONTACT_FORM_CODE_ID]: {
+        formDefId: 'form-def-contact',
+        templateTitle: '联系人',
+        widgetMap: CONTACT_INTERNAL_WIDGET_MAP,
+      },
+      [OPPORTUNITY_FORM_CODE_ID]: {
+        formDefId: 'form-def-opportunity',
+        templateTitle: '商机',
+        widgetMap: OPPORTUNITY_INTERNAL_WIDGET_MAP,
+      },
+      [FOLLOWUP_FORM_CODE_ID]: {
+        formDefId: 'form-def-followup',
+        templateTitle: '商机跟进记录',
+        widgetMap: FOLLOWUP_INTERNAL_WIDGET_MAP,
+      },
+    };
+    const template = templateByFormCodeId[params.formCodeId];
+    if (!template) {
+      return null;
+    }
+
+    return {
+      formCodeId: params.formCodeId,
+      formDefId: template.formDefId,
+      templateTitle: template.templateTitle,
+      payload: {
+        data: {
+          formTemplate: {
+            id: template.formDefId,
+            formTemplateId: template.formDefId,
+            title: template.templateTitle,
+            formWidgets: Object.values(template.widgetMap),
+          },
+        },
+      },
+      widgetMap: template.widgetMap as Record<string, any>,
+    };
+  }
+}
+
 class StubLightCloudClient extends LightCloudClient {
   constructor() {
     super({ baseUrl: 'https://stub.yzj.local' });
@@ -1262,8 +1569,22 @@ function createService(
       approvalClient,
       fieldBoundWorkbookPath,
     }),
+    internalTemplateProvider: new StubInternalTemplateProvider(),
     now: createNowSequence(),
   });
+}
+
+function buildRequiredCustomerCreateParams(overrides: Record<string, unknown> = {}) {
+  return {
+    customer_name: '华北样板客户',
+    customer_status: '待跟进',
+    contact_phone: '13800138000',
+    customer_type: 'VIP客户',
+    contact_name: '李四',
+    Ra_1: '已分配',
+    enabled_state: true,
+    ...overrides,
+  };
 }
 
 const SEARCHABLE_BASE_WIDGET_TYPES = new Set([
@@ -1283,6 +1604,14 @@ const SEARCHABLE_BASE_WIDGET_TYPES = new Set([
 
 function getFieldParameterKeyForTest(field: { fieldCode: string; semanticSlot?: string }) {
   return field.semanticSlot ?? field.fieldCode;
+}
+
+function getWriteFieldParameterKeyForTest(field: {
+  fieldCode: string;
+  semanticSlot?: string;
+  writeParameterKey?: string;
+}) {
+  return field.writeParameterKey ?? getFieldParameterKeyForTest(field);
 }
 
 function getSearchFieldParameterKeyForTest(
@@ -1378,25 +1707,38 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
     assert.ok(initialCreateSkill);
     assert.ok(initialSearchSkill);
     assert.ok(initialUpdateSkill);
-    assert.deepEqual(initialCreateSkill?.requiredParams, ['customer_name']);
+    assert.ok(initialCreateSkill?.requiredParams.includes('customer_name'));
+    assert.ok(initialCreateSkill?.requiredParams.includes('customer_status'));
+    assert.ok(initialCreateSkill?.requiredParams.includes('contact_phone'));
+    assert.ok(initialCreateSkill?.requiredParams.includes('customer_type'));
+    assert.ok(initialCreateSkill?.requiredParams.includes('contact_name'));
+    assert.ok(initialCreateSkill?.requiredParams.includes('Ra_1'));
+    assert.ok(initialCreateSkill?.requiredParams.includes('enabled_state'));
+    assert.ok(initialCreateSkill?.derivedParams.includes('_S_TITLE'));
+    const conditionalRequiredField = service
+      .getObject('customer')
+      .fields.find((field) => field.fieldCode === 'Ps_1');
+    assert.equal(conditionalRequiredField?.required, false);
+    assert.equal(conditionalRequiredField?.requiredMode, 'conditional');
+    assert.match(conditionalRequiredField?.requiredRules?.[0]?.description ?? '', /客户状态/);
     assert.ok(initialCreateSkill?.optionalParams.includes('service_rep_open_id'));
     assert.ok(initialCreateSkill?.optionalParams.includes('last_followup_date'));
-    assert.ok(initialCreateSkill?.optionalParams.includes('customer_type'));
+    assert.equal(initialCreateSkill?.optionalParams.includes('customer_type'), false);
     assert.ok(initialCreateSkill?.optionalParams.includes('At_0'));
     assert.ok(initialCreateSkill?.optionalParams.includes('linked_contact_form_inst_id'));
     assert.ok(initialCreateSkill?.optionalParams.includes('province'));
     assert.ok(initialCreateSkill?.optionalParams.includes('city'));
     assert.ok(initialCreateSkill?.optionalParams.includes('district'));
+    assert.equal(initialCreateSkill?.optionalParams.includes('Te_0'), false);
     assert.ok(initialSearchSkill?.optionalParams.includes('linked_contact_form_inst_id'));
     assert.ok(initialSearchSkill?.optionalParams.includes('_S_NAME'));
     assert.ok(initialSearchSkill?.optionalParams.includes('Te_0'));
     assert.ok(initialSearchSkill?.optionalParams.includes('_S_DISABLE'));
-    assert.ok(initialSearchSkill?.optionalParams.includes('Ra_0'));
+    assert.ok(initialSearchSkill?.optionalParams.includes('customer_status'));
     assert.ok(initialSearchSkill?.optionalParams.includes('Te_7'));
     assert.ok(initialSearchSkill?.optionalParams.includes('Nu_1'));
     assert.ok(initialSearchSkill?.optionalParams.includes('Nu_0'));
     assert.equal(initialSearchSkill?.optionalParams.includes('customer_name'), false);
-    assert.equal(initialSearchSkill?.optionalParams.includes('customer_status'), false);
     assert.equal(initialSearchSkill?.optionalParams.includes('phone'), false);
     assert.equal(initialCreateSkill?.optionalParams.includes('region'), false);
     assert.equal(initialCreateSkill?.optionalParams.includes('Pw_0'), false);
@@ -1474,9 +1816,10 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
       mode: 'create',
       operatorOpenId: 'oid-test-1',
       params: {
-        customer_name: '华东制造样板客户',
+        ...buildRequiredCustomerCreateParams({
+          customer_name: '华东制造样板客户',
+        }),
         service_rep_open_id: 'open-1',
-        customer_type: 'VIP客户',
         last_followup_date: '2026-04-23',
         region: '北京',
         province: '浙江',
@@ -1498,6 +1841,7 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
     assert.deepEqual(widgetValue.Pw_1, [{ title: '杭州', dicId: 'd-city-hz' }]);
     assert.deepEqual(widgetValue.Pw_2, [{ title: '滨江', dicId: 'd-district-bj' }]);
     assert.deepEqual(widgetValue.Ps_1, ['open-1']);
+    assert.equal(widgetValue._S_DISABLE, '1');
     assert.equal(widgetValue.Ra_3, 'EeFfGgHh');
     assert.equal(widgetValue.Da_0, Date.parse('2026-04-23'));
     assert.deepEqual(widgetValue.Bd_1, [
@@ -1530,7 +1874,7 @@ test('ShadowMetadataService enforces strict unresolved dictionary, attachment, a
       mode: 'create',
       operatorOpenId: 'oid-test-2',
       params: {
-        customer_name: '华北样板客户',
+        ...buildRequiredCustomerCreateParams(),
         region: '北京',
       },
     });
@@ -1541,7 +1885,7 @@ test('ShadowMetadataService enforces strict unresolved dictionary, attachment, a
       mode: 'create',
       operatorOpenId: 'oid-test-3',
       params: {
-        customer_name: '华北样板客户',
+        ...buildRequiredCustomerCreateParams(),
         region: {
           title: '北京',
           dicId: 'd005a1',
@@ -2207,7 +2551,8 @@ test('ShadowMetadataService executes real update write with customer type, follo
     assert.equal(result.mode, 'live');
     assert.equal(result.writeMode, 'update');
     assert.deepEqual(result.formInstIds, [CUSTOMER_FORM_INST_ID]);
-    assert.equal(result.requestBody.data[0]?.widgetValue.Te_0, '华东制造更新客户');
+    assert.equal(result.requestBody.data[0]?.widgetValue._S_NAME, '华东制造更新客户');
+    assert.equal(result.requestBody.data[0]?.widgetValue._S_TITLE, '华东制造更新客户');
     assert.equal(result.requestBody.data[0]?.widgetValue.Ra_3, 'EeFfGgHh');
     assert.equal(result.requestBody.data[0]?.widgetValue.Da_0, Date.parse('2026-04-23'));
     assert.deepEqual(result.requestBody.data[0]?.widgetValue.Ps_1, ['open-live-2']);
@@ -2267,6 +2612,7 @@ test('ShadowMetadataService generates object-specific contact skill names instea
       jsonPath: config.shadow.dictionaryJsonPath,
       approvalClient,
     }),
+    internalTemplateProvider: new StubInternalTemplateProvider(),
     now: createNowSequence(),
   });
 
@@ -2283,7 +2629,8 @@ test('ShadowMetadataService generates object-specific contact skill names instea
     assert.ok(contactSearchSkill);
     assert.equal(contactCreateSkill?.sourceObject, 'contact');
     assert.equal(contactCreateSkill?.skillKey, 'contact_create');
-    assert.ok(contactCreateSkill?.requiredParams.includes('_S_NAME'));
+    assert.ok(contactCreateSkill?.requiredParams.includes('contact_name'));
+    assert.ok(contactCreateSkill?.derivedParams.includes('_S_TITLE'));
     assert.ok(contactCreateSkill?.optionalParams.includes('linked_customer_form_inst_id'));
     assert.ok(contactSearchSkill?.optionalParams.includes('linked_customer_form_inst_id'));
     assert.ok(contactSearchSkill?.optionalParams.includes('_S_NAME'));
@@ -2372,9 +2719,14 @@ test('ShadowMetadataService refreshes opportunity and followup metadata into obj
     assert.ok(followupSearchSkill?.optionalParams.includes('linked_customer_form_inst_id'));
     assert.ok(followupSearchSkill?.optionalParams.includes('Bd_4'));
     assert.ok(opportunityCreateSkill?.requiredParams.includes('opportunity_name'));
+    assert.ok(opportunityCreateSkill?.derivedParams.includes('_S_TITLE'));
     assert.ok(opportunityCreateSkill?.optionalParams.includes('owner_open_id'));
     assert.ok(opportunityCreateSkill?.optionalParams.includes('At_0'));
-    assert.ok(followupCreateSkill?.requiredParams.includes('Te_0'));
+    assert.ok(followupCreateSkill?.requiredParams.includes('followup_record'));
+    assert.ok(followupCreateSkill?.requiredParams.includes('followup_method'));
+    assert.ok(followupCreateSkill?.requiredParams.includes('owner_open_id'));
+    assert.ok(followupCreateSkill?.requiredParams.includes('linked_customer_form_inst_id'));
+    assert.ok(followupCreateSkill?.derivedParams.includes('_S_TITLE'));
     assert.ok(followupCreateSkill?.optionalParams.includes('Bd_4'));
     assert.ok(followupCreateSkill?.optionalParams.includes('At_0'));
     assert.equal(
@@ -2500,7 +2852,8 @@ test('ShadowMetadataService normalizes opportunity and followup complex fields a
       mode: 'create',
       operatorOpenId: 'oid-followup-1',
       params: {
-        Te_0: '完成现场回访并记录问题',
+        followup_record: '完成现场回访并记录问题',
+        followup_method: '电话',
         last_followup_date: '2026-04-24',
         owner_open_id: 'open-followup-1',
         linked_customer_form_inst_id: CUSTOMER_FORM_INST_ID,

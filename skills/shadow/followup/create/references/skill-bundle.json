@@ -5,22 +5,23 @@
   "description": "基于商机跟进记录模板标准化字段预演轻云商机跟进记录创建请求。",
   "whenToUse": "当用户明确要录入商机跟进记录、新建商机跟进记录或补录商机跟进记录时使用。",
   "notWhenToUse": "当用户只是查询商机跟进记录、分析商机跟进记录或未准备写入确认时不要使用。",
-  "requiredParams": [],
+  "requiredParams": [
+    "followup_method",
+    "linked_customer_form_inst_id",
+    "owner_open_id",
+    "followup_record"
+  ],
   "optionalParams": [
-    "Te_4",
     "Ra_2",
-    "Te_1",
-    "Te_0",
     "Ra_0",
-    "Ra_1",
     "Bd_4",
     "linked_opportunity_form_inst_id",
-    "linked_customer_form_inst_id",
     "Da_0",
     "Da_1",
-    "owner_open_id",
-    "Ta_0",
     "At_0"
+  ],
+  "derivedParams": [
+    "_S_TITLE"
   ],
   "confirmationPolicy": "required_before_write",
   "outputCardType": "followup-create-preview",
@@ -32,7 +33,7 @@
       "向用户展示将要写入的关键字段摘要，得到明确确认后才执行 live write。"
     ],
     "parameterCollectionPolicy": [
-      "追问时使用业务标签，例如 商机跟进记录关键字段，不要直接暴露 `codeId`。",
+      "追问时使用业务标签，例如 followup_method (跟进方式)、linked_customer_form_inst_id (客户编号)、owner_open_id (跟进负责人) 等 4 项，不要直接暴露 `codeId`。",
       "允许用户分多轮补充信息，不要一次性索要全部可选字段。",
       "用户只给自然语言描述时，先保留原意图，再补齐必填和引用信息。",
       "当用户只说“关联松井客户/挂到某联系人”这类口语化关系时，先 search 关联对象拿到精确记录，再回填。",
@@ -68,5 +69,5 @@
   },
   "sourceObject": "followup",
   "sourceFormCodeId": "0a618c5d806545b997f60e8461b3f504",
-  "sourceVersion": "2026-04-24T08:59:16.696Z"
+  "sourceVersion": "2026-04-28T10:37:10.888Z"
 }

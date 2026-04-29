@@ -5,6 +5,9 @@ import {
   type XRequestOptions,
 } from '@ant-design/x-sdk';
 
+const TEST_OPERATOR_OPEN_ID =
+  import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || '69e75eb5e4b0e65b61c014da';
+
 export interface AssistantAttachment {
   name: string;
   url: string;
@@ -22,6 +25,46 @@ export interface AssistantEvidenceCard {
   snippet: string;
   score?: number;
   vectorStatus?: string;
+}
+
+export interface AssistantFieldOptionHint {
+  label: string;
+  value: string | number | boolean;
+  key?: string;
+  source?: 'field_option' | 'dictionary' | 'widget';
+}
+
+export interface AssistantRecordWritePreviewRow {
+  label: string;
+  value?: string;
+  paramKey?: string;
+  reason?: string;
+  source?: 'input' | 'evidence' | 'derived' | 'tool' | 'system';
+  options?: AssistantFieldOptionHint[];
+}
+
+export interface AssistantMetaQuestion {
+  questionId: string;
+  paramKey: string;
+  label: string;
+  type: 'text' | 'phone' | 'single_select' | 'multi_select' | 'date' | 'reference';
+  required: boolean;
+  placeholder?: string;
+  currentValue?: string | number | boolean | string[];
+  options?: AssistantFieldOptionHint[];
+  reason?: string;
+}
+
+export interface AssistantMetaQuestionCard {
+  title: string;
+  description?: string;
+  toolCode: string;
+  submitLabel: string;
+  currentValues: Record<string, {
+    label: string;
+    value?: string;
+  }>;
+  questions: AssistantMetaQuestion[];
 }
 
 export interface AssistantChatMessage {
@@ -45,8 +88,171 @@ export interface AssistantChatMessage {
       intentFrame: any;
       taskPlan: any;
       executionState: any;
-      toolCalls: any[];
+      toolCalls: Array<{
+        id?: string;
+        runId?: string;
+        toolCode: string;
+        status: string;
+        inputSummary?: string;
+        outputSummary?: string;
+        startedAt?: string;
+        finishedAt?: string | null;
+        errorMessage?: string | null;
+        errorDetails?: unknown;
+      }>;
       qdrantFilter?: unknown;
+      selectedTool?: {
+        toolCode: string;
+        reason: string;
+        input: Record<string, unknown>;
+        confidence: number;
+      };
+      pendingConfirmation?: {
+        confirmationId: string;
+        runId: string;
+        toolCode: string;
+        title: string;
+        summary: string;
+        preview: unknown;
+        userPreview?: {
+          title: string;
+          summaryRows: AssistantRecordWritePreviewRow[];
+          missingRequiredRows?: AssistantRecordWritePreviewRow[];
+          blockedRows?: AssistantRecordWritePreviewRow[];
+          recommendedRows?: AssistantRecordWritePreviewRow[];
+        };
+        debugPayload?: unknown;
+        requestInput: Record<string, unknown>;
+        status: 'pending' | 'approved' | 'rejected' | 'expired';
+        createdAt: string;
+        decidedAt: string | null;
+      } | null;
+      pendingInteraction?: {
+        interactionId: string;
+        kind: 'input_required' | 'candidate_selection' | 'confirmation';
+        runId: string;
+        toolCode?: string;
+        status: 'pending' | 'resolved' | 'cancelled';
+        title: string;
+        summary: string;
+        partialInput?: Record<string, unknown>;
+        missingRows?: AssistantRecordWritePreviewRow[];
+        blockedRows?: AssistantRecordWritePreviewRow[];
+        recommendedRows?: AssistantRecordWritePreviewRow[];
+        questionCard?: AssistantMetaQuestionCard;
+        contextSubject?: {
+          kind: string;
+          type?: string;
+          id?: string;
+          name?: string;
+        };
+        createdAt: string;
+      } | null;
+      continuationResolution?: {
+        usedContinuation: boolean;
+        action:
+          | 'resume_pending_interaction'
+          | 'start_new_task'
+          | 'confirm_writeback'
+          | 'reject_writeback'
+          | 'select_candidate'
+          | 'route_tool'
+          | 'none';
+        reason: string;
+        sourceInteractionId?: string;
+        toolCode?: string;
+        mergedInput?: Record<string, unknown>;
+      } | null;
+      resolvedContext?: {
+        usedContext: boolean;
+        reason: string;
+        subject?: {
+          kind: string;
+          type?: string;
+          id?: string;
+          name?: string;
+        };
+        sourceRunId?: string;
+        evidenceRefs?: AssistantEvidenceCard[];
+      } | null;
+      semanticResolution?: {
+        usedSemantic: boolean;
+        shouldClarify: boolean;
+        reason: string;
+        selectedCandidate?: {
+          candidateId: string;
+          subject: {
+            kind: string;
+            type?: string;
+            id?: string;
+            name?: string;
+          };
+          sourceRunId?: string;
+          evidenceRefs: AssistantEvidenceCard[];
+          text: string;
+          recencyRank: number;
+          confidence: number;
+          source: string;
+          score: number;
+          scoreLabel: string;
+          reasons: string[];
+        };
+        candidates: Array<{
+          candidateId: string;
+          subject: {
+            kind: string;
+            type?: string;
+            id?: string;
+            name?: string;
+          };
+          sourceRunId?: string;
+          evidenceRefs: AssistantEvidenceCard[];
+          text: string;
+          recencyRank: number;
+          confidence: number;
+          source: string;
+          score: number;
+          scoreLabel: string;
+          reasons: string[];
+        }>;
+        threshold: number;
+        margin: number;
+        embeddingProvider: string;
+        targetWasOverridden: boolean;
+      } | null;
+      toolArbitration?: {
+        usedArbitration: boolean;
+        ruleCode: string;
+        conflictGroup: string;
+        intentCode: string;
+        subjectType?: string;
+        subjectName?: string;
+        action: 'direct_tool' | 'read_only_probe' | 'clarify';
+        selectedToolCode?: string;
+        probeToolCode?: string;
+        candidateTools: Array<{
+          toolCode: string;
+          type: string;
+          provider: string;
+          priority: number;
+          risk?: string;
+          clarifyLabel?: string;
+          readOnlyProbe: boolean;
+        }>;
+        reason: string;
+        probeResult?: {
+          status: 'not_run' | 'matched' | 'not_matched' | 'failed';
+          count?: number;
+          summary?: string;
+        };
+      } | null;
+      policyDecisions?: Array<{
+        policyCode: string;
+        action: string;
+        toolCode?: string;
+        reason: string;
+        createdAt: string;
+      }>;
     };
   };
 }
@@ -56,6 +262,17 @@ export interface AssistantRequestInput {
   sceneKey: string;
   conversationKey: string;
   attachments?: AssistantAttachment[];
+  resume?: {
+    runId: string;
+    action: 'confirm_writeback';
+    decision: 'approve' | 'reject';
+    confirmationId?: string;
+  } | {
+    runId: string;
+    action: 'provide_input';
+    interactionId: string;
+    answers: Record<string, unknown>;
+  };
 }
 
 interface AssistantResponseOutput {
@@ -148,6 +365,10 @@ async function agentApiFetch(
       query: params.query,
       sceneKey: params.sceneKey,
       attachments: params.attachments ?? [],
+      tenantContext: {
+        operatorOpenId: TEST_OPERATOR_OPEN_ID,
+      },
+      ...(params.resume ? { resume: params.resume } : {}),
     }),
     signal: options.signal,
   });

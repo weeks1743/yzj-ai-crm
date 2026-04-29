@@ -6,7 +6,12 @@
       "mode": "create",
       "operatorOpenId": "{operatorOpenId}",
       "params": {
-        "Te_4": "{Te_4}"
+        "followup_method": "电话",
+        "linked_customer_form_inst_id": {
+          "formInstId": "{linked_customer_form_inst_id_formInstId}"
+        },
+        "owner_open_id": "{owner_open_id}",
+        "followup_record": "{followup_record}"
       }
     }
   },
@@ -23,7 +28,24 @@
       "data": [
         {
           "widgetValue": {
-            "Te_4": "{Te_4}"
+            "Ra_1": "电话",
+            "Bd_0": [
+              {
+                "id": "{linked_customer_form_inst_id_formInstId}",
+                "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+                "formDefId": "{linked_customer_form_inst_id_formDefId}",
+                "flowInstId": "",
+                "showName": "{linked_customer_form_inst_id_showName}",
+                "_S_TITLE": "{linked_customer_form_inst_id_showName}",
+                "_S_NAME": "{linked_customer_form_inst_id_showName}",
+                "_name_": "{linked_customer_form_inst_id_showName}",
+                "_S_ENCODE": "{linked_customer_form_inst_id__S_ENCODE}"
+              }
+            ],
+            "Ps_0": [
+              "{owner_open_id}"
+            ],
+            "Ta_0": "{followup_record}"
           }
         }
       ]
@@ -36,7 +58,12 @@
       "mode": "create",
       "operatorOpenId": "{operatorOpenId}",
       "params": {
-        "Te_4": "{Te_4}"
+        "followup_method": "电话",
+        "linked_customer_form_inst_id": {
+          "formInstId": "{linked_customer_form_inst_id_formInstId}"
+        },
+        "owner_open_id": "{owner_open_id}",
+        "followup_record": "{followup_record}"
       }
     }
   },
@@ -53,7 +80,24 @@
       "data": [
         {
           "widgetValue": {
-            "Te_4": "{Te_4}"
+            "Ra_1": "电话",
+            "Bd_0": [
+              {
+                "id": "{linked_customer_form_inst_id_formInstId}",
+                "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
+                "formDefId": "{linked_customer_form_inst_id_formDefId}",
+                "flowInstId": "",
+                "showName": "{linked_customer_form_inst_id_showName}",
+                "_S_TITLE": "{linked_customer_form_inst_id_showName}",
+                "_S_NAME": "{linked_customer_form_inst_id_showName}",
+                "_name_": "{linked_customer_form_inst_id_showName}",
+                "_S_ENCODE": "{linked_customer_form_inst_id__S_ENCODE}"
+              }
+            ],
+            "Ps_0": [
+              "{owner_open_id}"
+            ],
+            "Ta_0": "{followup_record}"
           }
         }
       ]

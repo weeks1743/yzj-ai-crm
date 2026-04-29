@@ -7,7 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.build.json",
     "test": "tsx --test tests/**/*.test.ts",
-    "test:live-shadow": "tsx --test tests/live-shadow.live.ts"
+    "test:live-shadow": "tsx --test tests/live-shadow.live.ts",
+    "test:live-agent-sales": "tsx --test tests/live-agent-sales.live.ts"
   },
   "devDependencies": {
     "@types/node": "^24.6.1",
@@ -15,10 +16,13 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@langchain/core": "1.1.42",
+    "@langchain/langgraph": "1.2.9",
     "@qdrant/js-client-rest": "^1.17.0",
     "@types/busboy": "^1.5.4",
     "busboy": "^1.6.0",
     "mongodb": "^7.2.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "3.25.76"
   }
 }

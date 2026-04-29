@@ -10,8 +10,8 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 ## Snapshot
 
 - `formCodeId`: `b1869173654e49fbac0b1fc6ad37e761`
-- `source_version`: `2026-04-24T08:59:16.425Z`
-- `schema_hash`: `b756c899b70ec303bda1afb5be00c376c22341eb62bf05be0b67d6a7c2315e39`
+- `source_version`: `2026-04-28T10:39:48.776Z`
+- `schema_hash`: `6a797384d8b4c6f40ec31bf11b2e38b081dd6a4f1e012e5b1d59a07f2229cb24`
 - `field_count`: `35`
 - `resolved_public_option_fields`: `0`
 - `pending_public_option_fields`: `0`
@@ -55,7 +55,8 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 ## Input Rules
 
 - Required params: (none)
-- Optional params: Te_11, Te_10, linked_contact_form_inst_id, linked_customer_form_inst_id, _S_SERIAL, _S_DATE, Ta_1, Ta_0, Te_17, Te_16, _S_TITLE, Ra_6, Te_5, Ra_5, Te_1, Te_0, Ra_0, Ra_1, _S_APPLY, Te_9, Te_8, Da_0, Te_7, Te_6, owner_open_id, Nu_1, _S_DEPT, Nu_0
+- Optional params: Te_11, Te_10, linked_contact_form_inst_id, linked_customer_form_inst_id, _S_SERIAL, _S_DATE, Ta_1, Ta_0, Te_17, opportunity_name, _S_TITLE, Ra_6, Te_5, Ra_5, Te_1, Te_0, Ra_0, Ra_1, _S_APPLY, Te_9, Te_8, Da_0, Te_7, Te_6, owner_open_id, Nu_1, _S_DEPT, Nu_0
+- Derived params: (none)
 - Confirmation policy: `no_confirmation_required`
 - This is a read / preview skill and does not require write confirmation.
 
@@ -64,7 +65,7 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 - Search input aligns to `search2Gen`. Search `pageSize` must stay within `1..100`. For `basicDataWidget`, exact match should include `operator`; the value may be `formInstId/id`, a full relation object, or an explicit token. If the input is display text only, omit `operator` or use `contain` / `like`; exact-like operators automatically downgrade to display-text search when no linked record id can be resolved. Date search normalizes to `range` with Shanghai-time timestamps and `lightFieldMap.plusDay=false`.
 
 ## Search Coverage
-- Base searchable params (26): `Te_11`, `Te_10`, `_S_SERIAL`, `_S_DATE`, `Ta_1`, `Ta_0`, `Te_17`, `Te_16`, `_S_TITLE`, `Ra_6`, `Te_5`, `Ra_5`, `Te_1`, `Te_0`, `Ra_0`, `Ra_1`, `_S_APPLY`, `Te_9`, `Te_8`, `Da_0`, `Te_7`, `Te_6`, `owner_open_id`, `Nu_1`, `_S_DEPT`, `Nu_0`
+- Base searchable params (26): `Te_11`, `Te_10`, `_S_SERIAL`, `_S_DATE`, `Ta_1`, `Ta_0`, `Te_17`, `opportunity_name`, `_S_TITLE`, `Ra_6`, `Te_5`, `Ra_5`, `Te_1`, `Te_0`, `Ra_0`, `Ra_1`, `_S_APPLY`, `Te_9`, `Te_8`, `Da_0`, `Te_7`, `Te_6`, `owner_open_id`, `Nu_1`, `_S_DEPT`, `Nu_0`
 - Relation searchable params (2): `linked_contact_form_inst_id -> Bd_2 (displayCol: _S_NAME, formCodeId: a3ccc61c75c34cb28a7113a311418080)`, `linked_customer_form_inst_id -> Bd_1 (displayCol: _S_ENCODE, formCodeId: e2cfd2aef9bf4576a760aa1c6a557170)`
 - Not auto-generated for search: `附件(At_0, attachmentWidget)`, `说明文字(De_0, describeWidget)`, `说明文字(De_1, describeWidget)`, `说明文字(De_2, describeWidget)`, `说明文字(De_3, describeWidget)`, `说明文字(De_5, describeWidget)`, `说明文字(De_6, describeWidget)`
 
@@ -80,7 +81,7 @@ Use this bundle only for the `opportunity` object. It is generated from the curr
 - Internal live API: `POST /api/shadow/objects/opportunity/execute/search`
 - Upstream LightCloud preview target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
 - Upstream LightCloud live target: `POST https://www.yunzhijia.com/gateway/lightcloud/data/searchList?accessToken={accessToken}`
-- This bundle is generated for phase `0.2.21`; read operations may execute against LightCloud, while writes remain preview-first.
+- This bundle is generated for phase `0.6.0`; read operations may execute against LightCloud, while writes remain preview-first.
 
 ## References
 

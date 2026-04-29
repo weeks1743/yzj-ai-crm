@@ -6,9 +6,9 @@
       "mode": "create",
       "operatorOpenId": "{operatorOpenId}",
       "params": {
-        "linked_customer_form_inst_id": {
-          "formInstId": "{linked_customer_form_inst_id_formInstId}"
-        }
+        "contact_name": "{contact_name}",
+        "enabled_state": "{enabled_state}",
+        "mobile_phone": "{mobile_phone}"
       }
     }
   },
@@ -25,18 +25,9 @@
       "data": [
         {
           "widgetValue": {
-            "Bd_0": [
-              {
-                "id": "{linked_customer_form_inst_id_formInstId}",
-                "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
-                "formDefId": "{linked_customer_form_inst_id_formDefId}",
-                "flowInstId": "",
-                "showName": "{linked_customer_form_inst_id_showName}",
-                "_S_TITLE": "{linked_customer_form_inst_id_showName}",
-                "_S_NAME": "{linked_customer_form_inst_id__S_NAME}",
-                "_name_": "{linked_customer_form_inst_id_showName}"
-              }
-            ]
+            "_S_NAME": "{contact_name}",
+            "_S_DISABLE": "{enabled_state}",
+            "Nu_0": "{mobile_phone}"
           }
         }
       ]
@@ -49,9 +40,9 @@
       "mode": "create",
       "operatorOpenId": "{operatorOpenId}",
       "params": {
-        "linked_customer_form_inst_id": {
-          "formInstId": "{linked_customer_form_inst_id_formInstId}"
-        }
+        "contact_name": "{contact_name}",
+        "enabled_state": "{enabled_state}",
+        "mobile_phone": "{mobile_phone}"
       }
     }
   },
@@ -68,18 +59,9 @@
       "data": [
         {
           "widgetValue": {
-            "Bd_0": [
-              {
-                "id": "{linked_customer_form_inst_id_formInstId}",
-                "formCodeId": "e2cfd2aef9bf4576a760aa1c6a557170",
-                "formDefId": "{linked_customer_form_inst_id_formDefId}",
-                "flowInstId": "",
-                "showName": "{linked_customer_form_inst_id_showName}",
-                "_S_TITLE": "{linked_customer_form_inst_id_showName}",
-                "_S_NAME": "{linked_customer_form_inst_id__S_NAME}",
-                "_name_": "{linked_customer_form_inst_id_showName}"
-              }
-            ]
+            "_S_NAME": "{contact_name}",
+            "_S_DISABLE": "{enabled_state}",
+            "Nu_0": "{mobile_phone}"
           }
         }
       ]
