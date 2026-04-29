@@ -109,7 +109,7 @@ const columns: ProColumns<SceneAssemblyResolvedView>[] = [
     ),
   },
   {
-    title: '推荐 Plan 模式',
+    title: '推荐计划模式',
     dataIndex: 'playbook',
     width: 240,
     render: (_, record) => renderCompactTags(record.playbook.planModes, 'geekblue'),
@@ -272,7 +272,7 @@ const SceneAssemblyPage = () => {
   return (
     <PageContainer
       title="场景技能"
-      subTitle="管理可生成用户 Plan 的业务 Playbook，重点看能力边界、推荐步骤、守卫规则和依赖健康。"
+      subTitle="管理可生成用户计划的业务计划手册，重点看能力边界、推荐步骤、守卫规则和依赖健康。"
       extra={[
         <Button key="reload" onClick={() => window.location.reload()}>
           重新加载
@@ -294,7 +294,7 @@ const SceneAssemblyPage = () => {
         style={{ marginBottom: 16 }}
         extra={(
           <Space wrap size={12}>
-            <Text type="secondary">按 CRM 客户生命周期查看 Playbook，管理员维护边界，用户在对话中裁剪 Plan</Text>
+            <Text type="secondary">按 CRM 客户生命周期查看计划手册，管理员维护边界，用户在对话中裁剪计划</Text>
             {stageFilter !== '全部阶段' ? (
               <Button type="link" style={{ paddingInline: 0 }} onClick={() => setStageFilter('全部阶段')}>
                 查看全部阶段
@@ -522,7 +522,7 @@ const SceneAssemblyPage = () => {
             </div>
 
             <div>
-                <Text strong>推荐 Plan 变体</Text>
+                <Text strong>推荐计划变体</Text>
                 <div style={{ marginTop: 12 }}>
                   <Steps
                     size="small"

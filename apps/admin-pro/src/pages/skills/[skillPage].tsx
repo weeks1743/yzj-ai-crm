@@ -142,7 +142,7 @@ function buildColumns(
         ) : null,
     },
     {
-      title: '模型 / Provider',
+      title: '模型 / 服务提供方',
       width: 240,
       render: (_, record) =>
         isExternalSkillRecord(record) ? `${record.model ?? '-'} / ${record.provider ?? '-'}` : null,
@@ -540,7 +540,7 @@ const SkillsCatalogPage = () => {
                   <Tag color={getStatusColor(current.status)}>{current.status}</Tag>
                 </ProDescriptions.Item>
                 <ProDescriptions.Item label="模型">{current.model ?? '—'}</ProDescriptions.Item>
-                <ProDescriptions.Item label="Provider">{current.provider ?? '—'}</ProDescriptions.Item>
+                <ProDescriptions.Item label="服务提供方">{current.provider ?? '—'}</ProDescriptions.Item>
                 <ProDescriptions.Item label="触发方式">{current.trigger}</ProDescriptions.Item>
                 <ProDescriptions.Item label="路由">{current.route ?? '—'}</ProDescriptions.Item>
                 <ProDescriptions.Item label="负责人">{current.owner}</ProDescriptions.Item>
@@ -639,7 +639,7 @@ const SkillsCatalogPage = () => {
                       />
                       <ProDescriptions<ImageGenerationResponse> column={1} dataSource={imageResult}>
                         <ProDescriptions.Item label="模型">{imageResult.model}</ProDescriptions.Item>
-                        <ProDescriptions.Item label="Provider">{imageResult.provider}</ProDescriptions.Item>
+                        <ProDescriptions.Item label="服务提供方">{imageResult.provider}</ProDescriptions.Item>
                         <ProDescriptions.Item label="尺寸">{imageResult.size}</ProDescriptions.Item>
                         <ProDescriptions.Item label="质量">{imageResult.quality}</ProDescriptions.Item>
                         <ProDescriptions.Item label="MIME 类型">{imageResult.mimeType}</ProDescriptions.Item>
@@ -772,12 +772,12 @@ const SkillsCatalogPage = () => {
                         }
                         showIcon
                         message={`Job 状态：${skillJobResult.status}`}
-                        description={`Job ID: ${skillJobResult.jobId}`}
+                        description={`任务编号: ${skillJobResult.jobId}`}
                       />
 
                       <ProDescriptions<ExternalSkillJobResponse> column={1} dataSource={skillJobResult}>
                         <ProDescriptions.Item label="技能编码">{skillJobResult.skillCode}</ProDescriptions.Item>
-                        <ProDescriptions.Item label="Runtime Skill">
+                        <ProDescriptions.Item label="运行时技能">
                           {skillJobResult.runtimeSkillName}
                         </ProDescriptions.Item>
                         <ProDescriptions.Item label="模型">

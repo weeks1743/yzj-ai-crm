@@ -34,7 +34,7 @@ const templateColumns: ProColumns<EnterprisePptTemplateItem>[] = [
     ellipsis: true,
   },
   {
-    title: 'Template ID',
+    title: '模板编号',
     dataIndex: 'templateId',
     copyable: true,
     ellipsis: true,

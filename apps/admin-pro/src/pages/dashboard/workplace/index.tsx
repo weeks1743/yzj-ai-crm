@@ -67,7 +67,7 @@ const WorkplacePage = () => {
               items={[
                 { children: '09:18 客户研究计划进入等待补源状态。 ' },
                 { children: '10:51 星海精工会话任务完成写回确认。' },
-                { children: '11:32 录音导入相关 TaskPlan 挂起等待补充纪要。' },
+                { children: '11:32 录音导入相关任务计划挂起，等待补充纪要。' },
               ]}
             />
           </Space>
@@ -102,7 +102,7 @@ const WorkplacePage = () => {
                 desc: '查看客户技能、字段快照与刷新状态。',
               },
               { title: '会话任务', path: '/agent-governance/sessions', desc: '查看用户会话、计划状态和任务沉淀。' },
-              { title: '运行观测', path: '/agent-governance/runtime-observability', desc: '按追踪ID / 任务ID 排查问题。' },
+              { title: '运行观测', path: '/agent-governance/runtime-observability', desc: '按追踪编号 / 任务编号排查问题。' },
               { title: '策略与确认', path: '/agent-governance/policies-confirmation', desc: '查看写回确认和守卫规则。' },
             ]}
             renderItem={(item) => (

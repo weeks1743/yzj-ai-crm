@@ -3,10 +3,18 @@ import { DatabaseSync } from 'node:sqlite';
 import type {
   AgentChatMessage,
   AgentChatRequest,
+  AgentConfirmationAuditRow,
+  AgentConfirmationListResponse,
+  AgentConfirmationStatus,
   AgentEvidenceCard,
+  AgentExecutionStatus,
+  AgentObservedMessage,
   AgentToolCall,
   ExecutionState,
   IntentFrame,
+  AgentRunDetailResponse,
+  AgentRunListResponse,
+  AgentRunSummary,
   TaskPlan,
 } from './contracts.js';
 import type {
@@ -38,8 +46,195 @@ interface ConfirmationRow {
   decided_at: string | null;
 }
 
+interface AgentRunListQuery {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  sceneKey?: string;
+  conversationKey?: string;
+  traceId?: string;
+}
+
+interface AgentConfirmationListQuery {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  runId?: string;
+}
+
+interface CountRow {
+  total: number;
+}
+
+interface AgentRunRow {
+  run_id: string;
+  trace_id: string;
+  eid: string;
+  app_id: string;
+  conversation_key: string;
+  scene_key: string;
+  user_input: string;
+  intent_frame_json: string;
+  context_subject_json: string | null;
+  task_plan_json: string;
+  execution_state_json: string;
+  evidence_refs_json: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  tool_call_count: number;
+  failed_tool_call_count: number;
+  pending_confirmation_count: number;
+}
+
+interface AgentMessageRow {
+  message_id: string;
+  run_id: string;
+  conversation_key: string;
+  role: string;
+  content: string;
+  attachments_json: string;
+  extra_info_json: string;
+  created_at: string;
+}
+
+interface AgentToolCallRow {
+  tool_call_id: string;
+  run_id: string;
+  tool_code: string;
+  status: AgentToolCall['status'];
+  input_summary: string;
+  output_summary: string;
+  started_at: string;
+  finished_at: string | null;
+  error_message: string | null;
+}
+
+interface ConfirmationAuditRow extends ConfirmationRow {
+  trace_id: string | null;
+}
+
 export class AgentRunRepository {
   constructor(private readonly database: DatabaseSync) {}
+
+  listRuns(query: AgentRunListQuery = {}): AgentRunListResponse {
+    const { page, pageSize, offset } = normalizePagination(query.page, query.pageSize);
+    const where = buildRunWhere(query);
+    const totalRow = this.database
+      .prepare(`SELECT COUNT(*) AS total FROM agent_runs r ${where.sql}`)
+      .get(...where.params) as unknown as CountRow;
+    const rows = this.database
+      .prepare(
+        `
+          SELECT r.*,
+                 (SELECT COUNT(*) FROM agent_tool_calls t WHERE t.run_id = r.run_id) AS tool_call_count,
+                 (SELECT COUNT(*) FROM agent_tool_calls t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
+                 (SELECT COUNT(*) FROM agent_confirmations c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
+          FROM agent_runs r
+          ${where.sql}
+          ORDER BY r.created_at DESC, r.rowid DESC
+          LIMIT ? OFFSET ?
+        `,
+      )
+      .all(...where.params, pageSize, offset) as unknown as AgentRunRow[];
+
+    return {
+      page,
+      pageSize,
+      total: totalRow?.total ?? 0,
+      items: rows.map(mapRunSummary),
+    };
+  }
+
+  getRunDetail(runId: string): AgentRunDetailResponse | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT r.*,
+                 (SELECT COUNT(*) FROM agent_tool_calls t WHERE t.run_id = r.run_id) AS tool_call_count,
+                 (SELECT COUNT(*) FROM agent_tool_calls t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
+                 (SELECT COUNT(*) FROM agent_confirmations c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
+          FROM agent_runs r
+          WHERE r.run_id = ?
+          LIMIT 1
+        `,
+      )
+      .get(runId) as unknown as AgentRunRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    const intentFrame = parseJson<IntentFrame>(row.intent_frame_json, fallbackIntentFrame());
+    const taskPlan = parseJson<TaskPlan>(row.task_plan_json, fallbackTaskPlan());
+    const executionState = parseJson<ExecutionState>(row.execution_state_json, fallbackExecutionState(row));
+    const messages = this.database
+      .prepare(
+        `
+          SELECT *
+          FROM agent_messages
+          WHERE run_id = ?
+          ORDER BY created_at ASC, rowid ASC
+        `,
+      )
+      .all(runId) as unknown as AgentMessageRow[];
+    const toolCalls = this.database
+      .prepare(
+        `
+          SELECT *
+          FROM agent_tool_calls
+          WHERE run_id = ?
+          ORDER BY started_at ASC, rowid ASC
+        `,
+      )
+      .all(runId) as unknown as AgentToolCallRow[];
+
+    return {
+      run: mapRunSummary(row),
+      intentFrame,
+      taskPlan,
+      executionState,
+      contextSubject: parseContextSubject(row.context_subject_json),
+      evidenceRefs: parseEvidenceRefs(row.evidence_refs_json),
+      messages: messages.map(mapObservedMessage),
+      toolCalls: toolCalls.map(mapToolCallRow),
+      confirmations: this.listConfirmations({ runId, page: 1, pageSize: 200 }).items,
+    };
+  }
+
+  listConfirmations(query: AgentConfirmationListQuery = {}): AgentConfirmationListResponse {
+    const { page, pageSize, offset } = normalizePagination(query.page, query.pageSize);
+    const where = buildConfirmationWhere(query);
+    const totalRow = this.database
+      .prepare(
+        `
+          SELECT COUNT(*) AS total
+          FROM agent_confirmations c
+          LEFT JOIN agent_runs r ON r.run_id = c.run_id
+          ${where.sql}
+        `,
+      )
+      .get(...where.params) as unknown as CountRow;
+    const rows = this.database
+      .prepare(
+        `
+          SELECT c.*, r.trace_id
+          FROM agent_confirmations c
+          LEFT JOIN agent_runs r ON r.run_id = c.run_id
+          ${where.sql}
+          ORDER BY c.created_at DESC, c.rowid DESC
+          LIMIT ? OFFSET ?
+        `,
+      )
+      .all(...where.params, pageSize, offset) as unknown as ConfirmationAuditRow[];
+
+    return {
+      page,
+      pageSize,
+      total: totalRow?.total ?? 0,
+      items: rows.map(mapConfirmationAuditRow),
+    };
+  }
 
   findContextFrame(conversationKey: string): ContextFrame | null {
     const rows = this.database
@@ -362,6 +557,187 @@ export class AgentRunRepository {
       .get(input.runId, input.confirmationId);
 
     return row ? mapConfirmationRow(row as unknown as ConfirmationRow) : null;
+  }
+}
+
+function normalizePagination(pageValue?: number, pageSizeValue?: number) {
+  const page = Number.isFinite(pageValue) && Number(pageValue) > 0
+    ? Math.floor(Number(pageValue))
+    : 1;
+  const pageSize = Number.isFinite(pageSizeValue) && Number(pageSizeValue) > 0
+    ? Math.min(Math.floor(Number(pageSizeValue)), 100)
+    : 20;
+  return {
+    page,
+    pageSize,
+    offset: (page - 1) * pageSize,
+  };
+}
+
+function buildRunWhere(query: AgentRunListQuery) {
+  const clauses: string[] = [];
+  const params: Array<string | number> = [];
+
+  if (query.status?.trim()) {
+    clauses.push('r.status = ?');
+    params.push(query.status.trim());
+  }
+  if (query.sceneKey?.trim()) {
+    clauses.push('r.scene_key = ?');
+    params.push(query.sceneKey.trim());
+  }
+  if (query.conversationKey?.trim()) {
+    clauses.push('r.conversation_key = ?');
+    params.push(query.conversationKey.trim());
+  }
+  if (query.traceId?.trim()) {
+    clauses.push('(r.trace_id = ? OR r.run_id = ?)');
+    params.push(query.traceId.trim(), query.traceId.trim());
+  }
+
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  };
+}
+
+function buildConfirmationWhere(query: AgentConfirmationListQuery) {
+  const clauses: string[] = [];
+  const params: Array<string | number> = [];
+
+  if (query.status?.trim()) {
+    clauses.push('c.status = ?');
+    params.push(query.status.trim());
+  }
+  if (query.runId?.trim()) {
+    clauses.push('c.run_id = ?');
+    params.push(query.runId.trim());
+  }
+
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  };
+}
+
+function mapRunSummary(row: AgentRunRow): AgentRunSummary {
+  const intentFrame = parseJson<IntentFrame | null>(row.intent_frame_json, null);
+  const taskPlan = parseJson<TaskPlan | null>(row.task_plan_json, null);
+  const executionState = parseJson<ExecutionState | null>(row.execution_state_json, null);
+  const evidenceRefs = parseEvidenceRefs(row.evidence_refs_json);
+
+  return {
+    runId: row.run_id,
+    traceId: row.trace_id,
+    eid: row.eid,
+    appId: row.app_id,
+    conversationKey: row.conversation_key,
+    sceneKey: row.scene_key,
+    userInput: row.user_input,
+    status: row.status as AgentExecutionStatus,
+    goal: intentFrame?.goal ?? '-',
+    targetType: intentFrame?.targetType ?? 'unknown',
+    planTitle: taskPlan?.title ?? '-',
+    planKind: taskPlan?.kind ?? 'unknown_clarify',
+    currentStepKey: executionState?.currentStepKey ?? null,
+    toolCallCount: row.tool_call_count ?? 0,
+    failedToolCallCount: row.failed_tool_call_count ?? 0,
+    pendingConfirmationCount: row.pending_confirmation_count ?? 0,
+    evidenceCount: evidenceRefs.length,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapObservedMessage(row: AgentMessageRow): AgentObservedMessage {
+  return {
+    messageId: row.message_id,
+    runId: row.run_id,
+    conversationKey: row.conversation_key,
+    role: row.role,
+    content: row.content,
+    attachments: parseJson(row.attachments_json, []),
+    extraInfo: parseJson(row.extra_info_json, {}),
+    createdAt: row.created_at,
+  };
+}
+
+function mapToolCallRow(row: AgentToolCallRow): AgentToolCall {
+  return {
+    id: row.tool_call_id,
+    runId: row.run_id,
+    toolCode: row.tool_code,
+    status: row.status,
+    inputSummary: row.input_summary,
+    outputSummary: row.output_summary,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    errorMessage: row.error_message,
+  };
+}
+
+function mapConfirmationAuditRow(row: ConfirmationAuditRow): AgentConfirmationAuditRow {
+  return {
+    confirmationId: row.confirmation_id,
+    runId: row.run_id,
+    traceId: row.trace_id ?? '',
+    toolCode: row.tool_code,
+    status: row.status as AgentConfirmationStatus,
+    title: row.title,
+    summary: row.summary,
+    preview: parseJson(row.preview_json, null),
+    requestInput: parseJson(row.request_input_json, {}),
+    createdAt: row.created_at,
+    decidedAt: row.decided_at,
+  };
+}
+
+function fallbackIntentFrame(): IntentFrame {
+  return {
+    actionType: 'clarify',
+    goal: '-',
+    targetType: 'unknown',
+    targets: [],
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: [],
+    confidence: 0,
+    source: 'fallback',
+    fallbackReason: '历史运行记录缺少可解析 IntentFrame',
+  };
+}
+
+function fallbackTaskPlan(): TaskPlan {
+  return {
+    planId: 'unavailable',
+    kind: 'unknown_clarify',
+    title: '历史运行记录缺少可解析 TaskPlan',
+    status: 'failed',
+    steps: [],
+    evidenceRequired: false,
+  };
+}
+
+function fallbackExecutionState(row: AgentRunRow): ExecutionState {
+  return {
+    runId: row.run_id,
+    traceId: row.trace_id,
+    status: row.status as AgentExecutionStatus,
+    currentStepKey: null,
+    message: '历史运行记录缺少可解析 ExecutionState',
+    startedAt: row.created_at,
+    finishedAt: row.updated_at,
+  };
+}
+
+function parseJson<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
   }
 }
 

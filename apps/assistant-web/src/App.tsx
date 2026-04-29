@@ -1,11 +1,9 @@
 import {
   BarsOutlined,
-  BugOutlined,
   CloudUploadOutlined,
   CompassOutlined,
   CopyOutlined,
   CloseOutlined,
-  EllipsisOutlined,
   EyeOutlined,
   FileSearchOutlined,
   GlobalOutlined,
@@ -49,13 +47,11 @@ import {
   Card,
   Divider,
   Drawer,
-  Empty,
   Flex,
   Space,
   Skeleton,
   Input,
   Tag,
-  Tabs,
   Typography,
   message,
 } from 'antd';
@@ -74,6 +70,7 @@ import {
   providerFactory,
 } from './agent-api-provider';
 import { assistantScenes, buildPromptGroups, getSceneByPath, sceneOrder } from './scene-meta';
+import { RunInsightDrawer } from './RunInsightDrawer';
 import { useMarkdownTheme } from './use-markdown-theme';
 import brandLogo from '@shared/assets/logo.png';
 
@@ -83,6 +80,7 @@ const HOME_CONVERSATION_KEY = 'conv-home';
 const CHAT_MESSAGES_STORAGE_KEY = 'yzj-ai-crm.assistant.messages.v2';
 const ACTIVE_CONVERSATION_STORAGE_KEY = 'yzj-ai-crm.assistant.activeConversation.v2';
 const CHAT_CONVERSATIONS_STORAGE_KEY = 'yzj-ai-crm.assistant.conversations.v2';
+const ADMIN_BASE_URL = import.meta.env.VITE_ADMIN_BASE_URL?.trim() || 'http://127.0.0.1:8000';
 const LEGACY_CHAT_STORAGE_KEYS = [
   'yzj-ai-crm.assistant.messages.v1',
   'yzj-ai-crm.assistant.activeConversation.v1',
@@ -124,7 +122,7 @@ const slashCommands = [
   {
     key: 'plan',
     command: '/计划',
-    description: '基于录音、纪要或自然语言目标生成可裁剪 Plan',
+    description: '基于录音、纪要或自然语言目标生成可裁剪计划',
     icon: <CompassOutlined />,
     route: '/chat',
     draft: '/计划 ',
@@ -180,7 +178,7 @@ const slashCommands = [
   {
     key: 'tasks',
     command: '/我的任务',
-    description: '查看任务、资产、trace 和待确认写回',
+    description: '查看任务、资产、追踪和待确认写回',
     icon: <BarsOutlined />,
     route: '/chat/tasks',
     draft: '/我的任务',
@@ -776,21 +774,11 @@ const useStyles = createStyles(({ token, css }) => ({
     border-radius: 18px;
     box-shadow: 0 16px 48px rgba(15, 23, 42, 0.08);
   `,
-  drawerCard: css`
-    border-radius: 16px;
-    box-shadow: none;
-    margin-bottom: 12px;
-  `,
-  tagWrap: css`
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  `,
 }));
 
 const statusConfig = {
-  loading: { title: 'Main Agent 正在编排', status: 'loading' },
-  updating: { title: 'Main Agent 正在编排', status: 'loading' },
+  loading: { title: '主智能体正在编排', status: 'loading' },
+  updating: { title: '主智能体正在编排', status: 'loading' },
   success: { title: '任务执行完成', status: 'success' },
   error: { title: '任务执行失败', status: 'error' },
   abort: { title: '任务已中止', status: 'abort' },
@@ -1168,7 +1156,7 @@ function RecordWritePreviewPanel({
           ))}
         </div>
       ) : (
-        <Text type="secondary">暂无可展示字段摘要，请查看调试区。</Text>
+        <Text type="secondary">暂无可展示字段摘要，请查看运行洞察。</Text>
       )}
       {recommendedRows.length ? (
         <div style={{ marginTop: 12 }}>
@@ -1559,7 +1547,7 @@ function buildThoughtItems(info: any): ThoughtChainItemType[] {
     {
       key: 'intent',
       title: '理解用户目标',
-      description: '将输入提交到真实 Agent API，等待后端生成 IntentFrame',
+      description: '将输入提交到真实智能体接口，等待后端生成意图帧',
       status: isRunning ? 'success' : undefined,
     },
     {
@@ -1594,7 +1582,7 @@ function AgentThinkingPanel({
   return (
     <div className={styles.thinkingPanel}>
       <Think
-        title={running ? 'Agent 正在处理' : '思考完成'}
+        title={running ? '智能体正在处理' : '思考完成'}
         loading={running}
         defaultExpanded
         blink={running}
@@ -1739,7 +1727,7 @@ function getSceneSourceTags(sceneKey: string) {
     return ['客户诉求', '候选方案', '匹配案例', '推进建议'];
   }
   if (sceneKey === 'tasks') {
-    return ['traceId', 'taskId', '资产结果', '写回状态'];
+    return ['追踪编号', '任务编号', '资产结果', '写回状态'];
   }
   return ['slash 命令', '计划模板', 'shadow.* 对象能力', 'ext.* 外部技能'];
 }
@@ -1877,256 +1865,6 @@ function buildRole(
   };
 }
 
-function SceneDebugDrawer({
-  open,
-  onClose,
-  scene,
-  agentTrace,
-}: {
-  open: boolean;
-  onClose: () => void;
-  scene: ReturnType<typeof getSceneByPath>;
-  agentTrace?: NonNullable<AssistantChatMessage['extraInfo']>['agentTrace'];
-}) {
-  const { styles } = useStyles();
-  const liveIntentFrame = agentTrace?.intentFrame;
-  const liveTaskPlan = agentTrace?.taskPlan;
-  const liveExecutionState = agentTrace?.executionState;
-  const liveToolCalls = agentTrace?.toolCalls ?? [];
-  const planSteps = Array.isArray(liveTaskPlan?.steps) ? liveTaskPlan.steps : [];
-  const hasTrace = Boolean(agentTrace);
-  const renderJson = (value: unknown) => (
-    <Paragraph
-      copyable
-      style={{
-        marginBottom: 0,
-        maxHeight: 260,
-        overflow: 'auto',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-      }}
-    >
-      {JSON.stringify(value, null, 2)}
-    </Paragraph>
-  );
-  const renderEmpty = (description: string) => (
-    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={description} />
-  );
-
-  return (
-    <Drawer
-      title="调试区 / 上下文"
-      size={440}
-      open={open}
-      onClose={onClose}
-      destroyOnClose={false}
-    >
-      <Tabs
-        items={[
-          {
-            key: 'context',
-            label: '当前上下文',
-            children: (
-              <>
-                <Card className={styles.drawerCard} title="当前场景">
-                  <Space orientation="vertical" size={8}>
-                    <Space wrap>
-                      <Text strong>{scene.title}</Text>
-                      {scene.key !== 'chat' ? (
-                        <Tag color="purple">命中 {getSceneSlashCommand(scene.key)}</Tag>
-                      ) : (
-                        <Tag color="blue">slash 命令已启用</Tag>
-                      )}
-                    </Space>
-                    <Text type="secondary">{scene.subtitle}</Text>
-                    <Paragraph style={{ marginBottom: 0 }}>{scene.description}</Paragraph>
-                  </Space>
-                </Card>
-                <Card className={styles.drawerCard} title="租户上下文">
-                  <Space orientation="vertical" size={8}>
-                    <Text strong>{runtimeTenantContext.tenantName}</Text>
-                    <Text type="secondary">eid: {runtimeTenantContext.eidLabel}</Text>
-                    <Text type="secondary">appId: {runtimeTenantContext.appIdLabel}</Text>
-                  </Space>
-                </Card>
-                <Card className={styles.drawerCard} title="多源输入命中">
-                  <div className={styles.tagWrap}>
-                    {getSceneSourceTags(scene.key).map((item) => (
-                      <Tag key={item} color="blue">
-                        {item}
-                      </Tag>
-                    ))}
-                  </div>
-                </Card>
-              </>
-            ),
-          },
-          {
-            key: 'plan',
-            label: 'Plan',
-            children: (
-              <>
-                <Card className={styles.drawerCard} title="真实任务计划">
-                  {planSteps.length ? (
-                    <ThoughtChain
-                      line="dashed"
-                      items={planSteps.map((step: any, index: number) => ({
-                        key: step.key ?? `step-${index}`,
-                        title: step.title ?? `步骤 ${index + 1}`,
-                        description: Array.isArray(step.toolRefs)
-                          ? step.toolRefs.join(' / ')
-                          : step.status,
-                        status: mapPlanStepStatus(step.status),
-                        blink: step.status === 'running',
-                      }))}
-                    />
-                  ) : hasTrace ? (
-                    renderJson(liveTaskPlan)
-                  ) : (
-                    renderEmpty('暂无真实 Agent Plan。发送请求并等待后端返回 trace 后展示。')
-                  )}
-                </Card>
-                <Card className={styles.drawerCard} title="IntentFrame">
-                  {liveIntentFrame ? (
-                    renderJson(liveIntentFrame)
-                  ) : (
-                    renderEmpty('暂无真实 IntentFrame。')
-                  )}
-                </Card>
-              </>
-            ),
-          },
-          {
-            key: 'assets',
-            label: '任务 / 资产',
-            children: (
-              <>
-                <Card className={styles.drawerCard} title="相关任务">
-                  {renderEmpty('暂无真实任务数据。后续接入 Agent run 列表后展示。')}
-                </Card>
-                <Card className={styles.drawerCard} title="相关资产">
-                  {renderEmpty('暂无真实资产列表。当前可在助手回复的证据卡中查看 Artifact。')}
-                </Card>
-              </>
-            ),
-          },
-          {
-            key: 'trace',
-            label: 'Trace / 引用',
-            children: (
-              <>
-                <Card className={styles.drawerCard} title="Trace 链路">
-                  {agentTrace ? (
-                    <Space orientation="vertical" size={10} style={{ width: '100%' }}>
-                      <Space wrap>
-                        <Text strong>{agentTrace.traceId}</Text>
-                        {liveExecutionState?.status ? (
-                          <Tag
-                            color={
-                              liveExecutionState.status === 'completed'
-                                ? 'success'
-                                : liveExecutionState.status === 'failed'
-                                  || liveExecutionState.status === 'tool_unavailable'
-                                  ? 'error'
-                                  : 'processing'
-                            }
-                          >
-                            {liveExecutionState.status}
-                          </Tag>
-                        ) : null}
-                      </Space>
-                      {liveExecutionState ? renderJson(liveExecutionState) : null}
-                    </Space>
-                  ) : (
-                    renderEmpty('暂无真实 Agent trace。')
-                  )}
-                </Card>
-                <Card className={styles.drawerCard} title="待确认写回">
-                  {agentTrace?.pendingConfirmation ? (
-                    renderJson(agentTrace.pendingConfirmation)
-                  ) : (
-                    renderEmpty('暂无待确认写回。')
-                  )}
-                </Card>
-                <Card className={styles.drawerCard} title="等待态 / 承接">
-                  {agentTrace?.pendingInteraction || agentTrace?.continuationResolution ? (
-                    renderJson({
-                      pendingInteraction: agentTrace.pendingInteraction,
-                      continuationResolution: agentTrace.continuationResolution,
-                    })
-                  ) : (
-                    renderEmpty('暂无等待态或承接记录。')
-                  )}
-                </Card>
-                <Card className={styles.drawerCard} title="工具语义仲裁">
-                  {agentTrace?.toolArbitration ? (
-                    renderJson(agentTrace.toolArbitration)
-                  ) : (
-                    renderEmpty('暂无工具语义仲裁记录。')
-                  )}
-                </Card>
-                <Card className={styles.drawerCard} title="工具调用">
-                  {liveToolCalls.length ? (
-                    <Space orientation="vertical" size={10} style={{ width: '100%' }}>
-                      {liveToolCalls.map((item: any, index: number) => (
-                        <Card
-                          key={item.id ?? `${item.toolCode}-${index}`}
-                          size="small"
-                          title={
-                            <Space wrap>
-                              <Text strong>{item.toolCode}</Text>
-                              <Tag
-                                color={
-                                  item.status === 'succeeded'
-                                    ? 'success'
-                                    : item.status === 'failed'
-                                      ? 'error'
-                                      : 'processing'
-                                }
-                              >
-                                {item.status}
-                              </Tag>
-                            </Space>
-                          }
-                        >
-                          <Space orientation="vertical" size={4} style={{ width: '100%' }}>
-                            {item.inputSummary ? (
-                              <Text type="secondary">输入：{item.inputSummary}</Text>
-                            ) : null}
-                            {item.outputSummary ? <Text>输出：{item.outputSummary}</Text> : null}
-                            {item.errorMessage ? (
-                              <Alert type="error" showIcon message={item.errorMessage} />
-                            ) : null}
-                            {item.errorDetails ? (
-                              <div>
-                                <Text type="secondary">错误详情：</Text>
-                                {renderJson(item.errorDetails)}
-                              </div>
-                            ) : null}
-                          </Space>
-                        </Card>
-                      ))}
-                    </Space>
-                  ) : (
-                    renderEmpty('暂无真实工具调用。')
-                  )}
-                </Card>
-                <Card className={styles.drawerCard} title="Qdrant / 引用过滤">
-                  {agentTrace?.qdrantFilter ? (
-                    renderJson(agentTrace.qdrantFilter)
-                  ) : (
-                    renderEmpty('暂无真实检索过滤信息。')
-                  )}
-                </Card>
-              </>
-            ),
-          },
-        ]}
-      />
-    </Drawer>
-  );
-}
-
 function ArtifactMarkdownDrawer({
   state,
   markdownClassName,
@@ -2234,7 +1972,7 @@ function AssistantWorkspace() {
   const [inputValue, setInputValue] = useState('');
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<GetProp<typeof Attachments, 'items'>>([]);
-  const [debugOpen, setDebugOpen] = useState(false);
+  const [runInsightOpen, setRunInsightOpen] = useState(false);
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [artifactViewer, setArtifactViewer] = useState<ArtifactViewerState>({
     open: false,
@@ -2259,7 +1997,7 @@ function AssistantWorkspace() {
       label: 'AI 销售工作台',
       route: '/chat',
       group: '固定会话',
-      lastMessage: '从这里描述目标生成 Plan，或按销售主链路逐步推进。',
+      lastMessage: '从这里描述目标生成计划，或按销售主链路逐步推进。',
       updatedAt: '刚刚',
       scene: 'chat',
     }),
@@ -2380,11 +2118,11 @@ function AssistantWorkspace() {
         return {
           role: 'assistant',
           content:
-            'Agent 正在处理请求。复杂研究、检索和资产生成可能需要几十秒到数分钟；本页只展示真实接口返回的结果，不生成本地替代答案。',
+            '智能体正在处理请求。复杂研究、检索和资产生成可能需要几十秒到数分钟；本页只展示真实接口返回的结果，不生成本地替代答案。',
           extraInfo: {
             feedback: 'default',
             sceneKey,
-            headline: 'Agent 正在执行，请稍候',
+            headline: '智能体正在执行，请稍候',
             references: ['POST /api/agent/chat'],
           },
         };
@@ -2399,16 +2137,16 @@ function AssistantWorkspace() {
 
         return {
           role: 'assistant',
-          content: `## Agent API 当前不可用
+          content: `## 智能体接口当前不可用
 
-本次没有生成本地替代结果。请确认 \`admin-api\` 与相关 Skill Runtime 已启动后重试，或到管理员后台检查 Agent trace / 服务健康。
+本次没有生成本地替代结果。请确认 \`admin-api\` 与相关技能运行时已启动后重试，或到管理员后台检查智能体追踪 / 服务健康。
 
 - 请求入口：\`POST /api/agent/chat\`
 - 错误信息：${error instanceof Error ? error.message : '未知错误'}`,
           extraInfo: {
             feedback: 'default',
             sceneKey: scene.key,
-            headline: 'Agent API 请求失败',
+            headline: '智能体接口请求失败',
             references: ['POST /api/agent/chat', 'admin-api', 'skill-runtime'],
           },
         };
@@ -2417,10 +2155,11 @@ function AssistantWorkspace() {
 
   const messageList = messages ?? [];
   const displayMessageList = isActiveConversationBlank ? [] : messageList;
-  const latestAgentTrace = [...displayMessageList]
+  const latestAgentMessage = [...displayMessageList]
     .reverse()
-    .find((item) => item.message.role === 'assistant' && item.message.extraInfo?.agentTrace)
-    ?.message.extraInfo?.agentTrace;
+    .find((item) => item.message.role === 'assistant' && item.message.extraInfo?.agentTrace);
+  const latestAgentTrace = latestAgentMessage?.message.extraInfo?.agentTrace;
+  const latestEvidence = latestAgentMessage?.message.extraInfo?.evidence ?? [];
   const safeScrollToBottom = React.useCallback(() => {
     const bubbleList = listRef.current;
     if (!bubbleList?.scrollBoxNativeElement) {
@@ -2642,7 +2381,7 @@ function AssistantWorkspace() {
   const navigateToScene = React.useCallback((route: string) => {
     setActiveConversationKey(getConversationKeyByRoute(route));
     navigate(route);
-    setDebugOpen(false);
+    setRunInsightOpen(false);
   }, [getConversationKeyByRoute, navigate, setActiveConversationKey]);
 
   const clearSelectedComposerCommand = React.useCallback(() => {
@@ -2843,7 +2582,7 @@ function AssistantWorkspace() {
     setAttachmentsOpen(false);
     setSlashMenuOpen(false);
     setSelectedComposerCommand(null);
-    setDebugOpen(false);
+    setRunInsightOpen(false);
     navigate('/chat');
   };
 
@@ -2909,7 +2648,7 @@ function AssistantWorkspace() {
         icon={<ShareAltOutlined />}
         onClick={() => messageApi.info('分享功能原型暂未开放。')}
       />
-      <Button icon={<EllipsisOutlined />} onClick={() => setDebugOpen(true)} />
+      <Button icon={<EyeOutlined />} onClick={() => setRunInsightOpen(true)} />
     </Space>
   );
 
@@ -3082,21 +2821,26 @@ function AssistantWorkspace() {
               )}
               <Button
                 type="text"
-                icon={<BugOutlined />}
-                onClick={() => setDebugOpen(true)}
+                icon={<EyeOutlined />}
+                onClick={() => setRunInsightOpen(true)}
               >
-                调试区
+                运行洞察
               </Button>
             </div>
             {chatList}
             {chatSender}
           </div>
         </div>
-        <SceneDebugDrawer
-          open={debugOpen}
-          onClose={() => setDebugOpen(false)}
+        <RunInsightDrawer
+          open={runInsightOpen}
+          onClose={() => setRunInsightOpen(false)}
           scene={scene}
+          sourceTags={getSceneSourceTags(scene.key)}
+          slashCommand={scene.key === 'chat' ? 'slash 命令入口' : getSceneSlashCommand(scene.key)}
+          tenantContext={runtimeTenantContext}
           agentTrace={latestAgentTrace}
+          evidence={latestEvidence}
+          adminBaseUrl={ADMIN_BASE_URL}
         />
         <ArtifactMarkdownDrawer
           state={artifactViewer}

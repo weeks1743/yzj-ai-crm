@@ -10,6 +10,8 @@ import * as XLSX from 'xlsx';
 import { ApprovalFileClient } from '../src/approval-file-client.js';
 import { ApprovalFileService } from '../src/approval-file-service.js';
 import { ApprovalClient } from '../src/approval-client.js';
+import { AgentObservabilityService } from '../src/agent-observability-service.js';
+import { AgentRunRepository } from '../src/agent-run-repository.js';
 import { createAdminApiServer } from '../src/app.js';
 import { DictionaryResolver } from '../src/dictionary-resolver.js';
 import { ExternalSkillService } from '../src/external-skill-service.js';
@@ -1555,6 +1557,7 @@ async function createTestServer(options: {
   });
   const database = createInMemoryDatabase();
   const orgSyncRepository = new OrgSyncRepository(database);
+  const agentRunRepository = new AgentRunRepository(database);
   const shadowRepository = new ShadowMetadataRepository(database);
   const approvalClient = new StubApprovalClient();
   const orgSyncService = new OrgSyncService({
@@ -1669,6 +1672,7 @@ async function createTestServer(options: {
     orgSyncService,
     approvalFileService: new StubApprovalFileService(),
     shadowMetadataService,
+    agentObservabilityService: new AgentObservabilityService(agentRunRepository),
     externalSkillService: new ExternalSkillService({
       config,
       fetchImpl: combinedFetchImpl,
@@ -1695,6 +1699,20 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     const tenantPayload = (await tenantResponse.json()) as { eid: string; appId: string };
     assert.equal(tenantPayload.eid, '21024647');
     assert.equal(tenantPayload.appId, '501037729');
+
+    const runsResponse = await fetch(`${runtime.baseUrl}/api/agent/runs`);
+    assert.equal(runsResponse.status, 200);
+    const runsPayload = (await runsResponse.json()) as { total: number; items: unknown[] };
+    assert.equal(runsPayload.total, 0);
+    assert.deepEqual(runsPayload.items, []);
+
+    const confirmationsResponse = await fetch(`${runtime.baseUrl}/api/agent/confirmations`);
+    assert.equal(confirmationsResponse.status, 200);
+    const confirmationsPayload = (await confirmationsResponse.json()) as { total: number; items: unknown[] };
+    assert.equal(confirmationsPayload.total, 0);
+
+    const missingRunResponse = await fetch(`${runtime.baseUrl}/api/agent/runs/missing-run`);
+    assert.equal(missingRunResponse.status, 404);
 
     const authResponse = await fetch(`${runtime.baseUrl}/api/settings/yzj-auth`);
     const authPayload = (await authResponse.json()) as {

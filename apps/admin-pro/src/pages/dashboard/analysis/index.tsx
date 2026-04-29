@@ -29,8 +29,8 @@ type TrendRow = {
 type TraceRow = (typeof traceLogs)[number];
 
 const traceColumns: ProColumns<TraceRow>[] = [
-  { title: '追踪ID', dataIndex: 'traceId', width: 180, copyable: true },
-  { title: '任务ID', dataIndex: 'taskId', width: 140, copyable: true },
+  { title: '追踪编号', dataIndex: 'traceId', width: 180, copyable: true },
+  { title: '任务编号', dataIndex: 'taskId', width: 140, copyable: true },
   { title: '场景', dataIndex: 'scene', width: 160 },
   {
     title: '状态',

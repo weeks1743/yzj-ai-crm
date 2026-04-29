@@ -744,6 +744,148 @@ export interface AgentRuntimeTrace {
   timestamp: string;
 }
 
+export type AgentExecutionStatus =
+  | 'draft'
+  | 'running'
+  | 'waiting_input'
+  | 'waiting_selection'
+  | 'waiting_confirmation'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'tool_unavailable';
+export type AgentTargetType =
+  | 'company'
+  | 'customer'
+  | 'opportunity'
+  | 'contact'
+  | 'followup'
+  | 'artifact'
+  | 'unknown';
+export type AgentTaskPlanKind =
+  | 'tool_execution'
+  | 'tool_confirmation'
+  | 'tool_clarify'
+  | 'company_research'
+  | 'artifact_search'
+  | 'audio_not_supported'
+  | 'unknown_clarify';
+export type AgentToolCallStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
+export type AgentConfirmationStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+export interface AgentObservedAttachment {
+  name: string;
+  url: string;
+  type: string;
+  size?: number;
+}
+
+export interface AgentObservedContextSubject {
+  kind: string;
+  type?: string;
+  id?: string;
+  name?: string;
+}
+
+export interface AgentObservedEvidenceCard {
+  artifactId: string;
+  versionId: string;
+  title: string;
+  version: number;
+  sourceToolCode: string;
+  anchorLabel: string;
+  snippet: string;
+  score?: number;
+  vectorStatus?: string;
+}
+
+export interface AgentObservedToolCall {
+  id: string;
+  runId: string;
+  toolCode: string;
+  status: AgentToolCallStatus;
+  inputSummary: string;
+  outputSummary: string;
+  startedAt: string;
+  finishedAt: string | null;
+  errorMessage: string | null;
+  errorDetails?: unknown;
+}
+
+export interface AgentObservedMessage {
+  messageId: string;
+  runId: string;
+  conversationKey: string;
+  role: string;
+  content: string;
+  attachments: AgentObservedAttachment[];
+  extraInfo: unknown;
+  createdAt: string;
+}
+
+export interface AgentRunSummary {
+  runId: string;
+  traceId: string;
+  eid: string;
+  appId: string;
+  conversationKey: string;
+  sceneKey: string;
+  userInput: string;
+  status: AgentExecutionStatus;
+  goal: string;
+  targetType: AgentTargetType;
+  planTitle: string;
+  planKind: AgentTaskPlanKind;
+  currentStepKey: string | null;
+  toolCallCount: number;
+  failedToolCallCount: number;
+  pendingConfirmationCount: number;
+  evidenceCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentConfirmationAuditRow {
+  confirmationId: string;
+  runId: string;
+  traceId: string;
+  toolCode: string;
+  status: AgentConfirmationStatus;
+  title: string;
+  summary: string;
+  preview: unknown;
+  requestInput: Record<string, unknown>;
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+export interface AgentRunListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: AgentRunSummary[];
+}
+
+export interface AgentRunDetailResponse {
+  run: AgentRunSummary;
+  intentFrame: unknown;
+  taskPlan: unknown;
+  executionState: unknown;
+  contextSubject: AgentObservedContextSubject | null;
+  evidenceRefs: AgentObservedEvidenceCard[];
+  messages: AgentObservedMessage[];
+  toolCalls: AgentObservedToolCall[];
+  confirmations: AgentConfirmationAuditRow[];
+}
+
+export interface AgentConfirmationListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: AgentConfirmationAuditRow[];
+}
+
 export interface SettingField {
   name: string;
   label: string;
