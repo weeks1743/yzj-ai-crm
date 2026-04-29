@@ -1841,6 +1841,7 @@ test('ShadowMetadataService refreshes customer metadata and upgrades resolved di
     assert.deepEqual(widgetValue.Pw_1, [{ title: '杭州', dicId: 'd-city-hz' }]);
     assert.deepEqual(widgetValue.Pw_2, [{ title: '滨江', dicId: 'd-district-bj' }]);
     assert.deepEqual(widgetValue.Ps_1, ['open-1']);
+    assert.equal(widgetValue._S_DISABLE, '1');
     assert.equal(widgetValue.Ra_3, 'EeFfGgHh');
     assert.equal(widgetValue.Da_0, Date.parse('2026-04-23'));
     assert.deepEqual(widgetValue.Bd_1, [

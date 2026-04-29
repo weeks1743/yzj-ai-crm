@@ -11,6 +11,7 @@ import type {
   IntentFrame,
   TaskPlan,
 } from './contracts.js';
+import { buildErrorDebugInfo } from './errors.js';
 
 export type AgentToolType = 'record' | 'external' | 'meta' | 'artifact';
 export type AgentRiskLevel = 'low' | 'medium' | 'high';
@@ -65,6 +66,17 @@ export interface ContextFrame {
   resolvedBy: string;
 }
 
+export interface ContextReferenceCandidate {
+  candidateId: string;
+  subject: ContextFrameSubject;
+  sourceRunId?: string;
+  evidenceRefs: EvidenceRef[];
+  text: string;
+  recencyRank: number;
+  confidence: number;
+  source: 'context_subject' | 'intent_frame' | 'evidence' | 'artifact_anchor' | 'pending_interaction';
+}
+
 export interface ReferenceResolution {
   usedContext: boolean;
   reason: string;
@@ -73,12 +85,39 @@ export interface ReferenceResolution {
   evidenceRefs: EvidenceRef[];
 }
 
+export interface SemanticResolutionCandidate extends ContextReferenceCandidate {
+  score: number;
+  scoreLabel: 'embedding' | 'recency' | 'direct_match' | 'compatibility';
+  reasons: string[];
+}
+
+export interface SemanticReferenceResolution {
+  usedSemantic: boolean;
+  shouldClarify: boolean;
+  reason: string;
+  selectedCandidate?: SemanticResolutionCandidate;
+  candidates: SemanticResolutionCandidate[];
+  threshold: number;
+  margin: number;
+  embeddingProvider: string;
+  targetWasOverridden: boolean;
+}
+
 export interface RecordToolCapability {
   subjectBinding?: {
     acceptedSubjectTypes?: string[];
     required?: boolean;
+    searchFilterField?: string;
+    searchValueSource?: 'subject_id' | 'subject_name';
+    identityFromSubject?: boolean;
   };
   identityFields?: string[];
+  fieldLabels?: Record<string, string>;
+  fieldDisplayOrder?: string[];
+  requiredFieldRefs?: string[];
+  derivedFieldRefs?: string[];
+  recommendedFieldRefs?: string[];
+  debugVisibility?: 'hidden' | 'trace' | 'content';
   duplicateCheckPolicy?: {
     enabled: boolean;
     searchToolCode?: string;
@@ -88,6 +127,146 @@ export interface RecordToolCapability {
     subjectNameParam?: string;
     writableParams?: string[];
   };
+}
+
+export type ToolSemanticRisk = 'low_cost' | 'medium_cost' | 'high_cost' | 'write';
+
+export interface ToolSemanticProfile {
+  subjectTypes?: string[];
+  intentCodes?: string[];
+  conflictGroups?: string[];
+  priority?: number;
+  risk?: ToolSemanticRisk;
+  clarifyLabel?: string;
+  aliases?: string[];
+  readOnlyProbe?: boolean;
+}
+
+export interface ToolArbitrationCandidateTrace {
+  toolCode: string;
+  type: AgentToolType;
+  provider: string;
+  priority: number;
+  risk?: ToolSemanticRisk;
+  clarifyLabel?: string;
+  readOnlyProbe: boolean;
+}
+
+export interface ToolArbitrationTrace {
+  usedArbitration: boolean;
+  ruleCode: string;
+  conflictGroup: string;
+  intentCode: string;
+  subjectType?: string;
+  subjectName?: string;
+  action: 'direct_tool' | 'read_only_probe' | 'clarify';
+  selectedToolCode?: string;
+  probeToolCode?: string;
+  candidateTools: ToolArbitrationCandidateTrace[];
+  reason: string;
+  probeResult?: {
+    status: 'not_run' | 'matched' | 'not_matched' | 'failed';
+    count?: number;
+    summary?: string;
+  };
+}
+
+export interface ToolArbitrationProbeControl {
+  enabled?: boolean;
+  ruleCode: string;
+  conflictGroup: string;
+  subjectType?: string;
+  subjectName?: string;
+  intentCode?: string;
+  query?: string;
+  probeToolCode?: string;
+  candidateToolCodes?: string[];
+}
+
+export type RecordWritePreviewRowSource = 'input' | 'evidence' | 'derived' | 'tool' | 'system';
+export type MetaQuestionType = 'text' | 'phone' | 'single_select' | 'multi_select' | 'date' | 'reference';
+
+export interface FieldOptionHint {
+  label: string;
+  value: string | number | boolean;
+  key?: string;
+  source?: 'field_option' | 'dictionary' | 'widget';
+}
+
+export interface RecordWritePreviewRow {
+  label: string;
+  value?: string;
+  paramKey?: string;
+  reason?: string;
+  source?: RecordWritePreviewRowSource;
+  options?: FieldOptionHint[];
+}
+
+export interface RecordWritePreviewView {
+  title: string;
+  summaryRows: RecordWritePreviewRow[];
+  missingRequiredRows?: RecordWritePreviewRow[];
+  blockedRows?: RecordWritePreviewRow[];
+  recommendedRows?: RecordWritePreviewRow[];
+}
+
+export interface MetaQuestion {
+  questionId: string;
+  paramKey: string;
+  label: string;
+  type: MetaQuestionType;
+  required: boolean;
+  placeholder?: string;
+  currentValue?: string | number | boolean | string[];
+  options?: FieldOptionHint[];
+  reason?: string;
+}
+
+export interface MetaQuestionCard {
+  title: string;
+  description?: string;
+  toolCode: string;
+  submitLabel: string;
+  currentValues: Record<string, {
+    label: string;
+    value?: string;
+  }>;
+  questions: MetaQuestion[];
+}
+
+export type PendingInteractionKind = 'input_required' | 'candidate_selection' | 'confirmation';
+
+export interface PendingInteraction {
+  interactionId: string;
+  kind: PendingInteractionKind;
+  runId: string;
+  toolCode?: string;
+  status: 'pending' | 'resolved' | 'cancelled';
+  title: string;
+  summary: string;
+  partialInput?: Record<string, unknown>;
+  missingRows?: RecordWritePreviewRow[];
+  blockedRows?: RecordWritePreviewRow[];
+  recommendedRows?: RecordWritePreviewRow[];
+  questionCard?: MetaQuestionCard;
+  contextSubject?: ContextFrameSubject;
+  createdAt: string;
+}
+
+export interface ContinuationResolution {
+  usedContinuation: boolean;
+  action:
+    | 'resume_pending_interaction'
+    | 'start_new_task'
+    | 'confirm_writeback'
+    | 'reject_writeback'
+    | 'select_candidate'
+    | 'route_tool'
+    | 'none';
+  reason: string;
+  sourceInteractionId?: string;
+  toolCode?: string;
+  mergedInput?: Record<string, unknown>;
 }
 
 export interface AgentToolDefinition {
@@ -104,6 +283,7 @@ export interface AgentToolDefinition {
   owner: string;
   enabled: boolean;
   recordCapability?: RecordToolCapability;
+  semanticProfile?: ToolSemanticProfile;
   execute(input: AgentToolExecuteInput, context: AgentToolExecuteContext): Promise<AgentToolExecutionResult>;
 }
 
@@ -150,18 +330,66 @@ export interface ConfirmationRequest {
   title: string;
   summary: string;
   preview: unknown;
+  userPreview?: RecordWritePreviewView;
+  debugPayload?: unknown;
   requestInput: Record<string, unknown>;
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   createdAt: string;
   decidedAt: string | null;
 }
 
-export interface AgentResumeDecision {
+export interface AgentConfirmWritebackResumeDecision {
   runId: string;
   action: 'confirm_writeback';
   decision: 'approve' | 'reject';
   confirmationId?: string;
 }
+
+export interface AgentProvideInputResumeDecision {
+  runId: string;
+  action: 'provide_input';
+  interactionId: string;
+  query: string;
+  answers?: Record<string, unknown>;
+  mergedInput: Record<string, unknown>;
+  reason: string;
+}
+
+export interface AgentStartNewTaskResumeDecision {
+  runId: string;
+  action: 'start_new_task';
+  interactionId?: string;
+  query: string;
+  reason: string;
+}
+
+export interface AgentCandidateSelectionResumeDecision {
+  runId: string;
+  action: 'select_candidate';
+  interactionId: string;
+  query: string;
+  decision: 'update_existing' | 'create_new';
+  toolCode: string;
+  mergedInput: Record<string, unknown>;
+  reason: string;
+}
+
+export interface AgentRouteToolResumeDecision {
+  runId: string;
+  action: 'route_tool';
+  interactionId: string;
+  query: string;
+  toolCode: string;
+  mergedInput: Record<string, unknown>;
+  reason: string;
+}
+
+export type AgentResumeDecision =
+  | AgentConfirmWritebackResumeDecision
+  | AgentProvideInputResumeDecision
+  | AgentStartNewTaskResumeDecision
+  | AgentCandidateSelectionResumeDecision
+  | AgentRouteToolResumeDecision;
 
 export interface AgentToolExecutionResult {
   status: AgentExecutionStatus;
@@ -173,7 +401,10 @@ export interface AgentToolExecutionResult {
   attachments?: AgentAttachment[];
   toolCalls: AgentToolCall[];
   qdrantFilter?: unknown;
+  contextFrame?: ContextFrame | null;
   pendingConfirmation?: ConfirmationRequest | null;
+  pendingInteraction?: PendingInteraction | null;
+  toolArbitration?: ToolArbitrationTrace | null;
   policyDecisions?: PolicyDecision[];
   taskPlan?: TaskPlan;
 }
@@ -190,9 +421,14 @@ export interface AgentRuntimeOutput {
   references: string[];
   attachments: AgentAttachment[];
   qdrantFilter?: unknown;
+  contextFrame?: ContextFrame | null;
   selectedTool?: AgentToolSelection;
   pendingConfirmation?: ConfirmationRequest | null;
+  pendingInteraction?: PendingInteraction | null;
+  continuationResolution?: ContinuationResolution | null;
   resolvedContext?: ReferenceResolution | null;
+  semanticResolution?: SemanticReferenceResolution | null;
+  toolArbitration?: ToolArbitrationTrace | null;
   policyDecisions: PolicyDecision[];
 }
 
@@ -203,11 +439,13 @@ export interface AgentPlannerInput {
   focusedName?: string | null;
   contextFrame?: ContextFrame | null;
   resolvedContext?: ReferenceResolution | null;
+  semanticResolution?: SemanticReferenceResolution | null;
 }
 
 export interface AgentPlannerResult {
   taskPlan: TaskPlan;
   selectedTool: AgentToolSelection | null;
+  toolArbitration?: ToolArbitrationTrace | null;
   policyDecisions?: PolicyDecision[];
 }
 
@@ -251,6 +489,9 @@ export function finishToolCall(
   toolCall.outputSummary = outputSummary;
   toolCall.finishedAt = status === 'running' ? null : new Date().toISOString();
   toolCall.errorMessage = error ? (error instanceof Error ? error.message : String(error)) : null;
+  if (error) {
+    toolCall.errorDetails = buildErrorDebugInfo(error);
+  }
   return toolCall;
 }
 

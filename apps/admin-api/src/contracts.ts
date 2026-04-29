@@ -334,6 +334,7 @@ export interface AgentToolCall {
   startedAt: string;
   finishedAt: string | null;
   errorMessage: string | null;
+  errorDetails?: unknown;
 }
 
 export interface AgentChatRequest {
@@ -346,12 +347,63 @@ export interface AgentChatRequest {
     appId?: string;
     operatorOpenId?: string;
   };
-  resume?: {
-    runId: string;
-    action: 'confirm_writeback';
-    decision: 'approve' | 'reject';
-    confirmationId?: string;
-  };
+  resume?: AgentChatResumeRequest;
+}
+
+export type AgentChatResumeRequest =
+  | {
+      runId: string;
+      action: 'confirm_writeback';
+      decision: 'approve' | 'reject';
+      confirmationId?: string;
+    }
+  | {
+      runId: string;
+      action: 'provide_input';
+      interactionId: string;
+      answers: Record<string, unknown>;
+    };
+
+export type AgentMetaQuestionType = 'text' | 'phone' | 'single_select' | 'multi_select' | 'date' | 'reference';
+
+export interface AgentFieldOptionHint {
+  label: string;
+  value: string | number | boolean;
+  key?: string;
+  source?: 'field_option' | 'dictionary' | 'widget';
+}
+
+export interface AgentRecordWritePreviewRow {
+  label: string;
+  value?: string;
+  paramKey?: string;
+  reason?: string;
+  source?: 'input' | 'evidence' | 'derived' | 'tool' | 'system';
+  options?: AgentFieldOptionHint[];
+}
+
+export interface AgentMetaQuestion {
+  questionId: string;
+  paramKey: string;
+  label: string;
+  type: AgentMetaQuestionType;
+  required: boolean;
+  placeholder?: string;
+  currentValue?: string | number | boolean | string[];
+  options?: AgentFieldOptionHint[];
+  reason?: string;
+}
+
+export interface AgentMetaQuestionCard {
+  title: string;
+  description?: string;
+  toolCode: string;
+  submitLabel: string;
+  currentValues: Record<string, {
+    label: string;
+    value?: string;
+  }>;
+  questions: AgentMetaQuestion[];
 }
 
 export interface AgentEvidenceCard {
@@ -396,10 +448,54 @@ export interface AgentChatMessage {
         title: string;
         summary: string;
         preview: unknown;
+        userPreview?: {
+          title: string;
+          summaryRows: AgentRecordWritePreviewRow[];
+          missingRequiredRows?: AgentRecordWritePreviewRow[];
+          blockedRows?: AgentRecordWritePreviewRow[];
+          recommendedRows?: AgentRecordWritePreviewRow[];
+        };
+        debugPayload?: unknown;
         requestInput: Record<string, unknown>;
         status: 'pending' | 'approved' | 'rejected' | 'expired';
         createdAt: string;
         decidedAt: string | null;
+      } | null;
+      pendingInteraction?: {
+        interactionId: string;
+        kind: 'input_required' | 'candidate_selection' | 'confirmation';
+        runId: string;
+        toolCode?: string;
+        status: 'pending' | 'resolved' | 'cancelled';
+        title: string;
+        summary: string;
+        partialInput?: Record<string, unknown>;
+        missingRows?: AgentRecordWritePreviewRow[];
+        blockedRows?: AgentRecordWritePreviewRow[];
+        recommendedRows?: AgentRecordWritePreviewRow[];
+        questionCard?: AgentMetaQuestionCard;
+        contextSubject?: {
+          kind: string;
+          type?: string;
+          id?: string;
+          name?: string;
+        };
+        createdAt: string;
+      } | null;
+      continuationResolution?: {
+        usedContinuation: boolean;
+        action:
+          | 'resume_pending_interaction'
+          | 'start_new_task'
+          | 'confirm_writeback'
+          | 'reject_writeback'
+          | 'select_candidate'
+          | 'route_tool'
+          | 'none';
+        reason: string;
+        sourceInteractionId?: string;
+        toolCode?: string;
+        mergedInput?: Record<string, unknown>;
       } | null;
       resolvedContext?: {
         usedContext: boolean;
@@ -412,6 +508,77 @@ export interface AgentChatMessage {
         };
         sourceRunId?: string;
         evidenceRefs?: AgentEvidenceCard[];
+      } | null;
+      semanticResolution?: {
+        usedSemantic: boolean;
+        shouldClarify: boolean;
+        reason: string;
+        selectedCandidate?: {
+          candidateId: string;
+          subject: {
+            kind: string;
+            type?: string;
+            id?: string;
+            name?: string;
+          };
+          sourceRunId?: string;
+          evidenceRefs: AgentEvidenceCard[];
+          text: string;
+          recencyRank: number;
+          confidence: number;
+          source: string;
+          score: number;
+          scoreLabel: string;
+          reasons: string[];
+        };
+        candidates: Array<{
+          candidateId: string;
+          subject: {
+            kind: string;
+            type?: string;
+            id?: string;
+            name?: string;
+          };
+          sourceRunId?: string;
+          evidenceRefs: AgentEvidenceCard[];
+          text: string;
+          recencyRank: number;
+          confidence: number;
+          source: string;
+          score: number;
+          scoreLabel: string;
+          reasons: string[];
+        }>;
+        threshold: number;
+        margin: number;
+        embeddingProvider: string;
+        targetWasOverridden: boolean;
+      } | null;
+      toolArbitration?: {
+        usedArbitration: boolean;
+        ruleCode: string;
+        conflictGroup: string;
+        intentCode: string;
+        subjectType?: string;
+        subjectName?: string;
+        action: 'direct_tool' | 'read_only_probe' | 'clarify';
+        selectedToolCode?: string;
+        probeToolCode?: string;
+        candidateTools: Array<{
+          toolCode: string;
+          type: string;
+          provider: string;
+          priority: number;
+          risk?: string;
+          clarifyLabel?: string;
+          readOnlyProbe: boolean;
+        }>;
+        reason: string;
+        probeResult?: {
+          status: 'not_run' | 'matched' | 'not_matched' | 'failed';
+          count?: number;
+          summary?: string;
+        };
       } | null;
       policyDecisions?: Array<{
         policyCode: string;

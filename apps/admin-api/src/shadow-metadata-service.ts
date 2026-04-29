@@ -488,6 +488,55 @@ function normalizeStaticOptions(widget: YzjApprovalWidget) {
   }));
 }
 
+function normalizeComparable(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeSwitchInput(value: unknown): {
+  comparable: string;
+  booleanValue: boolean | null;
+} {
+  if (typeof value === 'boolean') {
+    return {
+      comparable: value ? 'true' : 'false',
+      booleanValue: value,
+    };
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value === 1) {
+      return { comparable: '1', booleanValue: true };
+    }
+    if (value === 0) {
+      return { comparable: '0', booleanValue: false };
+    }
+    return { comparable: String(value), booleanValue: null };
+  }
+
+  const comparable = normalizeComparable(value);
+  if (/^(1|true|yes|y|on|enable|enabled|open|开启|启用|打开|是)$/.test(comparable)) {
+    return { comparable, booleanValue: true };
+  }
+  if (/^(0|false|no|n|off|disable|disabled|close|关闭|停用|禁用|关|否)$/.test(comparable)) {
+    return { comparable, booleanValue: false };
+  }
+
+  return { comparable, booleanValue: null };
+}
+
+function isSwitchOptionForBoolean(
+  option: ShadowStandardizedField['options'][number],
+  expected: boolean,
+): boolean {
+  const values = [option.key, option.title, option.value]
+    .filter((value): value is string => typeof value === 'string')
+    .map(normalizeSwitchInput);
+  return values.some((value) => value.booleanValue === expected);
+}
+
 function getFieldBoundDictionaryKey(widget: Pick<YzjApprovalWidget, 'codeId' | 'type'>): FieldBoundDictionaryKey | null {
   if (widget.type !== 'publicOptBoxWidget') {
     return null;
@@ -2133,7 +2182,7 @@ export class ShadowMetadataService {
         multi: isMultiValue(widget),
         ...(linkCodeId ? { linkCodeId } : {}),
         options:
-          widget.type === 'radioWidget' || widget.type === 'checkboxWidget'
+          widget.type === 'radioWidget' || widget.type === 'checkboxWidget' || widget.type === 'switchWidget'
             ? normalizeStaticOptions(widget)
             : widget.type === 'publicOptBoxWidget'
               ? (dictionaryBinding?.entries ?? []).map((entry) => ({
@@ -3571,6 +3620,11 @@ export class ShadowMetadataService {
           validationErrors,
         };
       }
+      case 'switchWidget':
+        return this.normalizeSwitchFieldValue({
+          field,
+          rawValue,
+        });
       case 'publicOptBoxWidget':
         return this.normalizePublicOptionValue({
           field,
@@ -3588,6 +3642,48 @@ export class ShadowMetadataService {
           validationErrors,
         };
     }
+  }
+
+  private normalizeSwitchFieldValue(params: {
+    field: ShadowStandardizedField;
+    rawValue: unknown;
+  }): {
+    value: unknown;
+    validationErrors: string[];
+  } {
+    const { field, rawValue } = params;
+    const validationErrors: string[] = [];
+    const normalized = normalizeSwitchInput(rawValue);
+
+    const option = field.options.find((item) => {
+      const values = [
+        item.key,
+        item.title,
+        item.value,
+      ].filter((value): value is string => typeof value === 'string');
+      return values.some((value) => normalizeComparable(value) === normalized.comparable)
+        || normalized.booleanValue !== null && isSwitchOptionForBoolean(item, normalized.booleanValue);
+    });
+
+    if (option?.key !== undefined) {
+      return {
+        value: option.key,
+        validationErrors,
+      };
+    }
+
+    if (normalized.booleanValue !== null) {
+      return {
+        value: normalized.booleanValue ? '1' : '0',
+        validationErrors,
+      };
+    }
+
+    validationErrors.push(`${field.label} 的开关值未命中模板选项`);
+    return {
+      value: undefined,
+      validationErrors,
+    };
   }
 
   private async normalizeSearchFieldValue(params: {

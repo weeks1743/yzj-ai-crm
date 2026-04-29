@@ -28,6 +28,7 @@ export class AgentService {
     const appId = request.tenantContext?.appId?.trim() || this.options.config.yzj.appId;
     const operatorOpenId = request.tenantContext?.operatorOpenId?.trim() || null;
     const contextFrame = this.options.repository.findContextFrame(request.conversationKey);
+    const contextCandidates = this.options.repository.findContextCandidates(request.conversationKey);
     const focusedName = contextFrame?.subject?.name ?? this.options.repository.findFocusedCompany(request.conversationKey);
 
     const output = await this.runRuntime({
@@ -40,6 +41,7 @@ export class AgentService {
       operatorOpenId,
       focusedName,
       contextFrame,
+      contextCandidates,
     });
     const message = buildMessage(request.sceneKey, output);
 
@@ -55,6 +57,7 @@ export class AgentService {
         executionState: output.executionState,
         toolCalls: output.toolCalls,
         evidence: output.evidence,
+        contextFrame: output.contextFrame ?? contextFrame,
         message,
       });
     } catch (error) {
@@ -119,7 +122,11 @@ function buildMessage(sceneKey: string, output: AgentRuntimeOutput): AgentChatMe
         qdrantFilter: output.qdrantFilter,
         selectedTool: output.selectedTool,
         pendingConfirmation: output.pendingConfirmation ?? null,
+        pendingInteraction: output.pendingInteraction ?? null,
+        continuationResolution: output.continuationResolution ?? null,
         resolvedContext: output.resolvedContext ?? null,
+        semanticResolution: output.semanticResolution ?? null,
+        toolArbitration: output.toolArbitration ?? null,
         policyDecisions: output.policyDecisions,
       },
     },

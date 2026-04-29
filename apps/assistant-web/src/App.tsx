@@ -53,6 +53,7 @@ import {
   Flex,
   Space,
   Skeleton,
+  Input,
   Tag,
   Tabs,
   Typography,
@@ -68,6 +69,8 @@ import { applyDocumentBranding } from '@shared/dom-branding';
 import {
   type AssistantChatMessage,
   type AssistantEvidenceCard,
+  type AssistantMetaQuestion,
+  type AssistantMetaQuestionCard,
   providerFactory,
 } from './agent-api-provider';
 import { assistantScenes, buildPromptGroups, getSceneByPath, sceneOrder } from './scene-meta';
@@ -189,6 +192,12 @@ type SlashCommand = (typeof slashCommands)[number];
 type OpenArtifactHandler = (evidence: AssistantEvidenceCard) => void;
 type PresentationTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title'>;
 type GeneratePresentationHandler = (target: PresentationTarget) => void;
+type MetaQuestionSubmitHandler = (input: {
+  runId: string;
+  interactionId: string;
+  answers: Record<string, unknown>;
+  queryText: string;
+}) => void;
 
 type ArtifactPresentationStatus =
   | 'not_started'
@@ -648,6 +657,49 @@ const useStyles = createStyles(({ token, css }) => ({
       line-height: 1.8;
     }
   `,
+  recordPreviewPanel: css`
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    background: ${token.colorBgContainer};
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  `,
+  recordPreviewRows: css`
+    display: grid;
+    grid-template-columns: minmax(92px, 0.34fr) 1fr;
+    gap: 8px 12px;
+    margin-top: 10px;
+  `,
+  recordPreviewLabel: css`
+    color: ${token.colorTextSecondary};
+  `,
+  recordPreviewValue: css`
+    color: ${token.colorText};
+    min-width: 0;
+    word-break: break-word;
+  `,
+  metaQuestionCard: css`
+    border: 1px solid ${token.colorPrimaryBorder};
+    border-radius: 8px;
+    background: ${token.colorBgContainer};
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 10px 26px rgba(22, 119, 255, 0.08);
+  `,
+  metaQuestionSection: css`
+    margin-top: 12px;
+  `,
+  metaQuestionList: css`
+    display: grid;
+    gap: 12px;
+    margin-top: 12px;
+  `,
+  metaQuestionItem: css`
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: ${token.colorFillQuaternary};
+  `,
   artifactFileList: css`
     display: flex;
     gap: 10px;
@@ -1080,6 +1132,216 @@ function uniqueEvidenceArtifacts(evidence: AssistantEvidenceCard[]) {
   });
 }
 
+type PendingConfirmationView = NonNullable<
+  NonNullable<NonNullable<AssistantChatMessage['extraInfo']>['agentTrace']>['pendingConfirmation']
+>;
+type PendingInteractionView = NonNullable<
+  NonNullable<NonNullable<AssistantChatMessage['extraInfo']>['agentTrace']>['pendingInteraction']
+>;
+
+function RecordWritePreviewPanel({
+  pending,
+  styles,
+}: {
+  pending?: PendingConfirmationView | null;
+  styles: ReturnType<typeof useStyles>['styles'];
+}) {
+  const userPreview = pending?.userPreview;
+  if (!userPreview || pending?.status !== 'pending') {
+    return null;
+  }
+
+  const recommendedRows = userPreview.recommendedRows ?? [];
+  return (
+    <div className={styles.recordPreviewPanel}>
+      <Space align="center" wrap>
+        <Text strong>{userPreview.title || pending.title}</Text>
+        <Tag color="gold">等待确认</Tag>
+      </Space>
+      {userPreview.summaryRows.length ? (
+        <div className={styles.recordPreviewRows}>
+          {userPreview.summaryRows.map((row) => (
+            <React.Fragment key={`${row.paramKey ?? row.label}-${row.value ?? ''}`}>
+              <Text className={styles.recordPreviewLabel}>{row.label}</Text>
+              <Text className={styles.recordPreviewValue}>{row.value || '未填写'}</Text>
+            </React.Fragment>
+          ))}
+        </div>
+      ) : (
+        <Text type="secondary">暂无可展示字段摘要，请查看调试区。</Text>
+      )}
+      {recommendedRows.length ? (
+        <div style={{ marginTop: 12 }}>
+          <Text type="secondary">后续建议补充：</Text>
+          <Space size={6} wrap style={{ marginLeft: 8 }}>
+            {recommendedRows.map((row) => (
+              <Tag key={row.paramKey ?? row.label}>{row.label}</Tag>
+            ))}
+          </Space>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MetaQuestionCardPanel({
+  pendingInteraction,
+  styles,
+  onSubmit,
+}: {
+  pendingInteraction?: PendingInteractionView | null;
+  styles: ReturnType<typeof useStyles>['styles'];
+  onSubmit?: MetaQuestionSubmitHandler;
+}) {
+  const questionCard = pendingInteraction?.questionCard;
+  const [answers, setAnswers] = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    setAnswers({});
+  }, [pendingInteraction?.interactionId]);
+
+  if (!questionCard || pendingInteraction?.status !== 'pending') {
+    return null;
+  }
+
+  const currentValues = Object.entries(questionCard.currentValues ?? {});
+  const questions = questionCard.questions ?? [];
+  const answerCount = Object.values(answers).filter((value) => !isEmptyMetaAnswer(value)).length;
+  const canSubmit = Boolean(onSubmit) && answerCount > 0;
+
+  return (
+    <div className={styles.metaQuestionCard}>
+      <Space align="center" wrap>
+        <Text strong>{questionCard.title || pendingInteraction.title}</Text>
+        <Tag color="blue">需要补充</Tag>
+      </Space>
+      {currentValues.length ? (
+        <div className={styles.metaQuestionSection}>
+          <Text type="secondary">已收到</Text>
+          <Space size={6} wrap style={{ marginTop: 8 }}>
+            {currentValues.map(([paramKey, row]) => (
+              <Tag key={paramKey} color="green">
+                {row.label}：{row.value || '已填写'}
+              </Tag>
+            ))}
+          </Space>
+        </div>
+      ) : null}
+      {questions.length ? (
+        <div className={styles.metaQuestionList}>
+          {questions.map((question) => (
+            <MetaQuestionInput
+              key={question.questionId}
+              question={question}
+              value={answers[question.paramKey] ?? question.currentValue}
+              styles={styles}
+              onChange={(value) => {
+                setAnswers((current) => ({
+                  ...current,
+                  [question.paramKey]: value,
+                }));
+              }}
+            />
+          ))}
+        </div>
+      ) : (
+        <Text type="secondary">暂无可结构化补充的问题，可以继续用自然语言输入。</Text>
+      )}
+      <Space size={8} wrap style={{ marginTop: 12 }}>
+        <Button
+          type="primary"
+          size="small"
+          disabled={!canSubmit}
+          onClick={() => {
+            if (!onSubmit || !pendingInteraction) {
+              return;
+            }
+            const cleaned = Object.fromEntries(
+              Object.entries(answers).filter(([, value]) => !isEmptyMetaAnswer(value)),
+            );
+            onSubmit({
+              runId: pendingInteraction.runId,
+              interactionId: pendingInteraction.interactionId,
+              answers: cleaned,
+              queryText: buildMetaQuestionSubmitText(questionCard, cleaned),
+            });
+          }}
+        >
+          {questionCard.submitLabel || '补充并继续'}
+        </Button>
+        <Text type="secondary">也可以继续直接输入自然语言补充。</Text>
+      </Space>
+    </div>
+  );
+}
+
+function MetaQuestionInput({
+  question,
+  value,
+  styles,
+  onChange,
+}: {
+  question: AssistantMetaQuestion;
+  value: unknown;
+  styles: ReturnType<typeof useStyles>['styles'];
+  onChange: (value: unknown) => void;
+}) {
+  return (
+    <div className={styles.metaQuestionItem}>
+      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+        <Space size={6} wrap>
+          <Text strong>{question.label}</Text>
+          {question.required ? <Tag color="red">必填</Tag> : null}
+        </Space>
+        {question.options?.length ? (
+          <Space size={6} wrap>
+            {question.options.map((option) => {
+              const active = String(value ?? '') === String(option.value);
+              return (
+                <Button
+                  key={String(option.key ?? option.value)}
+                  size="small"
+                  type={active ? 'primary' : 'default'}
+                  onClick={() => onChange(option.value)}
+                >
+                  {option.label}
+                </Button>
+              );
+            })}
+          </Space>
+        ) : (
+          <Input
+            size="small"
+            value={value === undefined || value === null || Array.isArray(value) ? '' : String(value)}
+            placeholder={question.placeholder || `请输入${question.label}`}
+            inputMode={question.type === 'phone' ? 'tel' : undefined}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        )}
+        {question.reason ? <Text type="secondary">{question.reason}</Text> : null}
+      </Space>
+    </div>
+  );
+}
+
+function isEmptyMetaAnswer(value: unknown): boolean {
+  return value === undefined
+    || value === null
+    || typeof value === 'string' && value.trim() === ''
+    || Array.isArray(value) && value.length === 0;
+}
+
+function buildMetaQuestionSubmitText(questionCard: AssistantMetaQuestionCard, answers: Record<string, unknown>) {
+  const labels = new Map(questionCard.questions.map((question) => [question.paramKey, question.label]));
+  const parts = Object.entries(answers).map(([paramKey, value]) => {
+    const question = questionCard.questions.find((item) => item.paramKey === paramKey);
+    const option = question?.options?.find((item) => String(item.value) === String(value));
+    const displayValue = option?.label ?? String(value);
+    return `${labels.get(paramKey) ?? paramKey}：${displayValue}`;
+  });
+  return parts.length ? parts.join('，') : '补充信息';
+}
+
 function AssistantMessageContent({
   content,
   info,
@@ -1087,6 +1349,7 @@ function AssistantMessageContent({
   markdownClassName,
   onOpenArtifact,
   onGeneratePresentation,
+  onSubmitQuestionCard,
   presentationByArtifactId,
 }: {
   content: string;
@@ -1095,9 +1358,12 @@ function AssistantMessageContent({
   markdownClassName: string;
   onOpenArtifact: OpenArtifactHandler;
   onGeneratePresentation: GeneratePresentationHandler;
+  onSubmitQuestionCard?: MetaQuestionSubmitHandler;
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>;
 }) {
   const evidence = (info.extraInfo?.evidence ?? []) as AssistantEvidenceCard[];
+  const pendingConfirmation = info.extraInfo?.agentTrace?.pendingConfirmation as PendingConfirmationView | null | undefined;
+  const pendingInteraction = info.extraInfo?.agentTrace?.pendingInteraction as PendingInteractionView | null | undefined;
   const artifactFiles = uniqueEvidenceArtifacts(evidence);
   const evidenceByKey = new Map(
     evidence.map((item, index) => [getEvidenceKey(item, index), item]),
@@ -1106,6 +1372,12 @@ function AssistantMessageContent({
   return (
     <div className={styles.assistantMessageShell}>
       <AgentThinkingPanel info={info} styles={styles} />
+      <RecordWritePreviewPanel pending={pendingConfirmation} styles={styles} />
+      <MetaQuestionCardPanel
+        pendingInteraction={pendingInteraction}
+        styles={styles}
+        onSubmit={onSubmitQuestionCard}
+      />
       <div className={styles.assistantMarkdownCard}>
         <XMarkdown
           paragraphTag="div"
@@ -1469,7 +1741,7 @@ function getSceneSourceTags(sceneKey: string) {
   if (sceneKey === 'tasks') {
     return ['traceId', 'taskId', '资产结果', '写回状态'];
   }
-  return ['slash 命令', '场景技能', 'shadow.* 对象能力', 'ext.* 外部技能'];
+  return ['slash 命令', '计划模板', 'shadow.* 对象能力', 'ext.* 外部技能'];
 }
 
 function MessageFooter({
@@ -1538,6 +1810,7 @@ function buildRole(
   markdownClassName: string,
   onOpenArtifact: OpenArtifactHandler,
   onGeneratePresentation: GeneratePresentationHandler,
+  onSubmitQuestionCard: MetaQuestionSubmitHandler,
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>,
 ): BubbleListProps['role'] {
   return {
@@ -1591,6 +1864,7 @@ function buildRole(
           markdownClassName={markdownClassName}
           onOpenArtifact={onOpenArtifact}
           onGeneratePresentation={onGeneratePresentation}
+          onSubmitQuestionCard={onSubmitQuestionCard}
           presentationByArtifactId={presentationByArtifactId}
         />
       ),
@@ -1752,6 +2026,7 @@ function SceneDebugDrawer({
                               liveExecutionState.status === 'completed'
                                 ? 'success'
                                 : liveExecutionState.status === 'failed'
+                                  || liveExecutionState.status === 'tool_unavailable'
                                   ? 'error'
                                   : 'processing'
                             }
@@ -1764,6 +2039,30 @@ function SceneDebugDrawer({
                     </Space>
                   ) : (
                     renderEmpty('暂无真实 Agent trace。')
+                  )}
+                </Card>
+                <Card className={styles.drawerCard} title="待确认写回">
+                  {agentTrace?.pendingConfirmation ? (
+                    renderJson(agentTrace.pendingConfirmation)
+                  ) : (
+                    renderEmpty('暂无待确认写回。')
+                  )}
+                </Card>
+                <Card className={styles.drawerCard} title="等待态 / 承接">
+                  {agentTrace?.pendingInteraction || agentTrace?.continuationResolution ? (
+                    renderJson({
+                      pendingInteraction: agentTrace.pendingInteraction,
+                      continuationResolution: agentTrace.continuationResolution,
+                    })
+                  ) : (
+                    renderEmpty('暂无等待态或承接记录。')
+                  )}
+                </Card>
+                <Card className={styles.drawerCard} title="工具语义仲裁">
+                  {agentTrace?.toolArbitration ? (
+                    renderJson(agentTrace.toolArbitration)
+                  ) : (
+                    renderEmpty('暂无工具语义仲裁记录。')
                   )}
                 </Card>
                 <Card className={styles.drawerCard} title="工具调用">
@@ -1797,6 +2096,12 @@ function SceneDebugDrawer({
                             {item.outputSummary ? <Text>输出：{item.outputSummary}</Text> : null}
                             {item.errorMessage ? (
                               <Alert type="error" showIcon message={item.errorMessage} />
+                            ) : null}
+                            {item.errorDetails ? (
+                              <div>
+                                <Text type="secondary">错误详情：</Text>
+                                {renderJson(item.errorDetails)}
+                              </div>
                             ) : null}
                           </Space>
                         </Card>
@@ -2264,6 +2569,26 @@ function AssistantWorkspace() {
     [messageApi, presentationByArtifactId],
   );
 
+  const handleSubmitQuestionCard = React.useCallback<MetaQuestionSubmitHandler>(
+    ({ runId, interactionId, answers, queryText }) => {
+      onRequest({
+        query: queryText,
+        sceneKey: scene.key,
+        conversationKey: activeConversationKey,
+        resume: {
+          runId,
+          action: 'provide_input',
+          interactionId,
+          answers,
+        },
+      });
+      window.requestAnimationFrame(() => {
+        safeScrollToBottom();
+      });
+    },
+    [activeConversationKey, onRequest, safeScrollToBottom, scene.key],
+  );
+
   const role = useMemo(
     () => buildRole(styles, markdownClassName, async (evidence) => {
       setArtifactViewer({
@@ -2303,10 +2628,11 @@ function AssistantWorkspace() {
           error: error instanceof Error ? error.message : '无法读取 Artifact Markdown',
         });
       }
-    }, handleGeneratePresentation, presentationByArtifactId),
+    }, handleGeneratePresentation, handleSubmitQuestionCard, presentationByArtifactId),
     [
       fetchPresentationStatus,
       handleGeneratePresentation,
+      handleSubmitQuestionCard,
       markdownClassName,
       presentationByArtifactId,
       styles,

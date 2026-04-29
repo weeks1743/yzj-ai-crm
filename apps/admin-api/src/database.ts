@@ -215,6 +215,7 @@ export function openDatabase(databasePath: string): DatabaseSync {
       scene_key TEXT NOT NULL,
       user_input TEXT NOT NULL,
       intent_frame_json TEXT NOT NULL,
+      context_subject_json TEXT,
       task_plan_json TEXT NOT NULL,
       execution_state_json TEXT NOT NULL,
       evidence_refs_json TEXT NOT NULL,
@@ -286,6 +287,7 @@ export function openDatabase(databasePath: string): DatabaseSync {
     ON artifact_ppt_generations(artifact_id, updated_at DESC);
   `);
   migrateSnapshotDictionaryBindings(database);
+  ensureColumn(database, 'agent_runs', 'context_subject_json', 'TEXT');
 
   return database;
 }

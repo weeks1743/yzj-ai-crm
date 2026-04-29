@@ -94,10 +94,11 @@ const externalSkillService = new ExternalSkillService({
   config,
   enterprisePptTemplateResolver: enterprisePptTemplateService,
 });
+const embeddingService = new DashScopeEmbeddingService(config);
 const artifactService = new ArtifactService({
   config,
   repository: new ArtifactRepository(config),
-  embeddingService: new DashScopeEmbeddingService(config),
+  embeddingService,
   vectorService: new QdrantVectorService(config),
 });
 const artifactPresentationService = new ArtifactPresentationService({
@@ -123,6 +124,11 @@ const agentRuntime = new MainAgentRuntime({
   registry: agentRuntimeParts.registry,
   intentResolver: agentRuntimeParts.intentResolver,
   planner: agentRuntimeParts.planner,
+  embeddingProvider: {
+    providerName: 'dashscope.embedding',
+    isConfigured: () => embeddingService.isConfigured(),
+    embedTexts: (texts) => embeddingService.embedTexts(texts),
+  },
 });
 const agentService = new AgentService({
   config,
