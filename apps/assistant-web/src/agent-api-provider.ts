@@ -327,7 +327,7 @@ class AgentApiProvider extends AbstractChatProvider<
       return (
         info?.originMessage ?? {
           role: 'assistant',
-          content: chunk?.message || 'Agent API 未返回有效数据，请稍后重试。',
+          content: chunk?.message || '智能体接口未返回有效数据，请稍后重试。',
         }
       );
     }
@@ -376,7 +376,7 @@ async function agentApiFetch(
 
   if (!response.ok) {
     const reason = await readApiError(response);
-    throw new Error(`Agent API 请求失败：${reason}`);
+    throw new Error(`智能体接口请求失败：${reason}`);
   }
 
   return new Response(await response.text(), {

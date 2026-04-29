@@ -29,10 +29,10 @@ import { settingPages, traceLogs } from '@shared';
 const { Text } = Typography;
 
 const observabilityColumns: ProColumns<TraceLog>[] = [
-  { title: '追踪ID', dataIndex: 'traceId', copyable: true, width: 180 },
-  { title: '任务ID', dataIndex: 'taskId', copyable: true, width: 140 },
-  { title: '租户ID', dataIndex: 'eid', width: 170 },
-  { title: '应用ID', dataIndex: 'appId', width: 170 },
+  { title: '追踪编号', dataIndex: 'traceId', copyable: true, width: 180 },
+  { title: '任务编号', dataIndex: 'taskId', copyable: true, width: 140 },
+  { title: '租户编号', dataIndex: 'eid', width: 170 },
+  { title: '应用编号', dataIndex: 'appId', width: 170 },
   { title: '场景', dataIndex: 'scene', width: 170 },
   {
     title: '状态',
@@ -68,7 +68,7 @@ const credentialColumns: ProColumns<CredentialSummary>[] = [
 ];
 
 const orgSyncRunColumns: ProColumns<OrgSyncRunSummary>[] = [
-  { title: '运行ID', dataIndex: 'id', copyable: true, width: 240 },
+  { title: '运行编号', dataIndex: 'id', copyable: true, width: 240 },
   {
     title: '触发方式',
     dataIndex: 'triggerType',
@@ -227,7 +227,7 @@ const SettingsPage = () => {
       const result = await requestJson<ManualSyncStartResponse>('/api/settings/org-sync/manual-sync', {
         method: 'POST',
       });
-      message.success(`${result.message}，运行 ID: ${result.runId}`);
+      message.success(`${result.message}，运行编号: ${result.runId}`);
       await reloadRef.current();
     } catch (error) {
       message.warning(error instanceof Error ? error.message : '手动同步触发失败');
@@ -276,7 +276,7 @@ const SettingsPage = () => {
         {!loading && !errorMessage && realPageData && pageKey === 'tenant-app' ? (
           <>
             {renderMetrics([
-              { key: 'eid', label: '租户 EID', value: realPageData.eid, helper: '当前接入租户识别键' },
+              { key: 'eid', label: '租户编号', value: realPageData.eid, helper: '当前接入租户识别键' },
               { key: 'appId', label: '应用实例', value: realPageData.appId, helper: '当前自建应用实例标识' },
               { key: 'configSource', label: '配置来源', value: realPageData.configSource, helper: '当前阶段统一从本地 .env 读取' },
             ])}
@@ -292,8 +292,8 @@ const SettingsPage = () => {
                     </Tag>
                   )}
                 />
-                <ProDescriptions.Item label="EID" dataIndex="eid" />
-                <ProDescriptions.Item label="App ID" dataIndex="appId" />
+                <ProDescriptions.Item label="租户编号" dataIndex="eid" />
+                <ProDescriptions.Item label="应用编号" dataIndex="appId" />
                 <ProDescriptions.Item label="隔离键" dataIndex="isolationKey" />
                 <ProDescriptions.Item label="配置来源" dataIndex="configSource" />
               </ProDescriptions>

@@ -4,55 +4,87 @@ import {
   ProDescriptions,
   ProTable,
 } from '@ant-design/pro-components';
-import { Alert, List, Space, Tag, Typography } from 'antd';
+import { Alert, Button, List, Space, Tag, Typography } from 'antd';
 import type { ProColumns } from '@ant-design/pro-components';
-import { systemAlerts, systemHealth, tenantContext, traceLogs } from '@shared';
+import { useCallback, useEffect, useState } from 'react';
+import type { AgentRunListResponse, AgentRunSummary } from '@shared';
+import { systemAlerts, systemHealth, tenantContext } from '@shared';
+import { requestJson } from '@/utils/request';
 
 const { Paragraph, Text } = Typography;
 
-type TraceRow = (typeof traceLogs)[number];
+const statusMeta: Record<string, { label: string; color: string }> = {
+  running: { label: '运行中', color: 'processing' },
+  waiting_input: { label: '待补充', color: 'warning' },
+  waiting_selection: { label: '待选择', color: 'warning' },
+  waiting_confirmation: { label: '待确认', color: 'warning' },
+  completed: { label: '成功', color: 'success' },
+  failed: { label: '失败', color: 'error' },
+  tool_unavailable: { label: '工具不可用', color: 'error' },
+};
 
-const columns: ProColumns<TraceRow>[] = [
-  { title: '追踪ID', dataIndex: 'traceId', copyable: true, width: 190 },
-  { title: '任务ID', dataIndex: 'taskId', copyable: true, width: 140 },
-  { title: '租户ID', dataIndex: 'eid', width: 170 },
-  { title: '应用ID', dataIndex: 'appId', width: 170 },
-  { title: '场景', dataIndex: 'scene', width: 180 },
+const columns: ProColumns<AgentRunSummary>[] = [
+  { title: '追踪编号', dataIndex: 'traceId', copyable: true, width: 210 },
+  { title: '运行编号', dataIndex: 'runId', copyable: true, width: 210 },
+  { title: '租户编号', dataIndex: 'eid', width: 170 },
+  { title: '应用编号', dataIndex: 'appId', width: 170 },
+  { title: '场景', dataIndex: 'sceneKey', width: 150 },
   {
     title: '状态',
     dataIndex: 'status',
     width: 100,
-    render: (_, record) => (
-      <Tag color={record.status === '成功' ? 'success' : 'warning'}>{record.status}</Tag>
-    ),
+    render: (_, record) => {
+      const meta = statusMeta[record.status] ?? { label: record.status, color: 'default' };
+      return <Tag color={meta.color}>{meta.label}</Tag>;
+    },
   },
-  {
-    title: '工具调用链',
-    dataIndex: 'toolChain',
-    render: (_, record) => record.toolChain.join(' -> '),
-  },
-  { title: '写回结果', dataIndex: 'writebackResult' },
+  { title: '用户输入', dataIndex: 'userInput', ellipsis: true },
+  { title: '计划', dataIndex: 'planTitle', ellipsis: true },
+  { title: '工具调用', dataIndex: 'toolCallCount', width: 100 },
+  { title: '待确认', dataIndex: 'pendingConfirmationCount', width: 100 },
+  { title: '时间', dataIndex: 'createdAt', width: 190 },
 ];
 
 const MonitorPage = () => {
+  const [runData, setRunData] = useState<AgentRunListResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const loadRuns = useCallback(async () => {
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      setRunData(await requestJson<AgentRunListResponse>('/api/agent/runs?page=1&pageSize=10'));
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '运行记录加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRuns();
+  }, [loadRuns]);
+
+  const runRows = runData?.items ?? [];
+
   return (
     <PageContainer
       title="运行监控"
-      subTitle="聚焦 Agent 计划状态、追踪上下文、工具调用链和异常告警"
+      subTitle="聚焦智能体计划状态、追踪上下文、工具调用链和异常告警"
     >
       <Alert
         type="info"
         showIcon
         message="监控口径"
-        description="所有运行指标均围绕真实业务链路：用户输入 -> IntentFrame -> TaskPlan -> 工具调用 -> 确认写回，而不是传统站点访问量仪表盘。"
+        description="所有运行指标均围绕真实业务链路：用户输入 -> 意图帧 -> 任务计划 -> 工具调用 -> 确认写回，而不是传统站点访问量仪表盘。"
       />
 
       <ProCard split="vertical" style={{ marginTop: 16 }}>
         <ProCard title="租户上下文" colSpan="35%">
           <ProDescriptions column={1} dataSource={tenantContext}>
             <ProDescriptions.Item label="租户名称" dataIndex="tenantName" />
-            <ProDescriptions.Item label="租户ID" dataIndex="eid" />
-            <ProDescriptions.Item label="应用ID" dataIndex="appId" />
+            <ProDescriptions.Item label="租户编号" dataIndex="eid" />
+            <ProDescriptions.Item label="应用编号" dataIndex="appId" />
             <ProDescriptions.Item label="接入状态" dataIndex="accessStatus" />
             <ProDescriptions.Item label="组织同步" dataIndex="orgSyncStatus" />
             <ProDescriptions.Item label="最近心跳" dataIndex="lastHeartbeatAt" />
@@ -118,16 +150,30 @@ const MonitorPage = () => {
       </ProCard>
 
       <ProCard title="追踪明细" style={{ marginTop: 16 }}>
-        <ProTable<TraceRow>
-          rowKey="traceId"
+        <ProTable<AgentRunSummary>
+          rowKey="runId"
           search={false}
-          toolBarRender={false}
+          loading={loading}
+          toolBarRender={() => [
+            <Button key="refresh" loading={loading} onClick={() => void loadRuns()}>
+              刷新
+            </Button>,
+          ]}
           options={false}
           pagination={false}
           columns={columns}
-          dataSource={traceLogs}
+          dataSource={runRows}
           scroll={{ x: 1400 }}
         />
+        {errorMessage ? (
+          <Alert
+            type="error"
+            showIcon
+            message="真实运行记录加载失败"
+            description={errorMessage}
+            style={{ marginTop: 16 }}
+          />
+        ) : null}
       </ProCard>
     </PageContainer>
   );

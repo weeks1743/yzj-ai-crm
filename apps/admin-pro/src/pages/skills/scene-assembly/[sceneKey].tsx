@@ -238,7 +238,7 @@ const SceneAssemblyDetailPage = () => {
   return (
     <PageContainer
       title={scene?.label ?? '场景技能详情'}
-      subTitle={scene?.businessGoal ?? '查看当前 Playbook 的推荐 Plan、技能供给和守卫边界。'}
+      subTitle={scene?.businessGoal ?? '查看当前计划手册的推荐计划、技能供给和守卫边界。'}
       extra={[
         <Button key="back" onClick={() => history.push('/skills/scene-assembly')}>
           返回清单
@@ -309,7 +309,7 @@ const SceneAssemblyDetailPage = () => {
                 },
                 {
                   key: 'upstreamCount',
-                  label: 'Plan 模式',
+                  label: '计划模式',
                   children: `${scene.playbook.planModes.length} 个`,
                 },
                 {
@@ -325,10 +325,10 @@ const SceneAssemblyDetailPage = () => {
             items={[
               {
                 key: 'overview',
-                label: 'Playbook 总览',
+                label: '计划手册总览',
                 children: (
                   <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                    <ProCard title="Playbook 定位" bordered>
+                    <ProCard title="计划手册定位" bordered>
                       <Paragraph style={{ marginBottom: 16 }}>{scene.summary}</Paragraph>
                       <Descriptions
                         size="small"
@@ -346,7 +346,7 @@ const SceneAssemblyDetailPage = () => {
                           },
                           {
                             key: 'planModes',
-                            label: '推荐 Plan 模式',
+                            label: '推荐计划模式',
                             children: renderTagGroup(scene.playbook.planModes, 'geekblue'),
                           },
                           {
@@ -408,7 +408,7 @@ const SceneAssemblyDetailPage = () => {
               },
               {
                 key: 'variants',
-                label: `Plan 变体 (${scene.playbook.variants.length})`,
+                label: `计划变体 (${scene.playbook.variants.length})`,
                 children: (
                   <Space direction="vertical" size={16} style={{ width: '100%' }}>
                     {scene.playbook.variants.map((variant) => {
@@ -494,7 +494,7 @@ const SceneAssemblyDetailPage = () => {
                       items={[
                         {
                           key: 'planPolicy',
-                          label: 'Plan 守卫',
+                          label: '计划守卫',
                           children: renderBulletList(
                             scene.playbook.policies.flatMap((item) => [
                               item.confirmation,

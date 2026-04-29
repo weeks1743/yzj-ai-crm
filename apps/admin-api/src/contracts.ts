@@ -607,6 +607,88 @@ export interface AgentChatResponse {
   traceId: string;
 }
 
+export type AgentConfirmationStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+export interface AgentObservedContextSubject {
+  kind: string;
+  type?: string;
+  id?: string;
+  name?: string;
+}
+
+export interface AgentRunSummary {
+  runId: string;
+  traceId: string;
+  eid: string;
+  appId: string;
+  conversationKey: string;
+  sceneKey: string;
+  userInput: string;
+  status: AgentExecutionStatus;
+  goal: string;
+  targetType: AgentTargetType;
+  planTitle: string;
+  planKind: AgentTaskPlanKind;
+  currentStepKey: string | null;
+  toolCallCount: number;
+  failedToolCallCount: number;
+  pendingConfirmationCount: number;
+  evidenceCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentObservedMessage {
+  messageId: string;
+  runId: string;
+  conversationKey: string;
+  role: string;
+  content: string;
+  attachments: AgentAttachment[];
+  extraInfo: unknown;
+  createdAt: string;
+}
+
+export interface AgentConfirmationAuditRow {
+  confirmationId: string;
+  runId: string;
+  traceId: string;
+  toolCode: string;
+  status: AgentConfirmationStatus;
+  title: string;
+  summary: string;
+  preview: unknown;
+  requestInput: Record<string, unknown>;
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+export interface AgentRunListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: AgentRunSummary[];
+}
+
+export interface AgentRunDetailResponse {
+  run: AgentRunSummary;
+  intentFrame: IntentFrame;
+  taskPlan: TaskPlan;
+  executionState: ExecutionState;
+  contextSubject: AgentObservedContextSubject | null;
+  evidenceRefs: AgentEvidenceCard[];
+  messages: AgentObservedMessage[];
+  toolCalls: AgentToolCall[];
+  confirmations: AgentConfirmationAuditRow[];
+}
+
+export interface AgentConfirmationListResponse {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: AgentConfirmationAuditRow[];
+}
+
 export interface TenantAppSettingsResponse {
   eid: string;
   appId: string;

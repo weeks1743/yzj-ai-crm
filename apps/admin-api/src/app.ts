@@ -20,6 +20,7 @@ import type {
   ShadowPreviewUpsertInput,
 } from './contracts.js';
 import { ApprovalFileService } from './approval-file-service.js';
+import type { AgentObservabilityService } from './agent-observability-service.js';
 import { AgentService } from './agent-service.js';
 import { AppError, BadRequestError, ServiceUnavailableError } from './errors.js';
 import { ArtifactPresentationService } from './artifact-presentation-service.js';
@@ -40,6 +41,7 @@ interface CreateAdminApiServerOptions {
   artifactService?: ArtifactService;
   artifactPresentationService?: ArtifactPresentationService;
   agentService?: AgentService;
+  agentObservabilityService?: AgentObservabilityService;
 }
 
 const SHADOW_OBJECT_KEYS = new Set<ShadowObjectKey>([
@@ -181,6 +183,14 @@ function parseShadowObjectKey(value: string): ShadowObjectKey {
   throw new BadRequestError(`未知影子对象: ${value}`);
 }
 
+function parseOptionalPositiveInteger(value: string | null): number | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
 export function createAdminApiServer(options: CreateAdminApiServerOptions) {
   return createServer(async (request: IncomingMessage, response: ServerResponse) => {
     const method = request.method ?? 'GET';
@@ -293,6 +303,46 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
       if (method === 'GET' && url.pathname === '/api/external-skills') {
         writeJson(response, 200, await options.externalSkillService.listSkills());
         return;
+      }
+
+      if (method === 'GET' && url.pathname === '/api/agent/runs') {
+        if (!options.agentObservabilityService) {
+          throw new ServiceUnavailableError('Agent 观测服务未启用');
+        }
+        writeJson(response, 200, options.agentObservabilityService.listRuns({
+          page: parseOptionalPositiveInteger(url.searchParams.get('page')),
+          pageSize: parseOptionalPositiveInteger(url.searchParams.get('pageSize')),
+          status: url.searchParams.get('status') ?? undefined,
+          sceneKey: url.searchParams.get('sceneKey') ?? undefined,
+          conversationKey: url.searchParams.get('conversationKey') ?? undefined,
+          traceId: url.searchParams.get('traceId') ?? undefined,
+        }));
+        return;
+      }
+
+      if (method === 'GET' && url.pathname === '/api/agent/confirmations') {
+        if (!options.agentObservabilityService) {
+          throw new ServiceUnavailableError('Agent 观测服务未启用');
+        }
+        writeJson(response, 200, options.agentObservabilityService.listConfirmations({
+          page: parseOptionalPositiveInteger(url.searchParams.get('page')),
+          pageSize: parseOptionalPositiveInteger(url.searchParams.get('pageSize')),
+          status: url.searchParams.get('status') ?? undefined,
+          runId: url.searchParams.get('runId') ?? undefined,
+        }));
+        return;
+      }
+
+      if (method === 'GET' && url.pathname.startsWith('/api/agent/runs/')) {
+        if (!options.agentObservabilityService) {
+          throw new ServiceUnavailableError('Agent 观测服务未启用');
+        }
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length === 4) {
+          const runId = decodeURIComponent(parts[3] ?? '');
+          writeJson(response, 200, options.agentObservabilityService.getRunDetail(runId));
+          return;
+        }
       }
 
       if (method === 'POST' && url.pathname === '/api/agent/chat') {
