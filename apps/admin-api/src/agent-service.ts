@@ -30,6 +30,13 @@ export class AgentService {
     const contextFrame = this.options.repository.findContextFrame(request.conversationKey);
     const contextCandidates = this.options.repository.findContextCandidates(request.conversationKey);
     const focusedName = contextFrame?.subject?.name ?? this.options.repository.findFocusedCompany(request.conversationKey);
+    const resumeFallback = request.resume?.action === 'provide_input'
+      ? this.options.repository.findPendingInteractionState({
+          runId: request.resume.runId,
+          conversationKey: request.conversationKey,
+          interactionId: request.resume.interactionId,
+        })
+      : null;
 
     const output = await this.runRuntime({
       request,
@@ -42,6 +49,7 @@ export class AgentService {
       focusedName,
       contextFrame,
       contextCandidates,
+      resumeFallback,
     });
     const message = buildMessage(request.sceneKey, output);
 

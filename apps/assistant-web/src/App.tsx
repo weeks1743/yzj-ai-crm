@@ -57,20 +57,33 @@ import {
   Space,
   Skeleton,
   Input,
+  Pagination,
+  Select,
   Tag,
+  Table,
   Typography,
   message,
 } from 'antd';
 import type { GetProp } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { createStyles } from 'antd-style';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import type { AgentUiSurface, ConversationSession } from '@shared/types';
+import type {
+  AgentRecordResultViewModel,
+  AgentRecordSearchPageQuery,
+  AgentRecordSearchPageResponse,
+  AgentMetaQuestionOptionsResponse,
+  AgentUiSurface,
+  ConversationSession,
+  ShadowObjectKey,
+} from '@shared/types';
 import { brandTitle } from '@shared/brand';
 import { applyDocumentBranding } from '@shared/dom-branding';
 import {
   type AssistantChatMessage,
   type AssistantEvidenceCard,
+  type AssistantFieldOptionHint,
   type AssistantMetaQuestion,
   type AssistantMetaQuestionCard,
   providerFactory,
@@ -83,11 +96,17 @@ import brandLogo from '@shared/assets/logo.png';
 const { Paragraph, Text } = Typography;
 
 const HOME_CONVERSATION_KEY = 'conv-home';
-const CHAT_MESSAGES_STORAGE_KEY = 'yzj-ai-crm.assistant.messages.v2';
-const ACTIVE_CONVERSATION_STORAGE_KEY = 'yzj-ai-crm.assistant.activeConversation.v2';
-const CHAT_CONVERSATIONS_STORAGE_KEY = 'yzj-ai-crm.assistant.conversations.v2';
+const CHAT_MESSAGES_STORAGE_KEY = 'yzj-ai-crm.assistant.messages.v3';
+const ACTIVE_CONVERSATION_STORAGE_KEY = 'yzj-ai-crm.assistant.activeConversation.v3';
+const CHAT_CONVERSATIONS_STORAGE_KEY = 'yzj-ai-crm.assistant.conversations.v3';
+const CHAT_STORAGE_VERSION = 3;
 const ADMIN_BASE_URL = import.meta.env.VITE_ADMIN_BASE_URL?.trim() || 'http://127.0.0.1:8000';
+const DEFAULT_OPERATOR_OPEN_ID =
+  import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || '69e75eb5e4b0e65b61c014da';
 const LEGACY_CHAT_STORAGE_KEYS = [
+  'yzj-ai-crm.assistant.messages.v2',
+  'yzj-ai-crm.assistant.activeConversation.v2',
+  'yzj-ai-crm.assistant.conversations.v2',
   'yzj-ai-crm.assistant.messages.v1',
   'yzj-ai-crm.assistant.activeConversation.v1',
   'yzj-ai-crm.assistant.conversations.v1',
@@ -96,6 +115,7 @@ const USER_CONVERSATION_KEY_PREFIX = 'conv-user-';
 const NEW_CONVERSATION_LABEL = '新会话';
 const NEW_CONVERSATION_LAST_MESSAGE = '可以描述目标、选择场景或输入 slash 命令。';
 const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1';
+const RECORD_RESULT_TABLE_PAGE_SIZE = 5;
 
 const recordResultCatalog: Catalog = {
   $id: RECORD_RESULT_A2UI_CATALOG_ID,
@@ -250,15 +270,10 @@ interface RecordResultRecordView {
   secondaryFields?: RecordResultFieldView[];
 }
 
-interface RecordResultViewModel {
-  objectKey: string;
-  operation: 'search' | 'get';
-  title: string;
-  total: number;
-  displayMode: 'empty' | 'list' | 'card';
+type RecordResultViewModel = Omit<AgentRecordResultViewModel, 'records' | 'record'> & {
   records: RecordResultRecordView[];
   record?: RecordResultRecordView;
-}
+};
 
 type ArtifactPresentationStatus =
   | 'not_started'
@@ -313,12 +328,12 @@ interface ArtifactViewerState {
 }
 
 interface PersistedMessageStore {
-  version: 2;
+  version: typeof CHAT_STORAGE_VERSION;
   messages: Record<string, MessageInfo<AssistantChatMessage>[]>;
 }
 
 interface PersistedConversationStore {
-  version: 2;
+  version: typeof CHAT_STORAGE_VERSION;
   conversations: ConversationSession[];
 }
 
@@ -741,14 +756,41 @@ const useStyles = createStyles(({ token, css }) => ({
     margin-bottom: 12px;
   `,
   recordResultList: css`
-    display: grid;
-    gap: 10px;
+    .ant-table {
+      background: transparent;
+    }
+
+    .ant-table-thead > tr > th {
+      color: ${token.colorTextSecondary};
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .ant-table-tbody > tr > td {
+      vertical-align: top;
+    }
   `,
   recordResultItem: css`
-    border: 1px solid ${token.colorBorderSecondary};
-    border-radius: 8px;
-    padding: 12px;
-    background: ${token.colorFillQuaternary};
+    min-width: 0;
+  `,
+  recordResultTitleText: css`
+    display: -webkit-box;
+    overflow: hidden;
+    word-break: break-word;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  `,
+  recordResultCellText: css`
+    display: -webkit-box;
+    overflow: hidden;
+    word-break: break-word;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+  `,
+  recordResultPagination: css`
+    display: flex;
+    justify-content: center;
+    margin-top: 12px;
   `,
   recordResultCardTitle: css`
     min-width: 0;
@@ -1006,21 +1048,25 @@ function clearLegacyAssistantStorage() {
 function readPersistedMessageStore(): PersistedMessageStore {
   const storage = getBrowserStorage();
   if (!storage) {
-    return { version: 2, messages: {} };
+    return { version: CHAT_STORAGE_VERSION, messages: {} };
   }
 
   try {
     const raw = storage.getItem(CHAT_MESSAGES_STORAGE_KEY);
     if (!raw) {
-      return { version: 2, messages: {} };
+      return { version: CHAT_STORAGE_VERSION, messages: {} };
     }
     const parsed = JSON.parse(raw) as PersistedMessageStore;
-    if (parsed?.version !== 2 || typeof parsed.messages !== 'object' || !parsed.messages) {
-      return { version: 2, messages: {} };
+    if (
+      parsed?.version !== CHAT_STORAGE_VERSION
+      || typeof parsed.messages !== 'object'
+      || !parsed.messages
+    ) {
+      return { version: CHAT_STORAGE_VERSION, messages: {} };
     }
     return parsed;
   } catch {
-    return { version: 2, messages: {} };
+    return { version: CHAT_STORAGE_VERSION, messages: {} };
   }
 }
 
@@ -1163,26 +1209,26 @@ function buildConversationTitleFromQuery(query: string) {
 function readPersistedConversationStore(): PersistedConversationStore {
   const storage = getBrowserStorage();
   if (!storage) {
-    return { version: 2, conversations: [] };
+    return { version: CHAT_STORAGE_VERSION, conversations: [] };
   }
 
   try {
     const raw = storage.getItem(CHAT_CONVERSATIONS_STORAGE_KEY);
     if (!raw) {
-      return { version: 2, conversations: [] };
+      return { version: CHAT_STORAGE_VERSION, conversations: [] };
     }
     const parsed = JSON.parse(raw) as PersistedConversationStore;
-    if (parsed?.version !== 2 || !Array.isArray(parsed.conversations)) {
-      return { version: 2, conversations: [] };
+    if (parsed?.version !== CHAT_STORAGE_VERSION || !Array.isArray(parsed.conversations)) {
+      return { version: CHAT_STORAGE_VERSION, conversations: [] };
     }
     return {
-      version: 2,
+      version: CHAT_STORAGE_VERSION,
       conversations: parsed.conversations
         .filter(isPersistableConversation)
         .map(normalizeConversationSession),
     };
   } catch {
-    return { version: 2, conversations: [] };
+    return { version: CHAT_STORAGE_VERSION, conversations: [] };
   }
 }
 
@@ -1212,7 +1258,7 @@ function persistCustomConversations(
 ) {
   const fixedKeys = new Set(baseConversations.map((item) => item.key));
   writePersistedConversationStore({
-    version: 2,
+    version: CHAT_STORAGE_VERSION,
     conversations: conversations
       .filter((item) => !fixedKeys.has(item.key))
       .filter(isPersistableConversation)
@@ -1300,34 +1346,59 @@ function RecordWritePreviewPanel({
 
 function MetaQuestionCardPanel({
   pendingInteraction,
+  activeInteractionId,
+  submittedInteractionIds,
   styles,
   onSubmit,
 }: {
   pendingInteraction?: PendingInteractionView | null;
+  activeInteractionId?: string;
+  submittedInteractionIds?: Set<string>;
   styles: ReturnType<typeof useStyles>['styles'];
   onSubmit?: MetaQuestionSubmitHandler;
 }) {
   const questionCard = pendingInteraction?.questionCard;
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
+  const [answerLabels, setAnswerLabels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setAnswers({});
+    setAnswerLabels({});
   }, [pendingInteraction?.interactionId]);
 
-  if (!questionCard || pendingInteraction?.status !== 'pending') {
+  if (!questionCard || !pendingInteraction) {
     return null;
   }
 
+  const interactionId = pendingInteraction.interactionId;
+  const isPending = pendingInteraction.status === 'pending';
+  const isActive = Boolean(interactionId && activeInteractionId === interactionId);
+  const isSubmitted = Boolean(interactionId && submittedInteractionIds?.has(interactionId));
+  const canInteract = isPending && isActive && !isSubmitted;
   const currentValues = Object.entries(questionCard.currentValues ?? {});
   const questions = questionCard.questions ?? [];
   const answerCount = Object.values(answers).filter((value) => !isEmptyMetaAnswer(value)).length;
-  const canSubmit = Boolean(onSubmit) && answerCount > 0;
+  const canSubmit = Boolean(onSubmit) && canInteract && answerCount > 0;
+  const statusTag = canInteract
+    ? <Tag color="blue">需要补充</Tag>
+    : isSubmitted
+      ? <Tag color="processing">已提交</Tag>
+      : isPending
+        ? <Tag>已过期</Tag>
+        : <Tag color="green">已处理</Tag>;
+  const helperText = isSubmitted
+    ? '已提交，等待智能体生成预览。'
+    : !isPending
+      ? '这张补充卡已经处理完成，保留用于回看。'
+      : !isActive
+        ? '这张补充卡不是当前等待项，请使用最新卡片继续。'
+        : '也可以继续直接输入自然语言补充。';
 
   return (
     <div className={styles.metaQuestionCard}>
       <Space align="center" wrap>
         <Text strong>{questionCard.title || pendingInteraction.title}</Text>
-        <Tag color="blue">需要补充</Tag>
+        {statusTag}
       </Space>
       {currentValues.length ? (
         <div className={styles.metaQuestionSection}>
@@ -1346,14 +1417,25 @@ function MetaQuestionCardPanel({
           {questions.map((question) => (
             <MetaQuestionInput
               key={question.questionId}
+              toolCode={questionCard.toolCode}
               question={question}
               value={answers[question.paramKey] ?? question.currentValue}
               styles={styles}
-              onChange={(value) => {
+              disabled={!canInteract}
+              onChange={(value, displayLabel) => {
                 setAnswers((current) => ({
                   ...current,
                   [question.paramKey]: value,
                 }));
+                setAnswerLabels((current) => {
+                  const next = { ...current };
+                  if (displayLabel) {
+                    next[question.paramKey] = displayLabel;
+                  } else {
+                    delete next[question.paramKey];
+                  }
+                  return next;
+                });
               }}
             />
           ))}
@@ -1377,28 +1459,32 @@ function MetaQuestionCardPanel({
               runId: pendingInteraction.runId,
               interactionId: pendingInteraction.interactionId,
               answers: cleaned,
-              queryText: buildMetaQuestionSubmitText(questionCard, cleaned),
+              queryText: buildMetaQuestionSubmitText(questionCard, cleaned, answerLabels),
             });
           }}
         >
           {questionCard.submitLabel || '补充并继续'}
         </Button>
-        <Text type="secondary">也可以继续直接输入自然语言补充。</Text>
+        <Text type="secondary">{helperText}</Text>
       </Space>
     </div>
   );
 }
 
 function MetaQuestionInput({
+  toolCode,
   question,
   value,
   styles,
+  disabled,
   onChange,
 }: {
+  toolCode: string;
   question: AssistantMetaQuestion;
   value: unknown;
   styles: ReturnType<typeof useStyles>['styles'];
-  onChange: (value: unknown) => void;
+  disabled?: boolean;
+  onChange: (value: unknown, displayLabel?: string) => void;
 }) {
   return (
     <div className={styles.metaQuestionItem}>
@@ -1407,7 +1493,15 @@ function MetaQuestionInput({
           <Text strong>{question.label}</Text>
           {question.required ? <Tag color="red">必填</Tag> : null}
         </Space>
-        {question.options?.length ? (
+        {question.lookup ? (
+          <RemoteMetaQuestionSelect
+            toolCode={toolCode}
+            question={question}
+            value={value}
+            disabled={disabled}
+            onChange={onChange}
+          />
+        ) : question.options?.length ? (
           <Space size={6} wrap>
             {question.options.map((option) => {
               const active = String(value ?? '') === String(option.value);
@@ -1416,7 +1510,8 @@ function MetaQuestionInput({
                   key={String(option.key ?? option.value)}
                   size="small"
                   type={active ? 'primary' : 'default'}
-                  onClick={() => onChange(option.value)}
+                  disabled={disabled}
+                  onClick={() => onChange(option.value, formatMetaOptionDisplay(option))}
                 >
                   {option.label}
                 </Button>
@@ -1429,6 +1524,7 @@ function MetaQuestionInput({
             value={value === undefined || value === null || Array.isArray(value) ? '' : String(value)}
             placeholder={question.placeholder || `请输入${question.label}`}
             inputMode={question.type === 'phone' ? 'tel' : undefined}
+            disabled={disabled}
             onChange={(event) => onChange(event.target.value)}
           />
         )}
@@ -1438,6 +1534,146 @@ function MetaQuestionInput({
   );
 }
 
+function RemoteMetaQuestionSelect({
+  toolCode,
+  question,
+  value,
+  disabled,
+  onChange,
+}: {
+  toolCode: string;
+  question: AssistantMetaQuestion;
+  value: unknown;
+  disabled?: boolean;
+  onChange: (value: unknown, displayLabel?: string) => void;
+}) {
+  const lookup = question.lookup;
+  const [options, setOptions] = useState<AssistantFieldOptionHint[]>(question.options ?? []);
+  const [searchText, setSearchText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const requestSeqRef = useRef(0);
+
+  useEffect(() => {
+    setOptions(question.options ?? []);
+    setSearchText('');
+    requestSeqRef.current += 1;
+  }, [question.questionId, question.options]);
+
+  useEffect(() => {
+    if (!lookup) {
+      return;
+    }
+    const keyword = searchText.trim();
+    if (keyword.length < lookup.minKeywordLength) {
+      if (!keyword) {
+        setOptions(question.options ?? []);
+      }
+      return;
+    }
+    const requestSeq = requestSeqRef.current + 1;
+    requestSeqRef.current = requestSeq;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      fetchMetaQuestionOptions({
+        endpoint: lookup.endpoint,
+        toolCode,
+        paramKey: question.paramKey,
+        keyword,
+        pageSize: lookup.pageSize,
+        signal: controller.signal,
+      })
+        .then((nextOptions) => {
+          if (requestSeqRef.current === requestSeq) {
+            setOptions(nextOptions);
+          }
+        })
+        .catch((error) => {
+          if (!controller.signal.aborted) {
+            console.warn('meta question options fetch failed', error);
+            if (requestSeqRef.current === requestSeq) {
+              setOptions([]);
+            }
+          }
+        })
+        .finally(() => {
+          if (requestSeqRef.current === requestSeq) {
+            setLoading(false);
+          }
+        });
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [lookup, question.options, question.paramKey, searchText, toolCode]);
+
+  return (
+    <Select
+      size="small"
+      showSearch
+      allowClear
+      disabled={disabled}
+      value={value === undefined || value === null || Array.isArray(value) ? undefined : String(value)}
+      placeholder={question.placeholder || `搜索并选择${question.label}`}
+      filterOption={false}
+      loading={loading}
+      notFoundContent={loading ? '检索中...' : '无匹配候选'}
+      onSearch={setSearchText}
+      onClear={() => onChange(undefined)}
+      onChange={(nextValue) => {
+        const option = options.find((item) => String(item.value) === String(nextValue));
+        onChange(nextValue, option ? formatMetaOptionDisplay(option) : undefined);
+      }}
+      options={options.map((option) => ({
+        value: String(option.value),
+        label: (
+          <Space direction="vertical" size={0}>
+            <Text>{option.label}</Text>
+            {option.description ? <Text type="secondary">{option.description}</Text> : null}
+          </Space>
+        ),
+      }))}
+      style={{ width: '100%' }}
+    />
+  );
+}
+
+async function fetchMetaQuestionOptions(input: {
+  endpoint: string;
+  toolCode: string;
+  paramKey: string;
+  keyword: string;
+  pageSize: number;
+  signal?: AbortSignal;
+}): Promise<AssistantFieldOptionHint[]> {
+  const response = await fetch(input.endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      toolCode: input.toolCode,
+      paramKey: input.paramKey,
+      keyword: input.keyword,
+      pageSize: input.pageSize,
+      tenantContext: {
+        operatorOpenId: DEFAULT_OPERATOR_OPEN_ID,
+      },
+    }),
+    signal: input.signal,
+  });
+  if (!response.ok) {
+    const reason = await readApiErrorMessage(response);
+    throw new Error(`候选检索失败：${reason}`);
+  }
+  const payload = await response.json() as AgentMetaQuestionOptionsResponse;
+  return payload.options as AssistantFieldOptionHint[];
+}
+
+function formatMetaOptionDisplay(option: Pick<AssistantFieldOptionHint, 'label' | 'description'>): string {
+  return option.label || option.description || '';
+}
+
 function isEmptyMetaAnswer(value: unknown): boolean {
   return value === undefined
     || value === null
@@ -1445,12 +1681,16 @@ function isEmptyMetaAnswer(value: unknown): boolean {
     || Array.isArray(value) && value.length === 0;
 }
 
-function buildMetaQuestionSubmitText(questionCard: AssistantMetaQuestionCard, answers: Record<string, unknown>) {
+function buildMetaQuestionSubmitText(
+  questionCard: AssistantMetaQuestionCard,
+  answers: Record<string, unknown>,
+  answerLabels: Record<string, string> = {},
+) {
   const labels = new Map(questionCard.questions.map((question) => [question.paramKey, question.label]));
   const parts = Object.entries(answers).map(([paramKey, value]) => {
     const question = questionCard.questions.find((item) => item.paramKey === paramKey);
     const option = question?.options?.find((item) => String(item.value) === String(value));
-    const displayValue = option?.label ?? String(value);
+    const displayValue = answerLabels[paramKey] ?? (option ? formatMetaOptionDisplay(option) : String(value));
     return `${labels.get(paramKey) ?? paramKey}：${displayValue}`;
   });
   return parts.length ? parts.join('，') : '补充信息';
@@ -1480,6 +1720,7 @@ function AgentUiSurfacePanel({
       {surfaces.map((surface) => (
         <div key={surface.surfaceId} className={styles.recordA2uiSurface}>
           <A2UIBox
+            key={surface.surfaceId}
             commands={surface.commands as any}
             components={components}
             onAction={(event: any) => {
@@ -1492,7 +1733,7 @@ function AgentUiSurfacePanel({
               }
             }}
           >
-            <A2UICard id={surface.surfaceId} />
+            <A2UICard key={surface.surfaceId} id={surface.surfaceId} />
           </A2UIBox>
           {surface.rawResult ? (
             <Button
@@ -1544,48 +1785,229 @@ function RecordResultList({
   styles: ReturnType<typeof useStyles>['styles'];
   onAction?: (name: string, context: Record<string, unknown>) => void;
 }) {
-  const records = result?.records ?? [];
+  const [pageResult, setPageResult] = useState<RecordResultViewModel | undefined>(result);
+  const [localPage, setLocalPage] = useState(1);
+  const [loadingPage, setLoadingPage] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const pageRequestSeqRef = useRef(0);
+  const activeResult = pageResult ?? result;
+  const records = activeResult?.records ?? [];
+  const total = activeResult?.total ?? records.length;
+  const currentServerPage = activeResult?.pageNumber ?? 1;
+  const dynamicPageSize = activeResult?.pageSize && activeResult.pageSize > 0
+    ? activeResult.pageSize
+    : RECORD_RESULT_TABLE_PAGE_SIZE;
+  const paginationQuery = activeResult?.pagination;
+  const supportsDynamicPagination = Boolean(paginationQuery);
+  const localTotalPages = Math.max(1, Math.ceil(records.length / RECORD_RESULT_TABLE_PAGE_SIZE));
+  const displayPage = supportsDynamicPagination ? currentServerPage : localPage;
+  const displayPageSize = supportsDynamicPagination ? dynamicPageSize : RECORD_RESULT_TABLE_PAGE_SIZE;
+  const displayTotalPages = supportsDynamicPagination
+    ? activeResult?.totalPages ?? Math.max(1, Math.ceil(total / displayPageSize))
+    : localTotalPages;
+
+  useEffect(() => {
+    setPageResult(result);
+    setLocalPage(1);
+    setPageError(null);
+    pageRequestSeqRef.current += 1;
+  }, [result]);
+
+  const displayRecords = supportsDynamicPagination
+    ? records
+    : records.slice(
+        (localPage - 1) * RECORD_RESULT_TABLE_PAGE_SIZE,
+        localPage * RECORD_RESULT_TABLE_PAGE_SIZE,
+      );
+  const shouldShowPagination = supportsDynamicPagination
+    ? total > displayPageSize
+    : records.length > RECORD_RESULT_TABLE_PAGE_SIZE;
+  const summaryText = shouldShowPagination
+    ? supportsDynamicPagination
+      ? `共 ${total} 条，当前第 ${displayPage}/${displayTotalPages} 页，每页 ${displayPageSize} 条，翻页实时查询。`
+      : `共 ${total} 条，当前第 ${displayPage}/${displayTotalPages} 页，每页 ${displayPageSize} 条。`
+    : `共 ${total} 条，以列表展示关键字段。`;
+  const loadDynamicPage = async (page: number) => {
+    if (!paginationQuery) {
+      setLocalPage(page);
+      return;
+    }
+    const requestSeq = pageRequestSeqRef.current + 1;
+    pageRequestSeqRef.current = requestSeq;
+    setLoadingPage(true);
+    setPageError(null);
+    try {
+      const nextResult = await fetchRecordResultPage(paginationQuery, page, displayPageSize);
+      if (pageRequestSeqRef.current !== requestSeq) {
+        return;
+      }
+      setPageResult(nextResult);
+    } catch (error) {
+      if (pageRequestSeqRef.current !== requestSeq) {
+        return;
+      }
+      setPageError(error instanceof Error ? error.message : '记录分页查询失败');
+    } finally {
+      if (pageRequestSeqRef.current === requestSeq) {
+        setLoadingPage(false);
+      }
+    }
+  };
+  const columns: ColumnsType<RecordResultRecordView> = [
+    {
+      title: mapRecordObjectLabel(activeResult?.objectKey),
+      dataIndex: 'title',
+      width: 260,
+      fixed: 'left',
+      render: (_value, record) => (
+        <div className={styles.recordResultItem}>
+          <Text strong className={styles.recordResultTitleText}>{record.title}</Text>
+          {record.subtitle ? <div className={styles.recordResultSummary}>{record.subtitle}</div> : null}
+        </div>
+      ),
+    },
+    {
+      title: '状态',
+      width: 190,
+      render: (_value, record) => <RecordTags tags={record.tags} compact />,
+    },
+    {
+      title: '地区',
+      width: 160,
+      render: (_value, record) => (
+        <div className={styles.recordResultCellText}>
+          {joinRecordFieldValues(record, ['省', '市', '区']) || record.subtitle || '-'}
+        </div>
+      ),
+    },
+    {
+      title: '联系人',
+      width: 180,
+      render: (_value, record) => (
+        <div>
+          <div>{readRecordFieldValue(record, ['联系人姓名', '联系人']) || '-'}</div>
+          <div className={styles.recordResultSummary}>
+            {formatRecordPhone(readRecordFieldValue(record, ['联系人手机', '手机', '公司电话', '办公电话']))}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: '负责人',
+      width: 150,
+      render: (_value, record) => readRecordFieldValue(record, ['负责人', '销售负责人', '售后服务代表']) || '-',
+    },
+    {
+      title: '操作',
+      width: 120,
+      fixed: 'right',
+      render: (_value, record) => record.formInstId ? (
+        <Button
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => onAction?.('record.open', {
+            objectKey: activeResult?.objectKey,
+            formInstId: record.formInstId,
+            title: record.title,
+          })}
+        >
+          查看详情
+        </Button>
+      ) : null,
+    },
+  ];
+
   return (
     <div className={styles.recordResultPanel}>
       <div className={styles.recordResultHeader}>
         <div>
-          <Text strong>{result?.title ?? '记录查询结果'}</Text>
-          <div className={styles.recordResultSummary}>共 {result?.total ?? records.length} 条，优先展示关键字段。</div>
+          <Text strong>{activeResult?.title ?? '记录查询结果'}</Text>
+          <div className={styles.recordResultSummary}>{summaryText}</div>
         </div>
-        <Tag color="blue">{mapRecordObjectLabel(result?.objectKey)}</Tag>
+        <Tag color="blue">{mapRecordObjectLabel(activeResult?.objectKey)}</Tag>
       </div>
       <div className={styles.recordResultList}>
-        {records.map((record) => (
-          <div key={record.formInstId || record.title} className={styles.recordResultItem}>
-            <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
-              <div className={styles.recordResultCardTitle}>
-                <Text strong>{record.title}</Text>
-                {record.subtitle ? <div className={styles.recordResultSummary}>{record.subtitle}</div> : null}
-                <RecordTags tags={record.tags} />
-              </div>
-              {record.formInstId ? (
-                <Button
-                  size="small"
-                  icon={<EyeOutlined />}
-                  onClick={() => onAction?.('record.open', {
-                    objectKey: result?.objectKey,
-                    formInstId: record.formInstId,
-                    title: record.title,
-                  })}
-                >
-                  查看详情
-                </Button>
-              ) : null}
-            </Space>
-            <RecordFieldGrid
-              fields={[...(record.primaryFields ?? []), ...(record.secondaryFields ?? []).slice(0, 2)]}
-              styles={styles}
+        <Table<RecordResultRecordView>
+          size="small"
+          bordered
+          loading={loadingPage}
+          pagination={false}
+          rowKey={(record) => record.formInstId || record.title}
+          columns={columns}
+          dataSource={displayRecords}
+          scroll={{ x: 1060 }}
+          tableLayout="fixed"
+        />
+        {pageError ? (
+          <Alert
+            type="error"
+            showIcon
+            message={pageError}
+            style={{ marginTop: 8 }}
+          />
+        ) : null}
+        {shouldShowPagination ? (
+          <div className={styles.recordResultPagination}>
+            <Pagination
+              simple
+              current={displayPage}
+              pageSize={displayPageSize}
+              total={supportsDynamicPagination ? total : records.length}
+              showSizeChanger={false}
+              showLessItems
+              disabled={loadingPage}
+              onChange={(page) => {
+                void loadDynamicPage(page);
+              }}
             />
           </div>
-        ))}
+        ) : null}
       </div>
     </div>
   );
+}
+
+async function fetchRecordResultPage(
+  paginationQuery: AgentRecordSearchPageQuery,
+  pageNumber: number,
+  pageSize: number,
+): Promise<RecordResultViewModel> {
+  const request = paginationQuery.request;
+  const response = await fetch(paginationQuery.endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...request,
+      searchInput: {
+        ...request.searchInput,
+        pageNumber,
+        pageSize,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const reason = await readApiErrorMessage(response);
+    throw new Error(`记录分页查询失败：${reason}`);
+  }
+
+  const payload = await response.json() as AgentRecordSearchPageResponse;
+  return {
+    ...payload.result,
+    pagination: payload.result.pagination ?? paginationQuery,
+  } as RecordResultViewModel;
+}
+
+async function readApiErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = await response.json();
+    if (payload?.message) {
+      return String(payload.message);
+    }
+  } catch {
+    // Fall back to HTTP status text below.
+  }
+  return response.statusText || `HTTP ${response.status}`;
 }
 
 function RecordResultCard({
@@ -1647,18 +2069,44 @@ function RecordResultEmpty({
   );
 }
 
-function RecordTags({ tags }: { tags?: string[] }) {
+function RecordTags({ tags, compact = false }: { tags?: string[]; compact?: boolean }) {
   const visibleTags = (tags ?? []).filter(Boolean).slice(0, 4);
   if (!visibleTags.length) {
-    return null;
+    return compact ? <Text type="secondary">-</Text> : null;
   }
   return (
-    <Space size={6} wrap style={{ marginTop: 8 }}>
+    <Space size={6} wrap style={{ marginTop: compact ? 0 : 8 }}>
       {visibleTags.map((tag) => (
         <Tag key={tag}>{tag}</Tag>
       ))}
     </Space>
   );
+}
+
+function getRecordFields(record: RecordResultRecordView): RecordResultFieldView[] {
+  return [...(record.primaryFields ?? []), ...(record.secondaryFields ?? [])];
+}
+
+function readRecordFieldValue(record: RecordResultRecordView, labels: string[]): string {
+  const fields = getRecordFields(record);
+  const normalizedLabels = labels.map((label) => label.trim()).filter(Boolean);
+  const matched = fields.find((field) => normalizedLabels.includes(field.label));
+  return matched?.value ?? '';
+}
+
+function joinRecordFieldValues(record: RecordResultRecordView, labels: string[]): string {
+  return labels
+    .map((label) => readRecordFieldValue(record, [label]))
+    .filter(Boolean)
+    .join(' / ');
+}
+
+function formatRecordPhone(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return '-';
+  }
+  return normalized.replace(/\.0+$/, '');
 }
 
 function RecordFieldGrid({
@@ -1697,6 +2145,10 @@ function mapRecordObjectLabel(objectKey?: string) {
   return '客户';
 }
 
+function isShadowObjectKey(value: string): value is ShadowObjectKey {
+  return value === 'customer' || value === 'contact' || value === 'opportunity' || value === 'followup';
+}
+
 function AssistantMessageContent({
   content,
   info,
@@ -1706,6 +2158,8 @@ function AssistantMessageContent({
   onGeneratePresentation,
   onOpenRecord,
   onSubmitQuestionCard,
+  activeQuestionInteractionId,
+  submittedQuestionInteractionIds,
   presentationByArtifactId,
 }: {
   content: string;
@@ -1716,6 +2170,8 @@ function AssistantMessageContent({
   onGeneratePresentation: GeneratePresentationHandler;
   onOpenRecord?: OpenRecordHandler;
   onSubmitQuestionCard?: MetaQuestionSubmitHandler;
+  activeQuestionInteractionId?: string;
+  submittedQuestionInteractionIds?: Set<string>;
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>;
 }) {
   const evidence = (info.extraInfo?.evidence ?? []) as AssistantEvidenceCard[];
@@ -1733,6 +2189,8 @@ function AssistantMessageContent({
       <RecordWritePreviewPanel pending={pendingConfirmation} styles={styles} />
       <MetaQuestionCardPanel
         pendingInteraction={pendingInteraction}
+        activeInteractionId={activeQuestionInteractionId}
+        submittedInteractionIds={submittedQuestionInteractionIds}
         styles={styles}
         onSubmit={onSubmitQuestionCard}
       />
@@ -2088,6 +2546,32 @@ function resolveWritebackResume(
   };
 }
 
+function findLatestPendingConfirmationTrace(
+  messages: MessageInfo<AssistantChatMessage>[],
+) {
+  return [...messages]
+    .reverse()
+    .find((item) => {
+      const pending = item.message.extraInfo?.agentTrace?.pendingConfirmation;
+      return item.message.role === 'assistant' && pending?.status === 'pending';
+    })
+    ?.message.extraInfo?.agentTrace;
+}
+
+function findLatestPendingQuestionInteractionId(
+  messages: MessageInfo<AssistantChatMessage>[],
+) {
+  return [...messages]
+    .reverse()
+    .find((item) => {
+      const pending = item.message.extraInfo?.agentTrace?.pendingInteraction;
+      return item.message.role === 'assistant'
+        && pending?.status === 'pending'
+        && Boolean(pending.questionCard?.questions?.length);
+    })
+    ?.message.extraInfo?.agentTrace?.pendingInteraction?.interactionId;
+}
+
 function getSceneSourceTags(sceneKey: string) {
   if (sceneKey === 'customer-analysis') {
     return ['客户主数据', '联系人', '商机盘点', '公司研究供给'];
@@ -2181,6 +2665,8 @@ function buildRole(
   onGeneratePresentation: GeneratePresentationHandler,
   onOpenRecord: OpenRecordHandler,
   onSubmitQuestionCard: MetaQuestionSubmitHandler,
+  activeQuestionInteractionId: string | undefined,
+  submittedQuestionInteractionIds: Set<string>,
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>,
 ): BubbleListProps['role'] {
   return {
@@ -2236,6 +2722,8 @@ function buildRole(
           onGeneratePresentation={onGeneratePresentation}
           onOpenRecord={onOpenRecord}
           onSubmitQuestionCard={onSubmitQuestionCard}
+          activeQuestionInteractionId={activeQuestionInteractionId}
+          submittedQuestionInteractionIds={submittedQuestionInteractionIds}
           presentationByArtifactId={presentationByArtifactId}
         />
       ),
@@ -2344,14 +2832,36 @@ function ArtifactMarkdownDrawer({
   );
 }
 
-function AssistantWorkspace() {
-  const { styles } = useStyles();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [markdownClassName] = useMarkdownTheme();
-  const [messageApi, contextHolder] = message.useMessage();
+function AssistantConversationRuntime({
+  activeConversationKey,
+  activeConversation,
+  conversations,
+  scene,
+  locationPathname,
+  styles,
+  markdownClassName,
+  messageApi,
+  setConversation,
+  navigateToScene,
+  blankConversationKeys,
+  setBlankConversationKeys,
+  pendingBlankConversationSubmitRef,
+}: {
+  activeConversationKey: string;
+  activeConversation?: ConversationSession;
+  conversations: ConversationSession[];
+  scene: ReturnType<typeof getSceneByPath>;
+  locationPathname: string;
+  styles: ReturnType<typeof useStyles>['styles'];
+  markdownClassName: string;
+  messageApi: ReturnType<typeof message.useMessage>[0];
+  setConversation: (key: string, conversation: ConversationSession) => boolean;
+  navigateToScene: (route: string) => void;
+  blankConversationKeys: Set<string>;
+  setBlankConversationKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
+  pendingBlankConversationSubmitRef: React.MutableRefObject<Record<string, string>>;
+}) {
   const listRef = useRef<BubbleListRef>(null);
-  const scene = getSceneByPath(location.pathname);
   const [inputValue, setInputValue] = useState('');
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<GetProp<typeof Attachments, 'items'>>([]);
@@ -2367,37 +2877,11 @@ function AssistantWorkspace() {
   const [presentationByArtifactId, setPresentationByArtifactId] = useState<
     Record<string, ArtifactPresentationPayload>
   >({});
-  const [blankConversationKeys, setBlankConversationKeys] = useState<Set<string>>(
+  const [submittedQuestionInteractionIds, setSubmittedQuestionInteractionIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const pendingBlankConversationSubmitRef = useRef<Record<string, string>>({});
   const [selectedComposerCommand, setSelectedComposerCommand] = useState<SlashCommand | null>(
     null,
-  );
-  const homeConversation = useMemo(
-    () => ({
-      key: HOME_CONVERSATION_KEY,
-      label: 'AI 销售工作台',
-      route: '/chat',
-      group: '固定会话',
-      lastMessage: '从这里描述目标生成计划，或按销售主链路逐步推进。',
-      updatedAt: '刚刚',
-      scene: 'chat',
-    }),
-    [],
-  );
-  const baseConversations = useMemo(
-    () => [homeConversation, ...buildFixedSceneConversations()],
-    [homeConversation],
-  );
-  const defaultConversations = useMemo(
-    () => mergePersistedConversations(baseConversations),
-    [baseConversations],
-  );
-  const getConversationKeyByRoute = React.useCallback(
-    (route: string) =>
-      baseConversations.find((item) => item.route === route)?.key ?? HOME_CONVERSATION_KEY,
-    [baseConversations],
   );
   const promptGroups = useMemo(() => buildPromptGroups(scene), [scene]);
   const sceneEntryPrompts = useMemo(() => buildSceneEntryPrompts(), []);
@@ -2424,63 +2908,20 @@ function AssistantWorkspace() {
     });
   }, [slashInput, slashQuery]);
   const showSlashMenu = !attachmentsOpen && slashInput.startsWith('/') && slashMenuOpen;
+  const runtimeConversationKeyRef = useRef(activeConversationKey);
+  const defaultMessagesConversationKeyRef = useRef(activeConversationKey);
 
   useEffect(() => {
-    applyDocumentBranding(brandTitle, brandLogo);
-  }, [location.pathname]);
-
-  useEffect(() => {
-    clearLegacyAssistantStorage();
-  }, []);
-
-  useEffect(() => {
-    const routeCommand = getSlashCommandByRoute(location.pathname);
+    const routeCommand = getSlashCommandByRoute(locationPathname);
     if (routeCommand) {
       setSelectedComposerCommand(routeCommand);
     }
-  }, [location.pathname]);
+  }, [locationPathname]);
 
-  const {
-    conversations,
-    activeConversationKey,
-    setActiveConversationKey,
-    addConversation,
-    setConversation,
-  } = useXConversations({
-    defaultConversations,
-    defaultActiveConversationKey:
-      getStoredActiveConversationKey(defaultConversations.map((item) => item.key))
-      ?? getConversationKeyByRoute(location.pathname),
-  });
-  const activeConversation = conversations.find(
-    (item) => item.key === activeConversationKey,
-  ) as ConversationSession | undefined;
   const isActiveConversationBlank = Boolean(
     blankConversationKeys.has(activeConversationKey)
     || isBlankUserConversation(activeConversation),
   );
-
-  useEffect(() => {
-    if (activeConversation?.route === location.pathname) {
-      return;
-    }
-
-    const expectedConversationKey = conversations.find(
-      (item) => item.route === location.pathname,
-    )?.key ?? getConversationKeyByRoute(location.pathname);
-
-    if (expectedConversationKey === activeConversationKey) {
-      return;
-    }
-
-    setActiveConversationKey(expectedConversationKey);
-  }, [
-    activeConversationKey,
-    conversations,
-    getConversationKeyByRoute,
-    location.pathname,
-    setActiveConversationKey,
-  ]);
 
   const { onRequest, messages, isRequesting, abort, onReload, setMessage, isDefaultMessagesRequesting } =
     useXChat<AssistantChatMessage>({
@@ -2488,6 +2929,7 @@ function AssistantWorkspace() {
       conversationKey: activeConversationKey,
       defaultMessages: (info?: { conversationKey?: string }) => {
         const key = String(info?.conversationKey ?? activeConversationKey);
+        defaultMessagesConversationKeyRef.current = key;
         const conversation = conversations.find((item) => item.key === key) as
           | ConversationSession
           | undefined;
@@ -2542,6 +2984,8 @@ function AssistantWorkspace() {
     .reverse()
     .find((item) => item.message.role === 'assistant' && item.message.extraInfo?.agentTrace);
   const latestAgentTrace = latestAgentMessage?.message.extraInfo?.agentTrace;
+  const latestPendingConfirmationTrace = findLatestPendingConfirmationTrace(displayMessageList);
+  const activeQuestionInteractionId = findLatestPendingQuestionInteractionId(displayMessageList);
   const latestEvidence = latestAgentMessage?.message.extraInfo?.evidence ?? [];
   const safeScrollToBottom = React.useCallback(() => {
     const bubbleList = listRef.current;
@@ -2582,19 +3026,23 @@ function AssistantWorkspace() {
   }, [activeConversationKey, messageList]);
 
   useEffect(() => {
-    persistActiveConversationKey(activeConversationKey);
-  }, [activeConversationKey]);
-
-  useEffect(() => {
-    persistCustomConversations(conversations as ConversationSession[], baseConversations);
-  }, [baseConversations, conversations]);
-
-  useEffect(() => {
-    if (isDefaultMessagesRequesting || isActiveConversationBlank) {
+    if (
+      isDefaultMessagesRequesting
+      || isActiveConversationBlank
+      || activeConversation?.key !== activeConversationKey
+      || runtimeConversationKeyRef.current !== activeConversationKey
+      || defaultMessagesConversationKeyRef.current !== activeConversationKey
+    ) {
       return;
     }
     persistMessages(activeConversationKey, messageList);
-  }, [activeConversationKey, isActiveConversationBlank, isDefaultMessagesRequesting, messageList]);
+  }, [
+    activeConversation?.key,
+    activeConversationKey,
+    isActiveConversationBlank,
+    isDefaultMessagesRequesting,
+    messageList,
+  ]);
 
   const fetchPresentationStatus = React.useCallback(async (artifactId: string) => {
     const response = await fetch(
@@ -2693,6 +3141,10 @@ function AssistantWorkspace() {
 
   const handleSubmitQuestionCard = React.useCallback<MetaQuestionSubmitHandler>(
     ({ runId, interactionId, answers, queryText }) => {
+      if (isRequesting) {
+        messageApi.warning('当前请求仍在处理中，请等待完成后再继续。');
+        return;
+      }
       onRequest({
         query: queryText,
         sceneKey: scene.key,
@@ -2704,26 +3156,48 @@ function AssistantWorkspace() {
           answers,
         },
       });
+      setSubmittedQuestionInteractionIds((current) => {
+        const next = new Set(current);
+        next.add(interactionId);
+        return next;
+      });
       window.requestAnimationFrame(() => {
         safeScrollToBottom();
       });
     },
-    [activeConversationKey, onRequest, safeScrollToBottom, scene.key],
+    [activeConversationKey, isRequesting, messageApi, onRequest, safeScrollToBottom, scene.key],
   );
 
   const handleOpenRecord = React.useCallback<OpenRecordHandler>(
-    ({ objectKey, formInstId }) => {
-      const queryText = `打开${mapRecordObjectLabel(objectKey)} formInstId=${formInstId}`;
+    ({ objectKey, formInstId, title }) => {
+      if (isRequesting) {
+        messageApi.warning('当前请求仍在处理中，请等待完成后再查看记录。');
+        return;
+      }
+      const objectLabel = mapRecordObjectLabel(objectKey);
+      const queryText = title?.trim()
+        ? `打开${objectLabel}：${title.trim()}`
+        : `打开${objectLabel}详情`;
       onRequest({
         query: queryText,
         sceneKey: scene.key,
         conversationKey: activeConversationKey,
+        ...(isShadowObjectKey(objectKey)
+          ? {
+              clientAction: {
+                type: 'record.open' as const,
+                objectKey,
+                formInstId,
+                ...(title?.trim() ? { title: title.trim() } : {}),
+              },
+            }
+          : {}),
       });
       window.requestAnimationFrame(() => {
         safeScrollToBottom();
       });
     },
-    [activeConversationKey, onRequest, safeScrollToBottom, scene.key],
+    [activeConversationKey, isRequesting, messageApi, onRequest, safeScrollToBottom, scene.key],
   );
 
   const role = useMemo(
@@ -2765,33 +3239,34 @@ function AssistantWorkspace() {
           error: error instanceof Error ? error.message : '无法读取 Artifact Markdown',
         });
       }
-    }, handleGeneratePresentation, handleOpenRecord, handleSubmitQuestionCard, presentationByArtifactId),
+    }, handleGeneratePresentation, handleOpenRecord, handleSubmitQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, presentationByArtifactId),
     [
+      activeQuestionInteractionId,
       fetchPresentationStatus,
       handleGeneratePresentation,
       handleOpenRecord,
       handleSubmitQuestionCard,
       markdownClassName,
       presentationByArtifactId,
+      submittedQuestionInteractionIds,
       styles,
     ],
   );
 
-  const navigateToScene = React.useCallback((route: string) => {
-    setActiveConversationKey(getConversationKeyByRoute(route));
-    navigate(route);
+  const handleNavigateToScene = React.useCallback((route: string) => {
+    navigateToScene(route);
     setRunInsightOpen(false);
-  }, [getConversationKeyByRoute, navigate, setActiveConversationKey]);
+  }, [navigateToScene]);
 
   const clearSelectedComposerCommand = React.useCallback(() => {
     setSelectedComposerCommand(null);
-    if (location.pathname !== '/chat') {
-      navigateToScene('/chat');
+    if (locationPathname !== '/chat') {
+      handleNavigateToScene('/chat');
     }
-  }, [location.pathname, navigateToScene]);
+  }, [handleNavigateToScene, locationPathname]);
 
   const selectSlashCommand = (command: SlashCommand) => {
-    navigateToScene(command.route);
+    handleNavigateToScene(command.route);
     setAttachmentsOpen(false);
     setSlashMenuOpen(false);
     setSelectedComposerCommand(command);
@@ -2824,9 +3299,14 @@ function AssistantWorkspace() {
       return;
     }
 
+    if (isRequesting) {
+      messageApi.warning('当前请求仍在处理中，请等待完成后再继续。');
+      return;
+    }
+
     const matchedSlashCommand = getSlashCommandFromInput(queryText);
-    if (matchedSlashCommand && matchedSlashCommand.route !== location.pathname) {
-      navigateToScene(matchedSlashCommand.route);
+    if (matchedSlashCommand && matchedSlashCommand.route !== locationPathname) {
+      handleNavigateToScene(matchedSlashCommand.route);
       setSelectedComposerCommand(matchedSlashCommand);
       setInputValue(normalizedText.replace(matchedSlashCommand.command, '').trimStart());
       setAttachmentsOpen(false);
@@ -2843,7 +3323,7 @@ function AssistantWorkspace() {
         lastMessage: queryText,
         updatedAt: '刚刚',
         scene: scene.key,
-        route: location.pathname,
+        route: locationPathname,
       });
     }
 
@@ -2861,7 +3341,7 @@ function AssistantWorkspace() {
         type: file.type || 'file',
         size: file.size,
       })),
-      resume: resolveWritebackResume(queryText, latestAgentTrace),
+      resume: resolveWritebackResume(queryText, latestPendingConfirmationTrace ?? latestAgentTrace),
     });
     setInputValue('');
     setAttachedFiles([]);
@@ -2927,7 +3407,7 @@ function AssistantWorkspace() {
             onItemClick={(info) => {
               const route = (info.data as { route?: string }).route;
               if (route) {
-                navigateToScene(route);
+                handleNavigateToScene(route);
               }
             }}
             className={styles.promptCard}
@@ -2957,89 +3437,6 @@ function AssistantWorkspace() {
       </div>
     );
   };
-
-  const onCreateConversation = () => {
-    const now = new Date();
-    const conversationKey = `conv-user-${now.getTime()}`;
-    const newConversation: ConversationSession = {
-      key: conversationKey,
-      label: NEW_CONVERSATION_LABEL,
-      route: '/chat',
-      group: '最近会话',
-      lastMessage: NEW_CONVERSATION_LAST_MESSAGE,
-      updatedAt: '刚刚',
-      scene: 'chat',
-    };
-
-    pendingBlankConversationSubmitRef.current[conversationKey] = '';
-    setBlankConversationKeys((current) => new Set(current).add(conversationKey));
-    persistMessages(conversationKey, []);
-    addConversation(newConversation, 'prepend');
-    setActiveConversationKey(conversationKey);
-    setInputValue('');
-    setAttachedFiles([]);
-    setAttachmentsOpen(false);
-    setSlashMenuOpen(false);
-    setSelectedComposerCommand(null);
-    setRunInsightOpen(false);
-    navigate('/chat');
-  };
-
-  const chatSide = (
-    <div className={styles.side}>
-      <div className={styles.logo}>
-        <span className={styles.logoMark}>
-          <img src={brandLogo} alt={brandTitle} />
-        </span>
-        <div className={styles.logoText}>
-          <span>{brandTitle}</span>
-        </div>
-      </div>
-      <Conversations
-        creation={{ onClick: onCreateConversation, label: '新会话' }}
-        items={conversations.map(({ key, label, ...other }) => ({
-          key,
-          label,
-          ...other,
-        }))}
-        className={styles.conversations}
-        activeKey={activeConversationKey}
-        onActiveChange={(key) => {
-          const matched = conversations.find((item) => item.key === key);
-          if (!matched) {
-            return;
-          }
-          setActiveConversationKey(key);
-          if (matched?.route) {
-            navigate(matched.route);
-          }
-        }}
-        styles={{ item: { padding: '0 8px' } }}
-        menu={() => undefined}
-      />
-
-      <div className={styles.sideFooter}>
-        <Space size={10}>
-          <Avatar size={24} style={{ backgroundColor: '#1677ff' }}>
-            {runtimeTenantContext.owner.slice(0, 1)}
-          </Avatar>
-          <Space orientation="vertical" size={0} className={styles.sideFooterInfo}>
-            <Text strong ellipsis>
-              {runtimeTenantContext.owner}
-            </Text>
-            <Text type="secondary" ellipsis>
-              {runtimeTenantContext.tenantName}
-            </Text>
-          </Space>
-        </Space>
-        <Button
-          type="text"
-          icon={<QuestionCircleOutlined />}
-          onClick={() => messageApi.info('帮助中心原型将在后续迭代补齐。')}
-        />
-      </div>
-    </div>
-  );
 
   const welcomeExtra = (
     <Space>
@@ -3113,13 +3510,14 @@ function AssistantWorkspace() {
     <div className={styles.chatList}>
       {displayMessageList.length ? (
         <Bubble.List
+          key={activeConversationKey}
           ref={listRef}
           className={styles.bubbleList}
           role={role}
           styles={{ root: { maxWidth: 940 } }}
           items={displayMessageList.map((item) => ({
             ...item.message,
-            key: item.id,
+            key: `${activeConversationKey}:${item.id}`,
             status: item.status,
             loading: item.status === 'loading',
             extraInfo: item.message.extraInfo ?? item.extraInfo,
@@ -3203,57 +3601,251 @@ function AssistantWorkspace() {
   );
 
   return (
-    <XProvider>
-      <ChatContext.Provider value={{ onReload, setMessage }}>
-        {contextHolder}
-        <div className={styles.layout}>
-          {chatSide}
-          <div className={styles.chat}>
-            <div className={styles.chatToolbar}>
-              {scene.key !== 'chat' ? (
-                <>
-                  <Tag color="blue">{scene.title}</Tag>
-                  <Tag color="purple">命中 {getSceneSlashCommand(scene.key)}</Tag>
-                </>
-              ) : (
-                <Tag color="cyan">slash 命令入口</Tag>
-              )}
-              <Button
-                type="text"
-                icon={<EyeOutlined />}
-                onClick={() => setRunInsightOpen(true)}
-              >
-                运行洞察
-              </Button>
-            </div>
-            {chatList}
-            {chatSender}
-          </div>
+    <ChatContext.Provider value={{ onReload, setMessage }}>
+      <div className={styles.chat}>
+        <div className={styles.chatToolbar}>
+          {scene.key !== 'chat' ? (
+            <>
+              <Tag color="blue">{scene.title}</Tag>
+              <Tag color="purple">命中 {getSceneSlashCommand(scene.key)}</Tag>
+            </>
+          ) : (
+            <Tag color="cyan">slash 命令入口</Tag>
+          )}
+          <Button
+            type="text"
+            icon={<EyeOutlined />}
+            onClick={() => setRunInsightOpen(true)}
+          >
+            运行洞察
+          </Button>
         </div>
-        <RunInsightDrawer
-          open={runInsightOpen}
-          onClose={() => setRunInsightOpen(false)}
-          scene={scene}
-          sourceTags={getSceneSourceTags(scene.key)}
-          slashCommand={scene.key === 'chat' ? 'slash 命令入口' : getSceneSlashCommand(scene.key)}
-          tenantContext={runtimeTenantContext}
-          agentTrace={latestAgentTrace}
-          evidence={latestEvidence}
-          adminBaseUrl={ADMIN_BASE_URL}
-        />
-        <ArtifactMarkdownDrawer
-          state={artifactViewer}
-          markdownClassName={markdownClassName}
-          styles={styles}
-          presentation={
-            artifactViewer.artifactId
-              ? presentationByArtifactId[artifactViewer.artifactId]
-              : undefined
+        {chatList}
+        {chatSender}
+      </div>
+      <RunInsightDrawer
+        key={activeConversationKey}
+        open={runInsightOpen}
+        onClose={() => setRunInsightOpen(false)}
+        scene={scene}
+        sourceTags={getSceneSourceTags(scene.key)}
+        slashCommand={scene.key === 'chat' ? 'slash 命令入口' : getSceneSlashCommand(scene.key)}
+        tenantContext={runtimeTenantContext}
+        agentTrace={latestAgentTrace}
+        evidence={latestEvidence}
+        adminBaseUrl={ADMIN_BASE_URL}
+      />
+      <ArtifactMarkdownDrawer
+        state={artifactViewer}
+        markdownClassName={markdownClassName}
+        styles={styles}
+        presentation={
+          artifactViewer.artifactId
+            ? presentationByArtifactId[artifactViewer.artifactId]
+            : undefined
+        }
+        onGeneratePresentation={handleGeneratePresentation}
+        onClose={() => setArtifactViewer((current) => ({ ...current, open: false }))}
+      />
+    </ChatContext.Provider>
+  );
+}
+
+function AssistantWorkspace() {
+  const { styles } = useStyles();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [markdownClassName] = useMarkdownTheme();
+  const [messageApi, contextHolder] = message.useMessage();
+  const scene = getSceneByPath(location.pathname);
+  const [blankConversationKeys, setBlankConversationKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const pendingBlankConversationSubmitRef = useRef<Record<string, string>>({});
+  const homeConversation = useMemo(
+    () => ({
+      key: HOME_CONVERSATION_KEY,
+      label: 'AI 销售工作台',
+      route: '/chat',
+      group: '固定会话',
+      lastMessage: '从这里描述目标生成计划，或按销售主链路逐步推进。',
+      updatedAt: '刚刚',
+      scene: 'chat',
+    }),
+    [],
+  );
+  const baseConversations = useMemo(
+    () => [homeConversation, ...buildFixedSceneConversations()],
+    [homeConversation],
+  );
+  const defaultConversations = useMemo(
+    () => mergePersistedConversations(baseConversations),
+    [baseConversations],
+  );
+  const getConversationKeyByRoute = React.useCallback(
+    (route: string) =>
+      baseConversations.find((item) => item.route === route)?.key ?? HOME_CONVERSATION_KEY,
+    [baseConversations],
+  );
+
+  useEffect(() => {
+    applyDocumentBranding(brandTitle, brandLogo);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    clearLegacyAssistantStorage();
+  }, []);
+
+  const {
+    conversations,
+    activeConversationKey,
+    setActiveConversationKey,
+    addConversation,
+    setConversation,
+  } = useXConversations({
+    defaultConversations,
+    defaultActiveConversationKey:
+      getStoredActiveConversationKey(defaultConversations.map((item) => item.key))
+      ?? getConversationKeyByRoute(location.pathname),
+  });
+  const activeConversation = conversations.find(
+    (item) => item.key === activeConversationKey,
+  ) as ConversationSession | undefined;
+
+  useEffect(() => {
+    if (activeConversation?.route === location.pathname) {
+      return;
+    }
+
+    const expectedConversationKey = conversations.find(
+      (item) => item.route === location.pathname,
+    )?.key ?? getConversationKeyByRoute(location.pathname);
+
+    if (expectedConversationKey === activeConversationKey) {
+      return;
+    }
+
+    setActiveConversationKey(expectedConversationKey);
+  }, [
+    activeConversationKey,
+    conversations,
+    getConversationKeyByRoute,
+    location.pathname,
+    setActiveConversationKey,
+  ]);
+
+  useEffect(() => {
+    persistActiveConversationKey(activeConversationKey);
+  }, [activeConversationKey]);
+
+  useEffect(() => {
+    persistCustomConversations(conversations as ConversationSession[], baseConversations);
+  }, [baseConversations, conversations]);
+
+  const navigateToScene = React.useCallback((route: string) => {
+    setActiveConversationKey(getConversationKeyByRoute(route));
+    navigate(route);
+  }, [getConversationKeyByRoute, navigate, setActiveConversationKey]);
+
+  const onCreateConversation = () => {
+    const now = new Date();
+    const conversationKey = `conv-user-${now.getTime()}`;
+    const newConversation: ConversationSession = {
+      key: conversationKey,
+      label: NEW_CONVERSATION_LABEL,
+      route: '/chat',
+      group: '最近会话',
+      lastMessage: NEW_CONVERSATION_LAST_MESSAGE,
+      updatedAt: '刚刚',
+      scene: 'chat',
+    };
+
+    pendingBlankConversationSubmitRef.current[conversationKey] = '';
+    setBlankConversationKeys((current) => new Set(current).add(conversationKey));
+    persistMessages(conversationKey, []);
+    addConversation(newConversation, 'prepend');
+    setActiveConversationKey(conversationKey);
+    navigate('/chat');
+  };
+
+  const chatSide = (
+    <div className={styles.side}>
+      <div className={styles.logo}>
+        <span className={styles.logoMark}>
+          <img src={brandLogo} alt={brandTitle} />
+        </span>
+        <div className={styles.logoText}>
+          <span>{brandTitle}</span>
+        </div>
+      </div>
+      <Conversations
+        creation={{ onClick: onCreateConversation, label: '新会话' }}
+        items={conversations.map(({ key, label, ...other }) => ({
+          key,
+          label,
+          ...other,
+        }))}
+        className={styles.conversations}
+        activeKey={activeConversationKey}
+        onActiveChange={(key) => {
+          const matched = conversations.find((item) => item.key === key);
+          if (!matched) {
+            return;
           }
-          onGeneratePresentation={handleGeneratePresentation}
-          onClose={() => setArtifactViewer((current) => ({ ...current, open: false }))}
+          setActiveConversationKey(key);
+          if (matched?.route) {
+            navigate(matched.route);
+          }
+        }}
+        styles={{ item: { padding: '0 8px' } }}
+        menu={() => undefined}
+      />
+
+      <div className={styles.sideFooter}>
+        <Space size={10}>
+          <Avatar size={24} style={{ backgroundColor: '#1677ff' }}>
+            {runtimeTenantContext.owner.slice(0, 1)}
+          </Avatar>
+          <Space orientation="vertical" size={0} className={styles.sideFooterInfo}>
+            <Text strong ellipsis>
+              {runtimeTenantContext.owner}
+            </Text>
+            <Text type="secondary" ellipsis>
+              {runtimeTenantContext.tenantName}
+            </Text>
+          </Space>
+        </Space>
+        <Button
+          type="text"
+          icon={<QuestionCircleOutlined />}
+          onClick={() => messageApi.info('帮助中心原型将在后续迭代补齐。')}
         />
-      </ChatContext.Provider>
+      </div>
+    </div>
+  );
+
+  return (
+    <XProvider>
+      {contextHolder}
+      <div className={styles.layout}>
+        {chatSide}
+        <AssistantConversationRuntime
+          key={activeConversationKey}
+          activeConversationKey={activeConversationKey}
+          activeConversation={activeConversation}
+          conversations={conversations as ConversationSession[]}
+          scene={scene}
+          locationPathname={location.pathname}
+          styles={styles}
+          markdownClassName={markdownClassName}
+          messageApi={messageApi}
+          setConversation={(key, conversation) => setConversation(key, conversation)}
+          navigateToScene={navigateToScene}
+          blankConversationKeys={blankConversationKeys}
+          setBlankConversationKeys={setBlankConversationKeys}
+          pendingBlankConversationSubmitRef={pendingBlankConversationSubmitRef}
+        />
+      </div>
     </XProvider>
   );
 }

@@ -140,3 +140,94 @@ test('OrgSyncService rejects concurrent manual sync attempts', async () => {
   release();
   await waitForCompletion(service);
 });
+
+test('OrgSyncRepository finds employee candidates within current tenant and app', () => {
+  const repository = createRepository();
+  const syncedAt = '2026-04-29T00:00:00.000Z';
+  repository.upsertEmployee({
+    eid: '21024647',
+    appId: '501037729',
+    openId: 'open-chen-weirong',
+    uid: 'uid-chen-weirong',
+    name: '陈伟荣',
+    phone: '13800000002',
+    email: 'chenweirong@example.com',
+    jobTitle: '销售',
+    status: '1',
+    syncedAt,
+    rawPayloadJson: '{}',
+  });
+  repository.upsertEmployee({
+    eid: '21024647',
+    appId: '501037729',
+    openId: 'open-chen-weigang',
+    uid: 'uid-chen-weigang',
+    name: '陈伟刚',
+    phone: '13800000003',
+    email: 'chenweigang@example.com',
+    jobTitle: '销售',
+    status: '1',
+    syncedAt,
+    rawPayloadJson: '{}',
+  });
+  repository.upsertEmployee({
+    eid: 'other-eid',
+    appId: '501037729',
+    openId: 'open-other-tenant',
+    uid: 'uid-other-tenant',
+    name: '陈伟',
+    phone: '13800000004',
+    email: 'chenwei-other@example.com',
+    jobTitle: '销售',
+    status: '1',
+    syncedAt,
+    rawPayloadJson: '{}',
+  });
+  repository.upsertEmployee({
+    eid: '21024647',
+    appId: 'historical-app',
+    openId: 'open-chen-history',
+    uid: 'uid-chen-history',
+    name: '陈伟历史',
+    phone: '13800000005',
+    email: 'chenwei-history@example.com',
+    jobTitle: '销售',
+    status: '1',
+    syncedAt,
+    rawPayloadJson: '{}',
+  });
+
+  const fuzzy = repository.findEmployees({
+    eid: '21024647',
+    appId: '501037729',
+    keyword: '陈伟',
+  });
+  assert.deepEqual(
+    fuzzy.map((employee) => employee.openId),
+    ['open-chen-weigang', 'open-chen-weirong'],
+  );
+
+  const byPhone = repository.findEmployees({
+    eid: '21024647',
+    appId: '501037729',
+    keyword: '13800000003',
+  });
+  assert.deepEqual(byPhone.map((employee) => employee.openId), ['open-chen-weigang']);
+
+  const byEmail = repository.findEmployees({
+    eid: '21024647',
+    appId: '501037729',
+    keyword: 'CHENWEIRONG@EXAMPLE.COM',
+  });
+  assert.deepEqual(byEmail.map((employee) => employee.openId), ['open-chen-weirong']);
+
+  const fallback = repository.findEmployees({
+    eid: '21024647',
+    appId: 'new-app-without-synced-employees',
+    keyword: '陈伟',
+  });
+  assert.deepEqual(
+    fallback.map((employee) => employee.openId),
+    ['open-chen-weigang', 'open-chen-weirong', 'open-chen-history'],
+  );
+});

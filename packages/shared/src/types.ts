@@ -123,6 +123,14 @@ export interface AssetPageConfig {
 }
 
 export type ShadowObjectKey = 'customer' | 'contact' | 'opportunity' | 'followup';
+export type AgentClientAction =
+  | {
+      type: 'record.open';
+      objectKey: ShadowObjectKey;
+      formInstId: string;
+      title?: string;
+    };
+
 export interface AgentUiSurface {
   kind: 'record-search-results' | 'record-detail';
   protocol: 'a2ui';
@@ -130,13 +138,111 @@ export interface AgentUiSurface {
   surfaceId: string;
   catalogId: 'local://yzj-crm/record-result/v1';
   commands: AgentA2UiCommand[];
+  pagination?: AgentRecordSearchPageQuery;
   summary: {
     objectKey: ShadowObjectKey;
     operation: 'search' | 'get';
     total?: number;
+    pageNumber?: number;
+    pageSize?: number;
+    totalPages?: number;
+    returnedCount?: number;
     displayMode: 'empty' | 'list' | 'card';
   };
   rawResult?: unknown;
+}
+
+export interface AgentRecordSearchFilter {
+  field: string;
+  value: unknown;
+  operator?: string;
+}
+
+export interface AgentRecordSearchPageInput {
+  filters?: AgentRecordSearchFilter[];
+  operatorOpenId?: string;
+  pageNumber?: number;
+  pageSize?: number;
+}
+
+export interface AgentRecordSearchPageRequest {
+  objectKey: ShadowObjectKey;
+  searchInput: AgentRecordSearchPageInput;
+  toolCode?: string;
+  queryText?: string;
+}
+
+export interface AgentRecordSearchPageQuery {
+  endpoint: '/api/agent/record-search-page';
+  request: AgentRecordSearchPageRequest;
+}
+
+export interface AgentRecordResultFieldView {
+  label: string;
+  value: string;
+}
+
+export interface AgentRecordResultRecordView {
+  formInstId: string;
+  title: string;
+  subtitle?: string;
+  tags: string[];
+  primaryFields: AgentRecordResultFieldView[];
+  secondaryFields: AgentRecordResultFieldView[];
+}
+
+export interface AgentRecordResultViewModel {
+  objectKey: ShadowObjectKey;
+  operation: 'search' | 'get';
+  toolCode: string;
+  title: string;
+  total: number;
+  pageNumber: number;
+  pageSize: number;
+  totalPages: number;
+  returnedCount: number;
+  queryText?: string;
+  pagination?: AgentRecordSearchPageQuery;
+  displayMode: 'empty' | 'list' | 'card';
+  records: AgentRecordResultRecordView[];
+  record?: AgentRecordResultRecordView;
+}
+
+export interface AgentRecordSearchPageResponse {
+  result: AgentRecordResultViewModel;
+  rawResult: unknown;
+}
+
+export interface AgentFieldOptionHint {
+  label: string;
+  value: string | number | boolean;
+  key?: string;
+  description?: string;
+  source?: 'field_option' | 'dictionary' | 'widget' | 'employee' | 'record';
+}
+
+export interface AgentMetaQuestionLookup {
+  kind: 'remote_select';
+  endpoint: '/api/agent/meta-question-options';
+  source: 'employee' | 'record';
+  targetObjectKey?: ShadowObjectKey;
+  minKeywordLength: 1;
+  pageSize: number;
+  allowFreeText: false;
+}
+
+export interface AgentMetaQuestionOptionsRequest {
+  toolCode: string;
+  paramKey: string;
+  keyword: string;
+  pageSize?: number;
+  tenantContext?: {
+    operatorOpenId?: string;
+  };
+}
+
+export interface AgentMetaQuestionOptionsResponse {
+  options: AgentFieldOptionHint[];
 }
 
 export type AgentA2UiCommand =

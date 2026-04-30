@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AgentEvidenceCard,
+  AgentRecordResultFieldView,
+  AgentRecordResultRecordView,
+  AgentRecordResultViewModel,
+  AgentRecordSearchPageQuery,
+  AgentRecordSearchPageRequest,
+  AgentRecordSearchPageResponse,
+  AgentMetaQuestionOptionsRequest,
+  AgentMetaQuestionOptionsResponse,
   AgentUiSurface,
   AppConfig,
   ArtifactAnchor,
@@ -30,6 +38,7 @@ import {
   type ContextFrame,
   type FieldOptionHint,
   type MetaQuestion,
+  type MetaQuestionLookup,
   type PendingInteraction,
   type RecordWritePreviewRow,
   type RecordWritePreviewView,
@@ -50,6 +59,7 @@ import { cleanupCompanyName, extractCompanyName, inferFallbackIntent } from './a
 import type { ArtifactService } from './artifact-service.js';
 import type { ExternalSkillService } from './external-skill-service.js';
 import type { IntentFrameService } from './intent-frame-service.js';
+import type { OrgEmployeeCandidate, OrgSyncRepository } from './org-sync-repository.js';
 import type { ShadowMetadataService } from './shadow-metadata-service.js';
 import { AgentToolRegistry } from './tool-registry.js';
 import { getErrorMessage } from './errors.js';
@@ -59,6 +69,10 @@ const COMPANY_RESEARCH_TOOL = 'external.company_research';
 const COMPANY_RESEARCH_RUNTIME_TOOL = 'ext.company_research_pm';
 const CONTEXT_SUMMARY_TOOL = 'meta.context_summary';
 const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1' as const;
+const RECORD_RESULT_PAGE_ENDPOINT = '/api/agent/record-search-page' as const;
+const META_QUESTION_OPTIONS_ENDPOINT = '/api/agent/meta-question-options' as const;
+const DEFAULT_RECORD_SEARCH_PAGE_SIZE = 5;
+const DEFAULT_META_QUESTION_OPTION_PAGE_SIZE = 10;
 const COMPANY_RESEARCH_POLL_INTERVAL_MS = 1000;
 const COMPANY_RESEARCH_MAX_WAIT_MS = 420_000;
 const DUPLICATE_CHECK_MAX_ATTEMPTS = 2;
@@ -266,11 +280,38 @@ interface SkillJobWaitResult {
   job: ExternalSkillJobResponse;
 }
 
+interface PersonResolutionIssue {
+  kind: 'ambiguous' | 'not_found';
+  paramKey: string;
+  label: string;
+  rawValue: string;
+  candidates: OrgEmployeeCandidate[];
+}
+
+interface PersonResolutionResult {
+  requestInput: ShadowPreviewUpsertInput;
+  issues: PersonResolutionIssue[];
+}
+
+interface ReferenceResolutionIssue {
+  paramKey: string;
+  label: string;
+  rawValue: string;
+  targetObjectKey?: ShadowObjectKey;
+  options: FieldOptionHint[];
+}
+
+interface ReferenceResolutionResult {
+  requestInput: ShadowPreviewUpsertInput;
+  issues: ReferenceResolutionIssue[];
+}
+
 export interface CrmAgentPackOptions {
   config: AppConfig;
   repository: AgentRunRepository;
   intentFrameService: IntentFrameService;
   shadowMetadataService: ShadowMetadataService;
+  orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>;
   externalSkillService: ExternalSkillService;
   artifactService: ArtifactService;
   companyResearchMaxWaitMs?: number;
@@ -347,7 +388,7 @@ export class CrmIntentResolver implements AgentIntentResolver {
   async resolve(input: AgentToolExecuteInput['request'], contextFrame?: ContextFrame | null) {
     const focusedName = contextFrame?.subject?.name ?? null;
     const legacyIntentFrame = await this.options.intentFrameService.createIntentFrame(input, focusedName);
-    return toGenericIntentFrame(legacyIntentFrame, input, focusedName);
+    return toGenericIntentFrame(legacyIntentFrame, input, focusedName, contextFrame ?? null);
   }
 }
 
@@ -407,15 +448,21 @@ export function createCrmAgentRuntimeParts(options: CrmAgentPackOptions): {
   };
 }
 
-function toGenericIntentFrame(legacyIntentFrame: IntentFrame, request: AgentToolExecuteInput['request'], focusedName?: string | null) {
-  const recordObject = resolveRecordObject(request.query, legacyIntentFrame);
+function toGenericIntentFrame(
+  legacyIntentFrame: IntentFrame,
+  request: AgentToolExecuteInput['request'],
+  focusedName?: string | null,
+  contextFrame?: ContextFrame | null,
+) {
+  const recordObject = resolveRecordObject(request.query, legacyIntentFrame, contextFrame ?? null);
   const target = (() => {
     if (recordObject) {
+      const contextSubject = contextFrame?.subject?.type === recordObject ? contextFrame.subject : null;
       return {
         kind: 'record' as const,
         objectType: recordObject,
-        id: legacyIntentFrame.targets[0]?.id,
-        name: legacyIntentFrame.targets[0]?.name || extractRecordName(request.query, recordObject),
+        id: legacyIntentFrame.targets[0]?.id || contextSubject?.id,
+        name: legacyIntentFrame.targets[0]?.name || contextSubject?.name || extractRecordName(request.query, recordObject),
       };
     }
     if (legacyIntentFrame.targetType === 'artifact') {
@@ -438,6 +485,9 @@ function toGenericIntentFrame(legacyIntentFrame: IntentFrame, request: AgentTool
       name: legacyIntentFrame.targets[0]?.name || focusedName || undefined,
     };
   })();
+  const normalizedLegacyIntentFrame = recordObject
+    ? normalizeRecordLegacyIntentFrame(legacyIntentFrame, recordObject, target.name)
+    : legacyIntentFrame;
 
   return {
     actionType: legacyIntentFrame.actionType,
@@ -449,14 +499,32 @@ function toGenericIntentFrame(legacyIntentFrame: IntentFrame, request: AgentTool
     confidence: legacyIntentFrame.confidence,
     source: legacyIntentFrame.source,
     fallbackReason: legacyIntentFrame.fallbackReason,
-    legacyIntentFrame,
+    legacyIntentFrame: normalizedLegacyIntentFrame,
   };
 }
 
-function resolveRecordObject(query: string, intentFrame: IntentFrame): ShadowObjectKey | null {
-  if (intentFrame.targetType === 'company' && (intentFrame.actionType === 'analyze' || /(公司研究|研究|分析)/.test(query))) {
-    return null;
+function normalizeRecordLegacyIntentFrame(
+  intentFrame: IntentFrame,
+  objectKey: ShadowObjectKey,
+  targetName?: string,
+): IntentFrame {
+  if (intentFrame.targetType === objectKey) {
+    return intentFrame;
   }
+  return {
+    ...intentFrame,
+    targetType: objectKey,
+    targets: [
+      {
+        type: objectKey,
+        id: intentFrame.targets[0]?.id || targetName || objectKey,
+        name: targetName || intentFrame.targets[0]?.name || objectKey,
+      },
+    ],
+  };
+}
+
+function resolveRecordObject(query: string, intentFrame: IntentFrame, contextFrame?: ContextFrame | null): ShadowObjectKey | null {
   const explicitObject = inferExplicitRecordObject(query);
   if (explicitObject === '客户' || explicitObject === '公司') {
     return 'customer';
@@ -470,6 +538,16 @@ function resolveRecordObject(query: string, intentFrame: IntentFrame): ShadowObj
   if (explicitObject === '跟进记录' || explicitObject === '跟进') {
     return 'followup';
   }
+
+  const contextRecordObject = resolveContextRecordObjectForWrite(query, intentFrame, contextFrame ?? null);
+  if (contextRecordObject) {
+    return contextRecordObject;
+  }
+
+  if (intentFrame.targetType === 'company' && (intentFrame.actionType === 'analyze' || /(公司研究|研究|分析)/.test(query))) {
+    return null;
+  }
+
   if (intentFrame.targetType === 'customer'
     || intentFrame.targetType === 'contact'
     || intentFrame.targetType === 'opportunity'
@@ -491,6 +569,25 @@ function resolveRecordObject(query: string, intentFrame: IntentFrame): ShadowObj
     return 'customer';
   }
   return null;
+}
+
+function resolveContextRecordObjectForWrite(
+  query: string,
+  intentFrame: IntentFrame,
+  contextFrame?: ContextFrame | null,
+): ShadowObjectKey | null {
+  const subjectType = contextFrame?.subject?.type;
+  if (!subjectType || !CRM_RECORD_OBJECTS.includes(subjectType as ShadowObjectKey)) {
+    return null;
+  }
+  if (/(公司研究|客户分析|研究|分析)/.test(query)) {
+    return null;
+  }
+  const isWriteIntent = intentFrame.actionType === 'write' || /修改|更新|改成|改为|变更|调整|设置/.test(query);
+  if (!isWriteIntent && !isRecordFieldAssignmentQuery(query)) {
+    return null;
+  }
+  return subjectType as ShadowObjectKey;
 }
 
 function inferExplicitRecordObject(query: string): string | null {
@@ -519,6 +616,7 @@ function selectTool(
 ): CrmToolSelectionResult {
   const query = input.request.query.trim();
   const target = input.intentFrame.target;
+  const recordOpenAction = readRecordOpenClientAction(input.request.clientAction);
 
   if (hasAudioInput(input.request)) {
     return wrapSelectedTool({
@@ -528,6 +626,18 @@ function selectTool(
         missingSlots: ['文字纪要'],
       },
       confidence: 0.82,
+    });
+  }
+
+  if (recordOpenAction) {
+    return wrapSelectedTool({
+      toolCode: `record.${recordOpenAction.objectKey}.get`,
+      reason: '用户通过记录结果组件选择查看详情，使用隐藏 clientAction 绑定内部记录 ID。',
+      input: {
+        formInstId: recordOpenAction.formInstId,
+        operatorOpenId: input.request.tenantContext?.operatorOpenId,
+      },
+      confidence: 0.98,
     });
   }
 
@@ -558,7 +668,11 @@ function selectTool(
     };
   }
 
-  if (target.kind === 'external_subject' && target.objectType === 'company') {
+  if (
+    target.kind === 'external_subject'
+    && target.objectType === 'company'
+    && (input.intentFrame.actionType === 'analyze' || isExplicitCompanyResearchQuery(query))
+  ) {
     return wrapSelectedTool({
       toolCode: COMPANY_RESEARCH_TOOL,
       reason: '用户请求公司研究，选择外部研究工具。',
@@ -586,7 +700,12 @@ function selectTool(
 
   if (target.kind === 'record' && target.objectType) {
     const objectKey = target.objectType as ShadowObjectKey;
-    const operation = resolveRecordOperation(query, input.intentFrame.legacyIntentFrame);
+    const hasRecordContext = Boolean(resolveContextRecordFormInstId({
+      objectKey,
+      contextFrame: input.contextFrame ?? null,
+      resolvedContext: input.resolvedContext ?? null,
+    }));
+    const operation = resolveRecordOperation(query, input.intentFrame.legacyIntentFrame, hasRecordContext);
     const toolCode = `record.${objectKey}.${operation}`;
     const tool = input.availableTools.find((item) => item.code === toolCode);
     return wrapSelectedTool({
@@ -621,6 +740,26 @@ function selectTool(
 
 function wrapSelectedTool(selectedTool: AgentToolSelection): CrmToolSelectionResult {
   return { selectedTool, toolArbitration: null };
+}
+
+function readRecordOpenClientAction(action: AgentPlannerInput['request']['clientAction']): {
+  objectKey: ShadowObjectKey;
+  formInstId: string;
+} | null {
+  if (!action || action.type !== 'record.open') {
+    return null;
+  }
+  if (!CRM_RECORD_OBJECTS.includes(action.objectKey)) {
+    return null;
+  }
+  const formInstId = action.formInstId.trim();
+  if (!formInstId) {
+    return null;
+  }
+  return {
+    objectKey: action.objectKey,
+    formInstId,
+  };
 }
 
 function injectOperatorOpenId(selectedTool: AgentToolSelection, operatorOpenId?: string): AgentToolSelection {
@@ -704,17 +843,24 @@ function isAmbiguousCompanyInfoQuery(query: string): boolean {
     || /(?:给出|提供|展示|显示)\s*.+(?:公司|客户)/.test(query);
 }
 
-function resolveRecordOperation(query: string, intentFrame: IntentFrame) {
+function resolveRecordOperation(query: string, intentFrame: IntentFrame, hasRecordContext = false) {
   if (/修改|更新|改成|变更/.test(query)) {
+    return 'preview_update';
+  }
+  if (/详情|详细|具体|打开/.test(query)) {
+    return 'get';
+  }
+  if (hasRecordContext && isRecordFieldAssignmentQuery(query)) {
     return 'preview_update';
   }
   if (/录入|创建|新增|新建|补录|写入/.test(query) || intentFrame.actionType === 'write') {
     return 'preview_create';
   }
-  if (/详情|详细|具体|打开/.test(query)) {
-    return 'get';
-  }
   return 'search';
+}
+
+function isRecordFieldAssignmentQuery(query: string): boolean {
+  return /(?:为|是|=|：|:)/.test(query);
 }
 
 function buildRecordToolInput(input: {
@@ -767,6 +913,7 @@ function buildRecordToolInput(input: {
       formInstId: extractFormInstId(input.query) ?? contextRecordId,
       params: buildRecordParams(input.objectKey, input.query, name, capability, {
         includeSubjectName: false,
+        fields: input.fields ?? [],
       }),
       operatorOpenId: input.operatorOpenId,
     };
@@ -790,6 +937,7 @@ function buildRecordToolInput(input: {
     mode: 'create',
     params: buildRecordParams(input.objectKey, input.query, name, capability, {
       includeSubjectName: true,
+      fields: input.fields ?? [],
     }),
     operatorOpenId: input.operatorOpenId,
     ...(duplicateCheck ? { agentControl: { duplicateCheck, subjectName: name } } : {}),
@@ -881,8 +1029,10 @@ function buildRecordSearchInput(input: {
   boundFilters: RecordSearchFilter[];
   operatorOpenId?: string;
 }): Record<string, unknown> {
+  const pagination = extractRecordSearchPagination(input.query);
+  const queryWithoutPagination = removeRecordSearchPaginationText(input.query);
   const extraction = extractRecordSearchConditions({
-    query: input.query,
+    query: queryWithoutPagination,
     objectKey: input.objectKey,
     capability: input.capability,
     fields: input.fields,
@@ -893,7 +1043,7 @@ function buildRecordSearchInput(input: {
     ...extraction.filters,
   ];
   const fallbackName = resolveRecordSearchFallbackName({
-    query: input.query,
+    query: queryWithoutPagination,
     objectKey: input.objectKey,
     targetName: input.targetName,
     consumedTexts: extraction.consumedTexts,
@@ -919,10 +1069,50 @@ function buildRecordSearchInput(input: {
   return {
     filters,
     operatorOpenId: input.operatorOpenId,
-    pageNumber: 1,
-    pageSize: 5,
+    pageNumber: pagination.pageNumber,
+    pageSize: pagination.pageSize,
     ...(searchExtraction ? { agentControl: { searchExtraction } } : {}),
   };
+}
+
+function extractRecordSearchPagination(query: string): { pageNumber: number; pageSize: number } {
+  const pageNumber = readPositiveIntegerMatch(query, [
+    /第\s*(\d{1,3})\s*页/,
+    /page(?:Number)?\s*[:=]?\s*(\d{1,3})/i,
+  ]) ?? 1;
+  const pageSize = readPositiveIntegerMatch(query, [
+    /每页\s*(\d{1,3})\s*(?:条|个|项)?/,
+    /pageSize\s*[:=]?\s*(\d{1,3})/i,
+  ]) ?? DEFAULT_RECORD_SEARCH_PAGE_SIZE;
+
+  return {
+    pageNumber: Math.min(Math.max(pageNumber, 1), 999),
+    pageSize: Math.min(Math.max(pageSize, 1), 100),
+  };
+}
+
+function readPositiveIntegerMatch(query: string, patterns: RegExp[]): number | null {
+  for (const pattern of patterns) {
+    const matched = query.match(pattern)?.[1];
+    if (!matched) {
+      continue;
+    }
+    const value = Number.parseInt(matched, 10);
+    if (Number.isInteger(value) && value > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function removeRecordSearchPaginationText(query: string): string {
+  return query
+    .replace(/第\s*\d{1,3}\s*页/g, ' ')
+    .replace(/每页\s*\d{1,3}\s*(?:条|个|项)?/g, ' ')
+    .replace(/page(?:Number)?\s*[:=]?\s*\d{1,3}/gi, ' ')
+    .replace(/pageSize\s*[:=]?\s*\d{1,3}/gi, ' ')
+    .replace(/[，,：:。！？、；;\s]+$/g, '')
+    .trim();
 }
 
 function extractRecordSearchConditions(input: {
@@ -1311,11 +1501,13 @@ function canImplicitlyExtractField(field: ShadowStandardizedField): boolean {
 
 function buildImplicitSearchPredicateText(query: string, objectKey: string): string {
   const labels = getRecordObjectLabelPattern(objectKey);
+  const scope = getRecordCollectionScopePattern();
   const text = query
     .replace(/^\/\S+\s*/, '')
     .replace(/^(?:查询|查一下|找一下|搜索|查看|打开)\s*(?:一个|这?个)?\s*/, '')
+    .replace(new RegExp(`^(?:${scope})\\s*(?:的)?\\s*`), '')
     .replace(new RegExp(`^(?:${labels})[，,：:\\s]*`), '')
-    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${labels})(?:数据|列表|信息|资料)?$`), '')
+    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${scope})?\\s*(?:${labels})(?:数据|列表|信息|资料)?$`), '')
     .replace(/(?:数据|列表|信息|资料)$/, '')
     .replace(/[，,：:。！？、；;\s]+$/g, '')
     .trim();
@@ -1324,8 +1516,9 @@ function buildImplicitSearchPredicateText(query: string, objectKey: string): str
 
 function trimSearchConditionValue(value: string, objectKey: string): string {
   const labels = getRecordObjectLabelPattern(objectKey);
+  const scope = getRecordCollectionScopePattern();
   return value
-    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${labels})(?:数据|列表|信息|资料)?$`), '')
+    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${scope})?\\s*(?:${labels})(?:数据|列表|信息|资料)?$`), '')
     .replace(/(?:数据|列表|信息|资料)$/, '')
     .replace(/[，,：:。！？、；;\s]+$/g, '')
     .trim();
@@ -1339,7 +1532,8 @@ function resolveRecordSearchFallbackName(input: {
   hasStructuredFilters: boolean;
 }): string {
   if (!input.hasStructuredFilters && input.targetName?.trim()) {
-    return cleanupRecordNameCandidate(input.targetName, input.objectKey);
+    const targetName = cleanupRecordNameCandidate(input.targetName, input.objectKey);
+    return isMeaningfulRecordNameCandidate(targetName, input.objectKey) ? targetName : '';
   }
 
   const remainingQuery = removeConsumedSearchTexts(input.query, input.consumedTexts);
@@ -1357,17 +1551,24 @@ function removeConsumedSearchTexts(query: string, consumedTexts: string[]): stri
 
 function cleanupRecordNameCandidate(value: string, objectKey: string): string {
   const labels = getRecordObjectLabelPattern(objectKey);
+  const scope = getRecordCollectionScopePattern();
   return cleanupCompanyName(value)
-    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${labels})$`), '')
+    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${scope})?\\s*(?:${labels})$`), '')
     .trim();
 }
 
 function isMeaningfulRecordNameCandidate(value: string, objectKey: string): boolean {
   const labels = getRecordObjectLabelPattern(objectKey);
+  const scope = getRecordCollectionScopePattern();
   const normalized = value
     .replace(new RegExp(`^(?:查询|查一下|找一下|搜索|查看|打开)?(?:的)?(?:${labels})?$`), '')
+    .replace(new RegExp(`(?:\\s*的)?\\s*(?:${scope})?\\s*(?:${labels})(?:数据|列表|信息|资料)?$`), '')
+    .replace(/(?:数据|列表|信息|资料|记录)$/, '')
     .replace(/^的$/, '')
     .trim();
+  if (isRecordCollectionScopeCandidate(normalized)) {
+    return false;
+  }
   return normalized.length > 0;
 }
 
@@ -1382,6 +1583,17 @@ function getRecordObjectLabelPattern(objectKey: string): string {
     return '跟进记录|拜访记录|跟进';
   }
   return '客户|公司';
+}
+
+function isRecordCollectionScopeCandidate(value: string): boolean {
+  const normalized = normalizeSearchComparable(value)
+    .replace(/^(?:的)/, '')
+    .replace(/(?:的)$/, '');
+  return new RegExp(`^(?:${getRecordCollectionScopePattern()}|列表|清单|数据|记录|所有数据|全部数据|所有记录|全部记录)$`).test(normalized);
+}
+
+function getRecordCollectionScopePattern(): string {
+  return '所有|全部|全量|全体';
 }
 
 function buildSearchExtractionControl(input: {
@@ -1433,6 +1645,7 @@ function buildRecordParams(
   capability: RecordToolCapability,
   options: {
     includeSubjectName: boolean;
+    fields?: ShadowStandardizedField[];
   },
 ): Record<string, unknown> {
   const subjectNameParam = capability.previewInputPolicy?.subjectNameParam ?? inferRecordNameParam(objectKey);
@@ -1449,7 +1662,154 @@ function buildRecordParams(
     }
   }
 
+  const metadataParams = extractRecordWriteParamsFromQuery({
+    query,
+    capability,
+    fields: options.fields ?? [],
+    currentParams: params,
+  });
+  for (const [paramKey, value] of Object.entries(metadataParams)) {
+    if (!hasMeaningfulValue(params[paramKey])) {
+      params[paramKey] = value;
+    }
+  }
+
   return params;
+}
+
+function extractRecordWriteParamsFromQuery(input: {
+  query: string;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  currentParams?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  const writableParams = input.capability.previewInputPolicy?.writableParams ?? [];
+  for (const paramKey of writableParams) {
+    if (hasMeaningfulValue(input.currentParams?.[paramKey])) {
+      continue;
+    }
+    const field = findFieldByParamKey(paramKey, input.fields);
+    if (field && field.writePolicy !== undefined && field.writePolicy !== 'promptable') {
+      continue;
+    }
+    const rawValue = extractExplicitWriteValue(input.query, {
+      paramKey,
+      field,
+      capability: input.capability,
+    });
+    if (rawValue === undefined) {
+      continue;
+    }
+    const normalized = normalizeExplicitWriteValue(rawValue, field);
+    if (normalized !== undefined && hasMeaningfulValue(normalized)) {
+      params[paramKey] = normalized;
+    }
+  }
+  return params;
+}
+
+function extractExplicitWriteValue(
+  query: string,
+  input: {
+    paramKey: string;
+    field?: ShadowStandardizedField;
+    capability: RecordToolCapability;
+  },
+): string | undefined {
+  const labels = buildWriteFieldLabels(input);
+  for (const label of labels) {
+    const escaped = escapeRegExp(label);
+    const patterns = [
+      new RegExp(`${escaped}\\s*(?:改成|改为|更新为|调整为|设置为|设为|变更为|变为|为|是|=|：|:)\\s*([^，。；;\\n]+)`),
+      new RegExp(`(?:更新|修改|变更|调整|设置|改)\\s*${escaped}\\s*(?:到|至|成|为)?\\s*([^，。；;\\n]+)`),
+    ];
+    for (const pattern of patterns) {
+      const matched = query.match(pattern);
+      const value = matched?.[1]?.trim();
+      if (value) {
+        return trimValueBeforeKnownLabels(value, input.capability, input.paramKey);
+      }
+    }
+  }
+  return undefined;
+}
+
+function buildWriteFieldLabels(input: {
+  paramKey: string;
+  field?: ShadowStandardizedField;
+  capability: RecordToolCapability;
+}): string[] {
+  const candidates = [
+    input.capability.fieldLabels?.[input.paramKey],
+    input.field?.label,
+    input.field?.writeParameterKey,
+    input.field?.semanticSlot,
+    input.paramKey,
+  ].filter((item): item is string => Boolean(item?.trim()));
+  return Array.from(
+    new Set(
+      candidates
+        .flatMap((label) => [label, ...buildShortLabelVariants(label)])
+        .map((label) => label.trim())
+        .filter((label) => label.length >= 2),
+    ),
+  ).sort((left, right) => right.length - left.length);
+}
+
+function normalizeExplicitWriteValue(rawValue: string, field?: ShadowStandardizedField): unknown {
+  const value = rawValue.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (!field) {
+    return value;
+  }
+  const option = field.options?.length ? resolveFieldOptionFromText(value, field) : undefined;
+  if (option) {
+    return normalizeOptionHintValue(field, option);
+  }
+  if (field.widgetType === 'switchWidget') {
+    const switchValue = normalizeSwitchDisplayInput(value);
+    if (switchValue !== null) {
+      return switchValue ? '1' : '0';
+    }
+  }
+  if (field.widgetType === 'numberWidget' || field.widgetType === 'moneyWidget') {
+    return parseNumericWriteValue(value);
+  }
+  return value;
+}
+
+function resolveFieldOptionFromText(
+  value: string,
+  field: ShadowStandardizedField,
+): ShadowStandardizedField['options'][number] | undefined {
+  const comparable = normalizeDisplayComparable(value);
+  return field.options.find((option) => {
+    const values = [option.title, option.value, option.key, option.dicId, ...(option.aliases ?? [])]
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+    return values.some((item) => normalizeDisplayComparable(item) === comparable);
+  });
+}
+
+function parseNumericWriteValue(value: string): number | string {
+  const normalized = value.replace(/[,\s，人民币元]/g, '');
+  const matched = normalized.match(/(-?\d+(?:\.\d+)?)/);
+  if (!matched) {
+    return value;
+  }
+  const base = Number.parseFloat(matched[1]);
+  if (!Number.isFinite(base)) {
+    return value;
+  }
+  const multiplier = normalized.includes('亿')
+    ? 100_000_000
+    : normalized.includes('万')
+      ? 10_000
+      : 1;
+  const result = base * multiplier;
+  return Number.isInteger(result) ? result : Number(result.toFixed(2));
 }
 
 function inferRecordNameParam(objectKey: string): string {
@@ -1523,6 +1883,10 @@ function buildShortLabelVariants(label: string): string[] {
     label.includes('手机') ? '手机' : '',
     label.includes('手机') || label.includes('电话') ? '电话' : '',
     label.includes('手机') || label.includes('电话') ? '手机号' : '',
+    label.includes('预算') ? '预算' : '',
+    label.includes('销售阶段') ? '阶段' : '',
+    label.includes('预计成交时间') ? '成交时间' : '',
+    label.replace(/^(?:商机|机会|客户|联系人)/, ''),
     label.replace(/（.*?）/g, ''),
   ].filter((item) => item && item !== label);
 }
@@ -1823,6 +2187,13 @@ async function executeRecordReadTool(
       operation,
       result: result as ShadowExecuteSearchResponse | ShadowExecuteGetResponse,
       capability: CRM_RECORD_CAPABILITIES[objectKey],
+      queryText: input.request.query,
+      searchInput: operation === 'search'
+        ? {
+            ...selectedInput,
+            operatorOpenId: context.operatorOpenId ?? undefined,
+          } as ShadowPreviewSearchInput
+        : undefined,
     });
 
     return {
@@ -1848,30 +2219,9 @@ async function executeRecordReadTool(
   }
 }
 
-interface RecordResultFieldView {
-  label: string;
-  value: string;
-}
-
-interface RecordResultRecordView {
-  formInstId: string;
-  title: string;
-  subtitle?: string;
-  tags: string[];
-  primaryFields: RecordResultFieldView[];
-  secondaryFields: RecordResultFieldView[];
-}
-
-interface RecordResultViewModel {
-  objectKey: ShadowObjectKey;
-  operation: 'search' | 'get';
-  toolCode: string;
-  title: string;
-  total: number;
-  displayMode: 'empty' | 'list' | 'card';
-  records: RecordResultRecordView[];
-  record?: RecordResultRecordView;
-}
+type RecordResultFieldView = AgentRecordResultFieldView;
+type RecordResultRecordView = AgentRecordResultRecordView;
+type RecordResultViewModel = AgentRecordResultViewModel;
 
 function buildRecordReadPresentation(input: {
   runId: string;
@@ -1880,12 +2230,23 @@ function buildRecordReadPresentation(input: {
   operation: 'search' | 'get';
   result: ShadowExecuteSearchResponse | ShadowExecuteGetResponse;
   capability: RecordToolCapability;
+  queryText?: string;
+  searchInput?: ShadowPreviewSearchInput;
 }): {
   content: string;
   uiSurface: AgentUiSurface;
 } {
   const view = buildRecordResultViewModel(input);
   const surfaceId = `record-${input.operation}-${input.runId}-${randomUUID().slice(0, 8)}`;
+  const pagination = input.operation === 'search' && input.searchInput
+    ? buildRecordSearchPageQuery({
+        objectKey: input.objectKey,
+        toolCode: input.toolCode,
+        searchInput: input.searchInput,
+        queryText: input.queryText,
+      })
+    : undefined;
+  const viewWithPagination = pagination ? { ...view, pagination } : view;
   const component = view.displayMode === 'empty'
     ? 'RecordResultEmpty'
     : view.displayMode === 'list'
@@ -1910,7 +2271,7 @@ function buildRecordReadPresentation(input: {
         updateDataModel: {
           surfaceId,
           path: '/recordResult',
-          value: view,
+          value: viewWithPagination,
         },
       },
       {
@@ -1931,8 +2292,13 @@ function buildRecordReadPresentation(input: {
       objectKey: input.objectKey,
       operation: input.operation,
       total: view.total,
+      pageNumber: view.pageNumber,
+      pageSize: view.pageSize,
+      totalPages: view.totalPages,
+      returnedCount: view.returnedCount,
       displayMode: view.displayMode,
     },
+    ...(pagination ? { pagination } : {}),
     rawResult: input.result,
   };
 
@@ -1942,12 +2308,258 @@ function buildRecordReadPresentation(input: {
   };
 }
 
+function buildRecordSearchPageQuery(input: {
+  objectKey: ShadowObjectKey;
+  toolCode: string;
+  searchInput: ShadowPreviewSearchInput;
+  queryText?: string;
+}): AgentRecordSearchPageQuery {
+  return {
+    endpoint: RECORD_RESULT_PAGE_ENDPOINT,
+    request: {
+      objectKey: input.objectKey,
+      toolCode: input.toolCode,
+      ...(input.queryText ? { queryText: input.queryText } : {}),
+      searchInput: {
+        ...input.searchInput,
+      },
+    },
+  };
+}
+
+export async function buildRecordSearchPageResponse(input: {
+  shadowMetadataService: ShadowMetadataService;
+  request: AgentRecordSearchPageRequest;
+}): Promise<AgentRecordSearchPageResponse> {
+  const objectKey = input.request.objectKey;
+  const toolCode = input.request.toolCode || `record.${objectKey}.search`;
+  const searchInput = {
+    ...input.request.searchInput,
+  };
+  const result = await input.shadowMetadataService.executeSearch(objectKey, searchInput);
+  const pagination = buildRecordSearchPageQuery({
+    objectKey,
+    toolCode,
+    searchInput,
+    queryText: input.request.queryText,
+  });
+  const view = buildRecordResultViewModel({
+    toolCode,
+    objectKey,
+    operation: 'search',
+    result,
+    capability: CRM_RECORD_CAPABILITIES[objectKey],
+    queryText: input.request.queryText,
+  });
+
+  return {
+    result: {
+      ...view,
+      pagination,
+    },
+    rawResult: result,
+  };
+}
+
+export async function buildMetaQuestionOptionsResponse(input: {
+  config: AppConfig;
+  shadowMetadataService: ShadowMetadataService;
+  orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>;
+  request: AgentMetaQuestionOptionsRequest;
+}): Promise<AgentMetaQuestionOptionsResponse> {
+  const pageSize = clampMetaQuestionPageSize(input.request.pageSize);
+  const keyword = input.request.keyword.trim();
+  if (!keyword) {
+    return { options: [] };
+  }
+
+  const context = resolveMetaQuestionFieldContext({
+    shadowMetadataService: input.shadowMetadataService,
+    toolCode: input.request.toolCode,
+    paramKey: input.request.paramKey,
+  });
+  if (!context) {
+    return { options: [] };
+  }
+
+  if (context.field.widgetType === 'personSelectWidget') {
+    return {
+      options: buildEmployeeOptionHints(
+        input.orgSyncRepository?.findEmployees({
+          eid: input.config.yzj.eid,
+          appId: input.config.yzj.appId,
+          keyword,
+          limit: pageSize,
+        }) ?? [],
+      ),
+    };
+  }
+
+  if (context.field.widgetType === 'basicDataWidget') {
+    const targetObjectKey = resolveRelationTargetObjectKey(input.shadowMetadataService, context.field);
+    if (!targetObjectKey || !input.request.tenantContext?.operatorOpenId?.trim()) {
+      return { options: [] };
+    }
+    return {
+      options: await buildRecordLookupOptionHints({
+        shadowMetadataService: input.shadowMetadataService,
+        objectKey: targetObjectKey,
+        keyword,
+        pageSize,
+        operatorOpenId: input.request.tenantContext.operatorOpenId.trim(),
+      }),
+    };
+  }
+
+  return { options: [] };
+}
+
+function resolveMetaQuestionFieldContext(input: {
+  shadowMetadataService: ShadowMetadataService;
+  toolCode: string;
+  paramKey: string;
+}): {
+  objectKey: ShadowObjectKey;
+  field: ShadowStandardizedField;
+} | null {
+  const objectKey = parseRecordObjectKeyFromToolCode(input.toolCode);
+  if (!objectKey) {
+    return null;
+  }
+  const field = findFieldByParamKey(input.paramKey, readRecordFields({
+    shadowMetadataService: input.shadowMetadataService,
+  }, objectKey));
+  return field ? { objectKey, field } : null;
+}
+
+function parseRecordObjectKeyFromToolCode(toolCode: string): ShadowObjectKey | null {
+  const matched = toolCode.match(/^record\.(customer|contact|opportunity|followup)\./);
+  const objectKey = matched?.[1] as ShadowObjectKey | undefined;
+  return objectKey && CRM_RECORD_OBJECTS.includes(objectKey) ? objectKey : null;
+}
+
+function clampMetaQuestionPageSize(pageSize: unknown): number {
+  const parsed = typeof pageSize === 'number' ? pageSize : Number(pageSize);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_META_QUESTION_OPTION_PAGE_SIZE;
+  }
+  return Math.min(Math.max(Math.trunc(parsed), 1), 20);
+}
+
+function buildEmployeeOptionHints(candidates: OrgEmployeeCandidate[]): FieldOptionHint[] {
+  return candidates.map((candidate) => ({
+    label: formatEmployeeCandidateLabel(candidate),
+    value: candidate.openId,
+    key: candidate.openId,
+    description: candidate.jobTitle ?? undefined,
+    source: 'employee' as const,
+  }));
+}
+
+async function buildRecordLookupOptionHints(input: {
+  shadowMetadataService: ShadowMetadataService;
+  objectKey: ShadowObjectKey;
+  keyword: string;
+  pageSize: number;
+  operatorOpenId: string;
+}): Promise<FieldOptionHint[]> {
+  const fields = readRecordFields({
+    shadowMetadataService: input.shadowMetadataService,
+  }, input.objectKey);
+  const capability = CRM_RECORD_CAPABILITIES[input.objectKey];
+  const identityField = capability.identityFields?.[0] ?? inferRecordNameParam(input.objectKey);
+  const searchInputs = dedupeRecordLookupSearchInputs([
+    {
+      ...buildRecordSearchInput({
+        query: input.keyword,
+        objectKey: input.objectKey,
+        capability,
+        identityField,
+        fields,
+        boundFilters: [],
+        operatorOpenId: input.operatorOpenId,
+      }),
+      pageNumber: 1,
+      pageSize: input.pageSize,
+    } as ShadowPreviewSearchInput,
+    {
+      filters: [
+        {
+          field: identityField,
+          value: input.keyword,
+          operator: 'like',
+        },
+      ],
+      operatorOpenId: input.operatorOpenId,
+      pageNumber: 1,
+      pageSize: input.pageSize,
+    },
+  ]);
+  const records: ShadowLiveRecord[] = [];
+  const seen = new Set<string>();
+  for (const searchInput of searchInputs) {
+    const result = await input.shadowMetadataService.executeSearch(input.objectKey, searchInput);
+    for (const record of result.records ?? []) {
+      if (!record.formInstId || seen.has(record.formInstId)) {
+        continue;
+      }
+      seen.add(record.formInstId);
+      records.push(record);
+      if (records.length >= input.pageSize) {
+        break;
+      }
+    }
+    if (records.length >= input.pageSize) {
+      break;
+    }
+  }
+  return records.map((record) => {
+    const view = buildRecordResultRecordView({
+      objectKey: input.objectKey,
+      record,
+      capability,
+    });
+    const description = [
+      view.subtitle,
+      ...view.primaryFields.slice(0, 3).map((field) => `${field.label}：${field.value}`),
+    ].filter(Boolean).join(' · ');
+    return {
+      label: view.title,
+      value: view.formInstId,
+      key: view.formInstId,
+      ...(description ? { description } : {}),
+      source: 'record' as const,
+    };
+  });
+}
+
+function dedupeRecordLookupSearchInputs(inputs: ShadowPreviewSearchInput[]): ShadowPreviewSearchInput[] {
+  const seen = new Set<string>();
+  const output: ShadowPreviewSearchInput[] = [];
+  for (const input of inputs) {
+    const { agentControl: _agentControl, ...cleanInput } = input as ShadowPreviewSearchInput & { agentControl?: unknown };
+    const fingerprint = JSON.stringify({
+      filters: cleanInput.filters ?? [],
+      operatorOpenId: cleanInput.operatorOpenId ?? '',
+      pageNumber: cleanInput.pageNumber ?? 1,
+      pageSize: cleanInput.pageSize ?? DEFAULT_META_QUESTION_OPTION_PAGE_SIZE,
+    });
+    if (seen.has(fingerprint)) {
+      continue;
+    }
+    seen.add(fingerprint);
+    output.push(cleanInput);
+  }
+  return output;
+}
+
 function buildRecordResultViewModel(input: {
   toolCode: string;
   objectKey: ShadowObjectKey;
   operation: 'search' | 'get';
   result: ShadowExecuteSearchResponse | ShadowExecuteGetResponse;
   capability: RecordToolCapability;
+  queryText?: string;
 }): RecordResultViewModel {
   const records = input.operation === 'search'
     ? (input.result as ShadowExecuteSearchResponse).records
@@ -1955,6 +2567,15 @@ function buildRecordResultViewModel(input: {
   const total = input.operation === 'search'
     ? (input.result as ShadowExecuteSearchResponse).totalElements ?? records.length
     : records.length;
+  const pageNumber = input.operation === 'search'
+    ? (input.result as ShadowExecuteSearchResponse).pageNumber ?? 1
+    : 1;
+  const pageSize = input.operation === 'search'
+    ? (input.result as ShadowExecuteSearchResponse).pageSize ?? records.length
+    : records.length;
+  const totalPages = input.operation === 'search'
+    ? (input.result as ShadowExecuteSearchResponse).totalPages ?? Math.max(1, Math.ceil(total / Math.max(pageSize, 1)))
+    : 1;
   const mappedRecords = records.map((record) =>
     buildRecordResultRecordView({
       objectKey: input.objectKey,
@@ -1965,7 +2586,7 @@ function buildRecordResultViewModel(input: {
   const objectLabel = mapRecordObjectLabel(input.objectKey);
   const displayMode = mappedRecords.length === 0
     ? 'empty'
-    : input.operation === 'get' || mappedRecords.length === 1
+    : input.operation === 'get' || total === 1
       ? 'card'
       : 'list';
 
@@ -1979,6 +2600,11 @@ function buildRecordResultViewModel(input: {
         ? `${objectLabel}详情`
         : `查询到 ${total} 个${objectLabel}`,
     total,
+    pageNumber,
+    pageSize,
+    totalPages,
+    returnedCount: mappedRecords.length,
+    ...(input.queryText ? { queryText: input.queryText } : {}),
     displayMode,
     records: mappedRecords,
     ...(displayMode === 'card' ? { record: mappedRecords[0] } : {}),
@@ -2490,6 +3116,14 @@ function stringifyPreviewValue(value: unknown): string {
   return '';
 }
 
+function getPersonDisplayName(value: unknown): string {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    return String(record.name ?? record.title ?? record.open_id ?? record.openId ?? '').trim();
+  }
+  return stringifyPreviewValue(value);
+}
+
 function hasMeaningfulValue(value: unknown): boolean {
   if (value === undefined || value === null) {
     return false;
@@ -2547,6 +3181,17 @@ function enrichRecordParamsFromQuery(input: {
   fields: ShadowStandardizedField[];
 }): Record<string, unknown> {
   const params = { ...input.params };
+  const metadataParams = extractRecordWriteParamsFromQuery({
+    query: input.query,
+    capability: input.capability,
+    fields: input.fields,
+    currentParams: params,
+  });
+  for (const [paramKey, value] of Object.entries(metadataParams)) {
+    if (!hasMeaningfulValue(params[paramKey])) {
+      params[paramKey] = value;
+    }
+  }
   for (const paramKey of input.capability.previewInputPolicy?.writableParams ?? []) {
     if (hasMeaningfulValue(params[paramKey])) {
       continue;
@@ -2561,6 +3206,453 @@ function enrichRecordParamsFromQuery(input: {
     }
   }
   return params;
+}
+
+function resolvePersonSelectParams(input: {
+  options: CrmAgentPackOptions;
+  context: AgentToolExecuteContext;
+  requestInput: ShadowPreviewUpsertInput;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+}): PersonResolutionResult {
+  const params = readRequestParams(input.requestInput);
+  const nextParams = { ...params };
+  const issues: PersonResolutionIssue[] = [];
+
+  for (const paramKey of input.capability.previewInputPolicy?.writableParams ?? []) {
+    if (!hasMeaningfulValue(nextParams[paramKey])) {
+      continue;
+    }
+    const field = findFieldByParamKey(paramKey, input.fields);
+    if (field?.widgetType !== 'personSelectWidget') {
+      continue;
+    }
+    const resolved = resolvePersonParamValue({
+      options: input.options,
+      context: input.context,
+      paramKey,
+      label: getFieldLabel(input.capability, paramKey),
+      rawValue: nextParams[paramKey],
+    });
+    if (resolved.issue) {
+      issues.push(resolved.issue);
+      continue;
+    }
+    if (resolved.value !== undefined) {
+      nextParams[paramKey] = resolved.value;
+    }
+  }
+
+  return {
+    requestInput: {
+      ...input.requestInput,
+      params: nextParams,
+    },
+    issues,
+  };
+}
+
+function resolvePersonParamValue(input: {
+  options: CrmAgentPackOptions;
+  context: AgentToolExecuteContext;
+  paramKey: string;
+  label: string;
+  rawValue: unknown;
+}): {
+  value?: unknown;
+  issue?: PersonResolutionIssue;
+} {
+  if (Array.isArray(input.rawValue)) {
+    const values: unknown[] = [];
+    for (const item of input.rawValue) {
+      const resolved = resolveSinglePersonValue({ ...input, rawValue: item });
+      if (resolved.issue) {
+        return resolved;
+      }
+      if (resolved.value !== undefined) {
+        values.push(resolved.value);
+      }
+    }
+    return { value: values };
+  }
+
+  return resolveSinglePersonValue(input);
+}
+
+function resolveSinglePersonValue(input: {
+  options: CrmAgentPackOptions;
+  context: AgentToolExecuteContext;
+  paramKey: string;
+  label: string;
+  rawValue: unknown;
+}): {
+  value?: unknown;
+  issue?: PersonResolutionIssue;
+} {
+  const directOpenId = readPersonOpenId(input.rawValue);
+  if (directOpenId) {
+    const candidate = findExactEmployeeCandidate(input, directOpenId);
+    return {
+      value: candidate ? buildPersonParamObject(candidate) : input.rawValue,
+    };
+  }
+
+  const keyword = typeof input.rawValue === 'string' ? input.rawValue.trim() : '';
+  if (!keyword) {
+    return { value: input.rawValue };
+  }
+  const candidates = input.options.orgSyncRepository?.findEmployees({
+    eid: input.context.eid,
+    appId: input.context.appId,
+    keyword,
+    limit: 20,
+  }) ?? [];
+  const exactIdentifierCandidates = candidates.filter((candidate) => isExactEmployeeIdentifierMatch(candidate, keyword));
+  if (exactIdentifierCandidates.length === 1) {
+    return { value: buildPersonParamObject(exactIdentifierCandidates[0]!) };
+  }
+  if (isLikelyOpenId(keyword) && exactIdentifierCandidates.length === 0) {
+    return { value: keyword };
+  }
+  if (candidates.length === 1) {
+    return { value: buildPersonParamObject(candidates[0]!) };
+  }
+  return {
+    issue: {
+      kind: candidates.length ? 'ambiguous' : 'not_found',
+      paramKey: input.paramKey,
+      label: input.label,
+      rawValue: keyword,
+      candidates,
+    },
+  };
+}
+
+function isExactEmployeeIdentifierMatch(candidate: OrgEmployeeCandidate, keyword: string): boolean {
+  return [
+    candidate.openId,
+    candidate.uid,
+    candidate.phone,
+    candidate.email,
+  ].filter((item): item is string => Boolean(item?.trim()))
+    .some((item) => item.toLowerCase() === keyword.toLowerCase());
+}
+
+function readPersonOpenId(value: unknown): string {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const openId = record.open_id ?? record.openId;
+    return typeof openId === 'string' && openId.trim() ? openId.trim() : '';
+  }
+  return '';
+}
+
+function findExactEmployeeCandidate(
+  input: {
+    options: CrmAgentPackOptions;
+    context: AgentToolExecuteContext;
+  },
+  openId: string,
+): OrgEmployeeCandidate | null {
+  const candidates = input.options.orgSyncRepository?.findEmployees({
+    eid: input.context.eid,
+    appId: input.context.appId,
+    keyword: openId,
+    limit: 5,
+  }) ?? [];
+  return candidates.find((candidate) => candidate.openId === openId) ?? null;
+}
+
+function buildPersonParamObject(candidate: OrgEmployeeCandidate): Record<string, string> {
+  return {
+    open_id: candidate.openId,
+    ...(candidate.name ? { name: candidate.name } : {}),
+    ...(candidate.phone ? { phone: candidate.phone } : {}),
+    ...(candidate.email ? { email: candidate.email } : {}),
+  };
+}
+
+function isLikelyOpenId(value: string): boolean {
+  return /^[0-9a-f][0-9a-f_-]{19,}$/i.test(value) || /^open[-_]/i.test(value);
+}
+
+function buildPersonResolutionWaitingResult(input: {
+  runId: string;
+  toolCode: string;
+  partialInput: Record<string, unknown>;
+  toolCall: AgentToolExecutionResult['toolCalls'][number];
+  issues: PersonResolutionIssue[];
+  context: AgentToolExecuteContext;
+}): AgentToolExecutionResult {
+  const firstIssue = input.issues[0]!;
+  const isAmbiguous = firstIssue.kind === 'ambiguous';
+  const title = isAmbiguous ? '需要确认具体人员' : '未找到匹配人员';
+  const summary = isAmbiguous
+    ? `${firstIssue.label}“${firstIssue.rawValue}”命中 ${firstIssue.candidates.length} 位员工，请选择具体人员。`
+    : `未在组织员工表中找到 ${firstIssue.label}“${firstIssue.rawValue}”，请补充更完整姓名、手机号或邮箱。`;
+  finishToolCall(input.toolCall, 'skipped', summary);
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      `## ${title}`,
+      `- 字段：${firstIssue.label}`,
+      `- 输入：${firstIssue.rawValue}`,
+      `- 处理：${summary}`,
+    ].join('\n'),
+    headline: title,
+    references: ['meta.clarify_card', input.toolCode],
+    toolCalls: [input.toolCall],
+    pendingInteraction: buildPendingInteraction({
+      runId: input.runId,
+      kind: 'input_required',
+      toolCode: input.toolCode,
+      title,
+      summary,
+      partialInput: input.partialInput,
+      questionCard: buildPersonQuestionCard({
+        toolCode: input.toolCode,
+        title,
+        summary,
+        issue: firstIssue,
+      }),
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: isAmbiguous ? 'record.person_resolution_ambiguous' : 'record.person_resolution_not_found',
+        action: 'clarify',
+        toolCode: input.toolCode,
+        reason: summary,
+      }),
+    ],
+  };
+}
+
+function buildPersonQuestionCard(input: {
+  toolCode: string;
+  title: string;
+  summary: string;
+  issue: PersonResolutionIssue;
+}): PendingInteraction['questionCard'] {
+  const options = input.issue.kind === 'ambiguous'
+    ? buildEmployeeOptionHints(input.issue.candidates)
+    : undefined;
+  return {
+    title: input.title,
+    description: input.summary,
+    toolCode: input.toolCode,
+    submitLabel: options?.length ? '选择并继续预览' : '补充并继续预览',
+    currentValues: {},
+    questions: [
+      {
+        questionId: `${input.toolCode}:${input.issue.paramKey}:person_resolution`,
+        paramKey: input.issue.paramKey,
+        label: input.issue.label,
+        type: 'reference',
+        required: true,
+        placeholder: '输入姓名、手机号或邮箱搜索并选择',
+        options,
+        lookup: buildEmployeeMetaQuestionLookup(),
+        reason: input.summary,
+      },
+    ],
+  };
+}
+
+async function resolveReferenceSelectParams(input: {
+  options: CrmAgentPackOptions;
+  context: AgentToolExecuteContext;
+  requestInput: ShadowPreviewUpsertInput;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+}): Promise<ReferenceResolutionResult> {
+  const params = readRequestParams(input.requestInput);
+  const nextParams = { ...params };
+  const issues: ReferenceResolutionIssue[] = [];
+
+  for (const paramKey of input.capability.previewInputPolicy?.writableParams ?? []) {
+    if (!hasMeaningfulValue(nextParams[paramKey])) {
+      continue;
+    }
+    const field = findFieldByParamKey(paramKey, input.fields);
+    if (field?.widgetType !== 'basicDataWidget') {
+      continue;
+    }
+    const issue = await resolveReferenceParamValue({
+      options: input.options,
+      context: input.context,
+      field,
+      paramKey,
+      label: getFieldLabel(input.capability, paramKey),
+      rawValue: nextParams[paramKey],
+    });
+    if (issue) {
+      issues.push(issue);
+    }
+  }
+
+  return {
+    requestInput: {
+      ...input.requestInput,
+      params: nextParams,
+    },
+    issues,
+  };
+}
+
+async function resolveReferenceParamValue(input: {
+  options: CrmAgentPackOptions;
+  context: AgentToolExecuteContext;
+  field: ShadowStandardizedField;
+  paramKey: string;
+  label: string;
+  rawValue: unknown;
+}): Promise<ReferenceResolutionIssue | undefined> {
+  const values = Array.isArray(input.rawValue) ? input.rawValue : [input.rawValue];
+  for (const value of values) {
+    if (isAcceptableReferenceValue(value)) {
+      continue;
+    }
+    const rawValue = typeof value === 'string' ? value.trim() : stringifyPreviewValue(value).trim();
+    if (!rawValue) {
+      continue;
+    }
+    const targetObjectKey = resolveRelationTargetObjectKey(input.options.shadowMetadataService, input.field);
+    const options = targetObjectKey && input.context.operatorOpenId
+      ? await buildRecordLookupOptionHints({
+          shadowMetadataService: input.options.shadowMetadataService,
+          objectKey: targetObjectKey,
+          keyword: rawValue,
+          pageSize: DEFAULT_META_QUESTION_OPTION_PAGE_SIZE,
+          operatorOpenId: input.context.operatorOpenId,
+        })
+      : [];
+    return {
+      paramKey: input.paramKey,
+      label: input.label,
+      rawValue,
+      targetObjectKey,
+      options,
+    };
+  }
+  return undefined;
+}
+
+function isAcceptableReferenceValue(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return isLikelyRecordFormInstId(value.trim());
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return Boolean(readReferenceRecordId(record));
+}
+
+function readReferenceRecordId(value: Record<string, unknown>): string {
+  for (const key of ['formInstId', 'id', '_id_']) {
+    const candidate = value[key];
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return '';
+}
+
+function isLikelyRecordFormInstId(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  return /^[0-9a-f]{20,}$/i.test(value) || /^[A-Za-z0-9_-]{10,}$/.test(value);
+}
+
+function buildReferenceResolutionWaitingResult(input: {
+  runId: string;
+  toolCode: string;
+  partialInput: Record<string, unknown>;
+  toolCall: AgentToolExecutionResult['toolCalls'][number];
+  issues: ReferenceResolutionIssue[];
+  context: AgentToolExecuteContext;
+}): AgentToolExecutionResult {
+  const firstIssue = input.issues[0]!;
+  const title = `需要选择${firstIssue.label}`;
+  const summary = `${firstIssue.label}“${firstIssue.rawValue}”需要从候选记录中选择，不能直接手动录入文本。`;
+  finishToolCall(input.toolCall, 'skipped', summary);
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      `## ${title}`,
+      `- 字段：${firstIssue.label}`,
+      `- 输入：${firstIssue.rawValue}`,
+      '- 处理：请在下方搜索并选择一条系统记录后继续预览。',
+    ].join('\n'),
+    headline: title,
+    references: ['meta.clarify_card', input.toolCode],
+    toolCalls: [input.toolCall],
+    pendingInteraction: buildPendingInteraction({
+      runId: input.runId,
+      kind: 'input_required',
+      toolCode: input.toolCode,
+      title,
+      summary,
+      partialInput: input.partialInput,
+      questionCard: buildReferenceQuestionCard({
+        toolCode: input.toolCode,
+        title,
+        summary,
+        issue: firstIssue,
+      }),
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'record.reference_resolution_required',
+        action: 'clarify',
+        toolCode: input.toolCode,
+        reason: summary,
+      }),
+    ],
+  };
+}
+
+function buildReferenceQuestionCard(input: {
+  toolCode: string;
+  title: string;
+  summary: string;
+  issue: ReferenceResolutionIssue;
+}): PendingInteraction['questionCard'] {
+  return {
+    title: input.title,
+    description: input.summary,
+    toolCode: input.toolCode,
+    submitLabel: '选择并继续预览',
+    currentValues: {},
+    questions: [
+      {
+        questionId: `${input.toolCode}:${input.issue.paramKey}:reference_resolution`,
+        paramKey: input.issue.paramKey,
+        label: input.issue.label,
+        type: 'reference',
+        required: true,
+        placeholder: `输入关键词搜索并选择${input.issue.label}`,
+        options: input.issue.options,
+        lookup: input.issue.targetObjectKey
+          ? buildRecordMetaQuestionLookup(input.issue.targetObjectKey)
+          : undefined,
+        reason: input.summary,
+      },
+    ],
+  };
+}
+
+function formatEmployeeCandidateLabel(candidate: OrgEmployeeCandidate): string {
+  return [
+    candidate.name || '未命名员工',
+    candidate.phone,
+    candidate.email,
+  ].filter((item): item is string => Boolean(item?.trim())).join(' · ');
 }
 
 function resolveFieldOptionFromQuery(
@@ -2658,6 +3750,7 @@ function buildRecordPreviewView(input: {
   preview: ShadowPreviewResponse;
   capability: RecordToolCapability;
   fields?: ShadowStandardizedField[];
+  shadowMetadataService?: ShadowMetadataService;
 }): RecordWritePreviewView {
   return {
     title: input.mode === 'create' ? '待确认写入记录' : '待确认更新记录',
@@ -2668,6 +3761,11 @@ function buildRecordPreviewView(input: {
       reason: '模板必填，必须由用户明确提供或由证据唯一确定',
       source: 'tool',
       options: buildFieldOptionHints(paramKey, input.fields),
+      lookup: buildFieldQuestionLookup({
+        paramKey,
+        fields: input.fields,
+        shadowMetadataService: input.shadowMetadataService,
+      }),
     })),
     blockedRows: [
       ...input.preview.blockedReadonlyParams.map((paramKey) => ({
@@ -2720,8 +3818,9 @@ function buildMetaQuestionCard(input: {
       label: row.label,
       type: inferQuestionType(row),
       required: true,
-      placeholder: row.options?.length ? '请选择' : `请输入${row.label}`,
+      placeholder: row.lookup ? `输入关键词搜索并选择${row.label}` : row.options?.length ? '请选择' : `请输入${row.label}`,
       options: row.options,
+      lookup: row.lookup,
       reason: row.reason,
     }));
 
@@ -2736,6 +3835,9 @@ function buildMetaQuestionCard(input: {
 }
 
 function inferQuestionType(row: RecordWritePreviewRow): MetaQuestion['type'] {
+  if (row.lookup) {
+    return 'reference';
+  }
   if (row.options?.length) {
     return 'single_select';
   }
@@ -2772,6 +3874,50 @@ function buildFieldOptionHints(paramKey: string, fields?: ShadowStandardizedFiel
     ];
   }
   return undefined;
+}
+
+function buildFieldQuestionLookup(input: {
+  paramKey: string;
+  fields?: ShadowStandardizedField[];
+  shadowMetadataService?: ShadowMetadataService;
+}): MetaQuestionLookup | undefined {
+  const field = findFieldByParamKey(input.paramKey, input.fields);
+  if (!field) {
+    return undefined;
+  }
+  if (field.widgetType === 'personSelectWidget') {
+    return buildEmployeeMetaQuestionLookup();
+  }
+  if (field.widgetType === 'basicDataWidget') {
+    const targetObjectKey = input.shadowMetadataService
+      ? resolveRelationTargetObjectKey(input.shadowMetadataService, field)
+      : inferRelationTargetObjectKey(field);
+    return targetObjectKey ? buildRecordMetaQuestionLookup(targetObjectKey) : undefined;
+  }
+  return undefined;
+}
+
+function buildEmployeeMetaQuestionLookup(): MetaQuestionLookup {
+  return {
+    kind: 'remote_select',
+    endpoint: META_QUESTION_OPTIONS_ENDPOINT,
+    source: 'employee',
+    minKeywordLength: 1,
+    pageSize: DEFAULT_META_QUESTION_OPTION_PAGE_SIZE,
+    allowFreeText: false,
+  };
+}
+
+function buildRecordMetaQuestionLookup(targetObjectKey: ShadowObjectKey): MetaQuestionLookup {
+  return {
+    kind: 'remote_select',
+    endpoint: META_QUESTION_OPTIONS_ENDPOINT,
+    source: 'record',
+    targetObjectKey,
+    minKeywordLength: 1,
+    pageSize: DEFAULT_META_QUESTION_OPTION_PAGE_SIZE,
+    allowFreeText: false,
+  };
 }
 
 function normalizeOptionHintValue(
@@ -2816,6 +3962,25 @@ function stringifyFieldValueForDisplay(field: ShadowStandardizedField, value: un
     }
   }
 
+  if (field.widgetType === 'personSelectWidget') {
+    return stringifyPersonFieldValueForDisplay(value);
+  }
+
+  return stringifyPreviewValue(value);
+}
+
+function stringifyPersonFieldValueForDisplay(value: unknown): string {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const person = value as Record<string, unknown>;
+    const displayParts = [
+      typeof person.name === 'string' ? person.name : '',
+      typeof person.phone === 'string' ? person.phone : '',
+      typeof person.email === 'string' ? person.email : '',
+    ].filter((item) => item.trim());
+    if (displayParts.length) {
+      return displayParts.join(' · ');
+    }
+  }
   return stringifyPreviewValue(value);
 }
 
@@ -2885,6 +4050,42 @@ function readRecordFields(options: Pick<CrmAgentPackOptions, 'shadowMetadataServ
   } catch {
     return [];
   }
+}
+
+function resolveRelationTargetObjectKey(
+  shadowMetadataService: Pick<ShadowMetadataService, 'listObjects'>,
+  field: ShadowStandardizedField,
+): ShadowObjectKey | undefined {
+  const formCodeId = field.relationBinding?.formCodeId?.trim();
+  if (!formCodeId) {
+    return inferRelationTargetObjectKey(field);
+  }
+  try {
+    const objectSummary = shadowMetadataService.listObjects().find((item) => item.formCodeId === formCodeId);
+    if (objectSummary?.objectKey && CRM_RECORD_OBJECTS.includes(objectSummary.objectKey)) {
+      return objectSummary.objectKey;
+    }
+  } catch {
+    // Fall through to parameter naming fallback.
+  }
+  return inferRelationTargetObjectKey(field);
+}
+
+function inferRelationTargetObjectKey(field: ShadowStandardizedField): ShadowObjectKey | undefined {
+  const text = `${field.writeParameterKey ?? ''} ${field.searchParameterKey ?? ''} ${field.semanticSlot ?? ''} ${field.label}`;
+  if (/customer|客户/.test(text)) {
+    return 'customer';
+  }
+  if (/contact|联系人/.test(text)) {
+    return 'contact';
+  }
+  if (/opportunity|商机|机会/.test(text)) {
+    return 'opportunity';
+  }
+  if (/followup|跟进/.test(text)) {
+    return 'followup';
+  }
+  return undefined;
 }
 
 function formatRows(rows: RecordWritePreviewRow[], emptyText: string): string {
@@ -2977,10 +4178,6 @@ function buildPreviewConfirmationContent(input: {
   const recommended = input.userPreview.recommendedRows ?? [];
   if (recommended.length) {
     lines.push('', `## 本次暂未写入，后续建议补充`, `- ${recommended.map((row) => row.label).join('、')}`);
-  }
-
-  if (input.capability.debugVisibility === 'content') {
-    lines.push('', '## 调试信息', '```json', JSON.stringify(input.debugPayload, null, 2).slice(0, 3000), '```');
   }
 
   return lines.join('\n');
@@ -3182,6 +4379,7 @@ async function executeDuplicateCheckIfNeeded(input: {
       toolCalls: [searchCall],
       partialInput: markDuplicateCheckNoCandidates({
         partialInput: input.partialInput,
+        agentControl: input.agentControl,
         fingerprint,
       }),
     };
@@ -3259,15 +4457,18 @@ function canReuseDuplicateCheckResult(
 
 function markDuplicateCheckNoCandidates(input: {
   partialInput: Record<string, unknown>;
+  agentControl: RecordAgentControl;
   fingerprint: string;
 }): Record<string, unknown> {
-  const agentControl = readRecordAgentControl(input.partialInput);
+  const existingAgentControl = readRecordAgentControl(input.partialInput);
+  const duplicateCheck = input.agentControl.duplicateCheck ?? existingAgentControl.duplicateCheck ?? {};
   return {
     ...input.partialInput,
     agentControl: {
-      ...agentControl,
+      ...existingAgentControl,
+      ...input.agentControl,
       duplicateCheck: {
-        ...(agentControl.duplicateCheck ?? {}),
+        ...duplicateCheck,
         lastResult: {
           status: 'no_candidates' as const,
           fingerprint: input.fingerprint,
@@ -3403,7 +4604,7 @@ async function executeRecordPreviewTool(
         resolvedContext: context.resolvedContext ?? null,
       })
     : undefined;
-  const requestInput = {
+  const initialRequestInput = {
     ...selectedInput,
     ...(Object.keys(enrichedParams).length ? { params: enrichedParams } : {}),
     ...(mode === 'update' && !readRecordFormInstId(selectedInput) && contextRecordId
@@ -3412,8 +4613,8 @@ async function executeRecordPreviewTool(
     mode,
     operatorOpenId: context.operatorOpenId ?? undefined,
   } as ShadowPreviewUpsertInput;
-  const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(requestInput));
-  if (mode === 'update' && !readRecordFormInstId(requestInput)) {
+  if (mode === 'update' && !readRecordFormInstId(initialRequestInput)) {
+    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(initialRequestInput));
     finishToolCall(toolCall, 'skipped', '缺少可更新的记录上下文，等待用户选择记录');
     return {
       status: 'waiting_input',
@@ -3433,7 +4634,7 @@ async function executeRecordPreviewTool(
         toolCode: input.selectedTool.toolCode,
         title: '需要先确定要修改的记录',
         summary: '更新记录前需要先绑定一条已存在记录。',
-        partialInput: requestInput as unknown as Record<string, unknown>,
+        partialInput: initialRequestInput as unknown as Record<string, unknown>,
         context,
       }),
       policyDecisions: [
@@ -3446,15 +4647,65 @@ async function executeRecordPreviewTool(
       ],
     };
   }
+
+  const personResolution = resolvePersonSelectParams({
+    options,
+    context,
+    requestInput: initialRequestInput,
+    capability,
+    fields,
+  });
+  if (personResolution.issues.length) {
+    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(initialRequestInput));
+    return buildPersonResolutionWaitingResult({
+      runId: context.runId,
+      toolCode: input.selectedTool.toolCode,
+      partialInput: {
+        ...(initialRequestInput as unknown as Record<string, unknown>),
+        ...(agentControl.duplicateCheck || agentControl.searchExtraction || agentControl.subjectName
+          ? { agentControl }
+          : {}),
+      },
+      toolCall,
+      issues: personResolution.issues,
+      context,
+    });
+  }
+  const referenceResolution = await resolveReferenceSelectParams({
+    options,
+    context,
+    requestInput: personResolution.requestInput,
+    capability,
+    fields,
+  });
+  if (referenceResolution.issues.length) {
+    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(personResolution.requestInput));
+    return buildReferenceResolutionWaitingResult({
+      runId: context.runId,
+      toolCode: input.selectedTool.toolCode,
+      partialInput: {
+        ...(personResolution.requestInput as unknown as Record<string, unknown>),
+        ...(agentControl.duplicateCheck || agentControl.searchExtraction || agentControl.subjectName
+          ? { agentControl }
+          : {}),
+      },
+      toolCall,
+      issues: referenceResolution.issues,
+      context,
+    });
+  }
+  const requestInput = referenceResolution.requestInput;
+  const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(requestInput));
+
   const guardToolCalls = await executeDuplicateCheckIfNeeded({
     options,
     objectKey,
     mode,
     context,
     agentControl,
-    partialInput: input.selectedTool.input,
+    partialInput: requestInput as unknown as Record<string, unknown>,
   });
-  const effectiveSelectedInput = guardToolCalls.partialInput ?? input.selectedTool.input;
+  const effectiveSelectedInput = guardToolCalls.partialInput ?? (requestInput as unknown as Record<string, unknown>);
   if (guardToolCalls.result) {
     finishToolCall(toolCall, 'skipped', '写入预览前发现候选记录、缺少运行输入或查重不可用');
     return {
@@ -3472,6 +4723,7 @@ async function executeRecordPreviewTool(
     preview,
     capability,
     fields,
+    shadowMetadataService: options.shadowMetadataService,
   });
   if (!preview.readyToSend) {
     finishToolCall(toolCall, 'skipped', '写入预览参数不完整');
@@ -3622,6 +4874,7 @@ async function executeRecordCommitTool(
     preview: commitPreview,
     capability: CRM_RECORD_CAPABILITIES[objectKey],
     fields: readRecordFields(options, objectKey),
+    shadowMetadataService: options.shadowMetadataService,
   });
   const approved = options.repository.resolveConfirmation({
     runId: context.runId,

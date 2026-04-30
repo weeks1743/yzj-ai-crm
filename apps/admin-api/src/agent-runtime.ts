@@ -93,6 +93,10 @@ export interface MainAgentRuntimeInvokeInput {
   focusedName: string | null;
   contextFrame?: ContextFrame | null;
   contextCandidates?: ContextReferenceCandidate[];
+  resumeFallback?: {
+    pendingInteraction: PendingInteraction;
+    selectedTool?: AgentToolSelection;
+  } | null;
 }
 
 const MainAgentState = Annotation.Root({
@@ -188,17 +192,28 @@ export class MainAgentRuntime {
     if (input.request.resume?.action === 'provide_input') {
       const snapshot = await this.readGraphState(config);
       const values = snapshot?.values as Partial<MainAgentGraphState> | undefined;
+      const pendingInteraction = values?.pendingInteraction ?? input.resumeFallback?.pendingInteraction ?? null;
+      const selectedTool = values?.selectedTool ?? input.resumeFallback?.selectedTool ?? null;
       const continuation = resolveProvidedInputContinuation({
         request: input.request,
         runId: input.runId,
-        pendingInteraction: values?.pendingInteraction ?? null,
-        selectedTool: values?.selectedTool ?? null,
+        pendingInteraction,
+        selectedTool,
         registry: this.options.registry,
         interactionId: input.request.resume.interactionId,
         answers: input.request.resume.answers,
       });
 
       if (continuation.decision) {
+        if (!values?.pendingInteraction && continuation.decision.action === 'provide_input' && pendingInteraction) {
+          return buildRecoveredProvidedInputCommand({
+            input,
+            pendingInteraction,
+            selectedTool,
+            decision: continuation.decision,
+            resolution: continuation.resolution,
+          });
+        }
         return new Command({
           resume: continuation.decision,
           update: {
@@ -400,7 +415,7 @@ export class MainAgentRuntime {
           references: result.references,
           evidence: result.evidence ?? [],
           attachments: result.attachments ?? [],
-          uiSurfaces: result.uiSurfaces ?? state.uiSurfaces ?? [],
+          uiSurfaces: result.uiSurfaces ?? [],
           qdrantFilter: result.qdrantFilter,
           contextFrame: result.contextFrame ?? state.contextFrame ?? null,
           toolArbitration: result.toolArbitration ?? state.toolArbitration ?? null,
@@ -514,6 +529,10 @@ export class MainAgentRuntime {
         }
 
         if (decision.action === 'wait_for_input') {
+          const reason = decision.reason || '当前仍在等待用户补充输入。';
+          const headline = /能力尚未定义|能力暂未开放/.test(reason)
+            ? '这个能力暂未开放'
+            : '等待使用当前补充卡继续';
           return {
             selectedTool: state.selectedTool,
             pendingInteraction: state.pendingInteraction,
@@ -524,14 +543,10 @@ export class MainAgentRuntime {
               sourceInteractionId: decision.interactionId,
               toolCode: state.pendingInteraction?.toolCode,
             },
-            content: [
-              '## 这个能力暂未开放',
-              decision.reason,
-              '',
-              '请在当前卡片中选择“查看客户信息”或“进行公司研究”。',
-            ].join('\n'),
-            headline: '该能力暂未开放，等待重新选择',
+            content: [`## ${headline}`, reason].join('\n'),
+            headline,
             references: ['meta.clarify_card'],
+            uiSurfaces: [],
             status: 'waiting_input' as AgentExecutionStatus,
             currentStepKey: 'wait-for-input',
           };
@@ -552,6 +567,7 @@ export class MainAgentRuntime {
           headline: '',
           references: [],
           attachments: [],
+          uiSurfaces: [],
           qdrantFilter: undefined,
           status: 'draft' as AgentExecutionStatus,
           currentStepKey: null,
@@ -653,7 +669,7 @@ export class MainAgentRuntime {
           references: result.references,
           evidence: result.evidence ?? [],
           attachments: result.attachments ?? [],
-          uiSurfaces: result.uiSurfaces ?? state.uiSurfaces ?? [],
+          uiSurfaces: result.uiSurfaces ?? [],
           qdrantFilter: result.qdrantFilter,
           contextFrame: result.contextFrame ?? state.contextFrame ?? null,
           toolArbitration: result.toolArbitration ?? state.toolArbitration ?? null,
@@ -690,6 +706,161 @@ export class MainAgentRuntime {
         checkpointer: new MemorySaver(),
       });
   }
+}
+
+function buildRecoveredProvidedInputCommand(input: {
+  input: MainAgentRuntimeInvokeInput;
+  pendingInteraction: PendingInteraction;
+  selectedTool?: AgentToolSelection | null;
+  decision: Extract<AgentResumeDecision, { action: 'provide_input' }>;
+  resolution: AgentRuntimeOutput['continuationResolution'];
+}) {
+  const toolCode = input.selectedTool?.toolCode || input.pendingInteraction.toolCode || 'meta.clarify_card';
+  const selectedTool: AgentToolSelection = {
+    toolCode,
+    reason: input.decision.reason,
+    input: input.decision.mergedInput,
+    confidence: input.selectedTool?.confidence ?? 0.9,
+  };
+  return new Command({
+    update: buildRecoveredRuntimeState({
+      input: input.input,
+      pendingInteraction: input.pendingInteraction,
+      selectedTool,
+      resolution: input.resolution,
+    }) as unknown as Record<string, unknown>,
+    goto: 'execute_tool',
+  });
+}
+
+function buildRecoveredRuntimeState(input: {
+  input: MainAgentRuntimeInvokeInput;
+  pendingInteraction: PendingInteraction;
+  selectedTool: AgentToolSelection;
+  resolution: AgentRuntimeOutput['continuationResolution'];
+}): MainAgentGraphState {
+  const actionType = inferRecoveredActionType(input.selectedTool.toolCode);
+  const subject = input.pendingInteraction.contextSubject;
+  const legacyIntentFrame: GenericIntentFrame['legacyIntentFrame'] = {
+    actionType,
+    goal: input.input.request.query || input.pendingInteraction.title,
+    targetType: 'unknown',
+    targets: subject?.name
+      ? [{
+          type: 'unknown',
+          id: subject.id || subject.name,
+          name: subject.name,
+        }]
+      : [],
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: [],
+    confidence: 0.72,
+    source: 'fallback',
+    fallbackReason: '从持久化的待补充卡恢复执行，跳过自然语言重新规划。',
+  };
+
+  return {
+    request: input.input.request,
+    runId: input.input.runId,
+    traceId: input.input.traceId,
+    startedAt: input.input.startedAt,
+    eid: input.input.eid,
+    appId: input.input.appId,
+    operatorOpenId: input.input.operatorOpenId,
+    focusedName: input.input.focusedName,
+    contextFrame: input.input.contextFrame ?? null,
+    contextCandidates: input.input.contextCandidates ?? [],
+    resolvedContext: null,
+    semanticResolution: null,
+    toolArbitration: null,
+    intentFrame: {
+      actionType,
+      goal: legacyIntentFrame.goal,
+      target: subject
+        ? {
+            kind: subject.kind,
+            objectType: subject.type,
+            id: subject.id,
+            name: subject.name,
+          }
+        : { kind: 'unknown' },
+      inputMaterials: [],
+      constraints: [],
+      missingSlots: [],
+      confidence: 0.72,
+      source: 'fallback',
+      fallbackReason: legacyIntentFrame.fallbackReason,
+      legacyIntentFrame,
+    },
+    taskPlan: buildRecoveredTaskPlan(input.selectedTool.toolCode),
+    selectedTool: input.selectedTool,
+    pendingConfirmation: null,
+    pendingInteraction: null,
+    continuationResolution: input.resolution,
+    resumeDecision: null,
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'meta.provide_input.recovered_from_persistence',
+        action: 'audit',
+        toolCode: input.selectedTool.toolCode,
+        reason: 'LangGraph 当前 checkpoint 未保留待补充卡，已从持久化消息恢复结构化卡片提交。',
+      }),
+    ],
+    toolCalls: [],
+    evidence: [],
+    content: '',
+    headline: '',
+    references: [],
+    attachments: [],
+    uiSurfaces: [],
+    qdrantFilter: undefined,
+    status: 'running',
+    currentStepKey: 'execute-tool',
+  };
+}
+
+function inferRecoveredActionType(toolCode: string): GenericIntentFrame['actionType'] {
+  if (toolCode.includes('.preview_') || toolCode.includes('.commit_')) {
+    return 'write';
+  }
+  if (toolCode.startsWith('external.') || toolCode.startsWith('artifact.')) {
+    return 'analyze';
+  }
+  return 'query';
+}
+
+function buildRecoveredTaskPlan(toolCode: string): TaskPlan {
+  const confirmationRequired = toolCode.includes('.preview_');
+  return {
+    planId: `plan-${randomUUID().slice(0, 8)}`,
+    kind: confirmationRequired ? 'tool_confirmation' : 'tool_execution',
+    title: '恢复补字段卡执行计划',
+    status: 'running',
+    steps: [
+      {
+        key: 'restore-pending-input',
+        title: '恢复待补充输入',
+        actionType: 'meta',
+        toolRefs: ['meta.clarify_card'],
+        required: true,
+        skippable: false,
+        confirmationRequired: false,
+        status: 'succeeded',
+      },
+      {
+        key: 'execute-tool',
+        title: '继续执行原工具',
+        actionType: toolCode.includes('.preview_') ? 'write_preview' : 'query',
+        toolRefs: [toolCode],
+        required: true,
+        skippable: false,
+        confirmationRequired,
+        status: 'pending',
+      },
+    ],
+    evidenceRequired: false,
+  };
 }
 
 function normalizeGraphOutput(
@@ -786,6 +957,7 @@ function buildToolUnavailableState(input: {
     ].join('\n'),
     headline: '工具执行失败，未生成本地替代结果',
     references: [input.selectedTool.toolCode],
+    uiSurfaces: [],
     toolCalls: [toolCall],
     pendingConfirmation: input.state.pendingConfirmation ?? null,
     pendingInteraction: null,
@@ -822,6 +994,7 @@ function buildInvocationUpdate(input: MainAgentRuntimeInvokeInput): Partial<Main
     headline: '',
     references: [],
     attachments: [],
+    uiSurfaces: [],
     qdrantFilter: undefined,
   };
 }

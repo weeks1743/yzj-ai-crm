@@ -76,6 +76,47 @@ const useStyles = createStyles(({ token, css }) => ({
     color: ${token.colorTextSecondary};
     background: ${token.colorFillQuaternary};
   `,
+  flowCanvas: css`
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  `,
+  flowNode: css`
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    padding: 12px;
+    background: ${token.colorBgContainer};
+  `,
+  flowNodeHeader: css`
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  `,
+  flowNodeDetails: css`
+    margin-top: 8px;
+    color: ${token.colorTextSecondary};
+    font-size: 12px;
+    word-break: break-word;
+  `,
+  flowConnector: css`
+    width: 1px;
+    height: 18px;
+    margin-left: 20px;
+    background: ${token.colorBorder};
+    position: relative;
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: -4px;
+      bottom: -1px;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 6px solid ${token.colorBorder};
+    }
+  `,
   jsonText: css`
     margin-bottom: 0;
     max-height: 420px;
@@ -151,6 +192,163 @@ function renderSummaryRows(rows?: AssistantRecordWritePreviewRow[]) {
       )}
     />
   );
+}
+
+interface RunFlowNode {
+  key: string;
+  title: string;
+  status: 'success' | 'warning' | 'error' | 'processing' | 'default';
+  summary: string;
+  details?: string;
+}
+
+function RunInsightFlow({
+  agentTrace,
+  styles,
+}: {
+  agentTrace: AgentTrace;
+  styles: ReturnType<typeof useStyles>['styles'];
+}) {
+  const nodes = buildRunFlowNodes(agentTrace);
+  return (
+    <div className={styles.flowCanvas}>
+      {nodes.map((node, index) => (
+        <div key={node.key}>
+          <div className={styles.flowNode}>
+            <div className={styles.flowNodeHeader}>
+              <Text strong>{node.title}</Text>
+              <Tag color={flowStatusColor[node.status]}>{flowStatusText[node.status]}</Tag>
+            </div>
+            <Text>{node.summary}</Text>
+            {node.details ? <div className={styles.flowNodeDetails}>{node.details}</div> : null}
+          </div>
+          {index < nodes.length - 1 ? <div className={styles.flowConnector} /> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const flowStatusText = {
+  success: '通过',
+  warning: '待处理',
+  error: '阻断',
+  processing: '运行',
+  default: '记录',
+};
+
+const flowStatusColor = {
+  success: 'success',
+  warning: 'warning',
+  error: 'error',
+  processing: 'processing',
+  default: 'default',
+};
+
+function buildRunFlowNodes(agentTrace: AgentTrace): RunFlowNode[] {
+  const selectedTool = agentTrace.selectedTool;
+  const toolCalls = agentTrace.toolCalls ?? [];
+  const policyDecisions = agentTrace.policyDecisions ?? [];
+  const lastToolCall = toolCalls[toolCalls.length - 1];
+  const blockingPolicy = [...policyDecisions].reverse().find((item: any) => item.action && item.action !== 'audit');
+  const params = readSelectedToolParams(selectedTool?.input);
+  const paramsEmpty = selectedTool?.toolCode?.includes('.preview_') && Object.keys(params).length === 0;
+  const emptyGuard = policyDecisions.some((item: any) => item.policyCode === 'record.preview_empty_payload_guard');
+  const contextSubject = agentTrace.resolvedContext?.subject
+    ?? agentTrace.pendingInteraction?.contextSubject;
+
+  return [
+    {
+      key: 'intent',
+      title: '1. 意图识别',
+      status: 'success',
+      summary: agentTrace.intentFrame?.goal || '已生成意图帧',
+      details: [
+        agentTrace.intentFrame?.actionType ? `动作：${agentTrace.intentFrame.actionType}` : '',
+        agentTrace.intentFrame?.targetType ? `对象：${agentTrace.intentFrame.targetType}` : '',
+      ].filter(Boolean).join('；'),
+    },
+    {
+      key: 'context',
+      title: '2. 上下文绑定',
+      status: contextSubject ? 'success' : 'default',
+      summary: contextSubject
+        ? `已绑定 ${contextSubject.type ?? contextSubject.kind}：${contextSubject.name ?? contextSubject.id ?? '-'}`
+        : '本轮未绑定明确上下文主体',
+      details: agentTrace.resolvedContext?.reason,
+    },
+    {
+      key: 'tool',
+      title: '3. 工具选择',
+      status: selectedTool ? 'success' : 'warning',
+      summary: selectedTool?.toolCode || '未选择工具',
+      details: selectedTool?.reason,
+    },
+    {
+      key: 'input',
+      title: '4. 工具输入',
+      status: paramsEmpty ? 'warning' : 'success',
+      summary: selectedTool
+        ? summarizeSelectedToolInput(selectedTool.input)
+        : '暂无工具输入',
+      details: paramsEmpty ? '写入参数 params 为空，后续预览无法生成真实写入字段。' : undefined,
+    },
+    {
+      key: 'tool-result',
+      title: '5. 工具结果',
+      status: lastToolCall?.status === 'succeeded'
+        ? 'success'
+        : lastToolCall?.status === 'failed'
+          ? 'error'
+          : lastToolCall?.status === 'skipped'
+            ? 'warning'
+            : 'default',
+      summary: lastToolCall?.outputSummary || '暂无工具执行结果',
+      details: lastToolCall?.errorMessage ?? undefined,
+    },
+    {
+      key: 'policy',
+      title: '6. 策略 / 守卫',
+      status: emptyGuard ? 'error' : blockingPolicy ? 'warning' : 'success',
+      summary: emptyGuard
+        ? '字段抽取为空 -> params={} -> 空写入守卫阻断'
+        : blockingPolicy?.reason || '未触发阻断策略',
+      details: blockingPolicy?.policyCode,
+    },
+    {
+      key: 'state',
+      title: '7. 最终状态',
+      status: agentTrace.executionState?.status === 'completed'
+        ? 'success'
+        : agentTrace.executionState?.status?.startsWith('waiting_')
+          ? 'warning'
+          : agentTrace.executionState?.status === 'failed'
+            ? 'error'
+            : 'default',
+      summary: agentTrace.executionState?.message || agentTrace.executionState?.status || '暂无状态',
+      details: agentTrace.pendingConfirmation
+        ? '已进入写回确认'
+        : agentTrace.pendingInteraction?.summary,
+    },
+  ];
+}
+
+function readSelectedToolParams(input?: Record<string, unknown>): Record<string, unknown> {
+  const params = input?.params;
+  return params && typeof params === 'object' && !Array.isArray(params)
+    ? params as Record<string, unknown>
+    : {};
+}
+
+function summarizeSelectedToolInput(input?: Record<string, unknown>): string {
+  if (!input) {
+    return '暂无工具输入';
+  }
+  const formInstId = typeof input.formInstId === 'string' && input.formInstId ? '已绑定记录' : '';
+  const params = readSelectedToolParams(input);
+  const paramKeys = Object.keys(params);
+  const paramsText = paramKeys.length ? `写入字段：${paramKeys.join('、')}` : '写入字段：无';
+  return [formInstId, paramsText].filter(Boolean).join('；') || JSON.stringify(input);
 }
 
 function buildAdminTraceUrl(adminBaseUrl: string, traceId: string) {
@@ -273,6 +471,15 @@ export function RunInsightDrawer({
                     )}
                   </Card>
                 </>
+              ),
+            },
+            {
+              key: 'flow',
+              label: '运行流程',
+              children: (
+                <Card className={styles.insightCard} title="诊断流程图">
+                  <RunInsightFlow agentTrace={agentTrace} styles={styles} />
+                </Card>
               ),
             },
                   {

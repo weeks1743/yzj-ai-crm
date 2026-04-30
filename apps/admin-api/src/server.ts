@@ -118,6 +118,7 @@ const agentRuntimeParts = createCrmAgentRuntimeParts({
     chatClient: new DeepSeekChatClient(config),
   }),
   shadowMetadataService,
+  orgSyncRepository,
   externalSkillService,
   artifactService,
 });
@@ -141,6 +142,7 @@ const agentService = new AgentService({
 const server = createAdminApiServer({
   config,
   orgSyncService,
+  orgSyncRepository,
   approvalFileService,
   shadowMetadataService,
   externalSkillService,

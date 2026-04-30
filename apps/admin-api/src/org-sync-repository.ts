@@ -18,6 +18,32 @@ interface OrgSyncRunRow {
   error_message: string | null;
 }
 
+interface OrgEmployeeRow {
+  eid: string;
+  app_id: string;
+  open_id: string;
+  uid: string | null;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  job_title: string | null;
+  status: string | null;
+  synced_at: string;
+}
+
+export interface OrgEmployeeCandidate {
+  eid: string;
+  appId: string;
+  openId: string;
+  uid: string | null;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  jobTitle: string | null;
+  status: string | null;
+  syncedAt: string;
+}
+
 function mapRunRow(row: OrgSyncRunRow): OrgSyncRunSummary {
   return {
     id: row.id,
@@ -31,6 +57,25 @@ function mapRunRow(row: OrgSyncRunRow): OrgSyncRunSummary {
     skippedCount: row.skipped_count,
     errorMessage: row.error_message,
   };
+}
+
+function mapEmployeeRow(row: OrgEmployeeRow): OrgEmployeeCandidate {
+  return {
+    eid: row.eid,
+    appId: row.app_id,
+    openId: row.open_id,
+    uid: row.uid,
+    name: row.name,
+    phone: row.phone,
+    email: row.email,
+    jobTitle: row.job_title,
+    status: row.status,
+    syncedAt: row.synced_at,
+  };
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
 export class OrgSyncRepository {
@@ -176,6 +221,77 @@ export class OrgSyncRepository {
       .get(eid, appId) as { count: number };
 
     return row.count;
+  }
+
+  findEmployees(input: {
+    eid: string;
+    appId: string;
+    keyword: string;
+    limit?: number;
+  }): OrgEmployeeCandidate[] {
+    const keyword = input.keyword.trim();
+    if (!keyword) {
+      return [];
+    }
+    const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
+    const scopedRows = this.findEmployeeRows({
+      ...input,
+      keyword,
+      limit,
+      restrictApp: true,
+    });
+    const rows = scopedRows.length
+      ? scopedRows
+      : this.findEmployeeRows({
+          ...input,
+          keyword,
+          limit,
+          restrictApp: false,
+        });
+
+    return rows.map(mapEmployeeRow);
+  }
+
+  private findEmployeeRows(input: {
+    eid: string;
+    appId: string;
+    keyword: string;
+    limit: number;
+    restrictApp: boolean;
+  }): OrgEmployeeRow[] {
+    return this.database
+      .prepare(
+        `
+          SELECT eid, app_id, open_id, uid, name, phone, email, job_title, status, synced_at
+          FROM org_employees
+          WHERE eid = ?
+            ${input.restrictApp ? 'AND app_id = ?' : ''}
+            AND (
+              name LIKE ? ESCAPE '\\'
+              OR open_id = ?
+              OR uid = ?
+              OR phone = ?
+              OR lower(COALESCE(email, '')) = lower(?)
+            )
+          ORDER BY
+            CASE WHEN status = '1' OR lower(COALESCE(status, '')) = 'active' THEN 1 ELSE 0 END DESC,
+            CASE WHEN name = ? THEN 1 ELSE 0 END DESC,
+            length(COALESCE(name, '')) ASC,
+            open_id ASC
+          LIMIT ?
+        `,
+      )
+      .all(
+        input.eid,
+        ...(input.restrictApp ? [input.appId] : []),
+        `%${escapeLike(input.keyword)}%`,
+        input.keyword,
+        input.keyword,
+        input.keyword,
+        input.keyword,
+        input.keyword,
+        input.limit,
+      ) as unknown as OrgEmployeeRow[];
   }
 
   getLatestRun(): OrgSyncRunSummary | null {

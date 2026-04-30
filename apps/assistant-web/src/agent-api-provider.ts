@@ -4,7 +4,7 @@ import {
   XRequest,
   type XRequestOptions,
 } from '@ant-design/x-sdk';
-import type { AgentUiSurface } from '@shared/types';
+import type { AgentClientAction, AgentUiSurface } from '@shared/types';
 
 const TEST_OPERATOR_OPEN_ID =
   import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || '69e75eb5e4b0e65b61c014da';
@@ -32,7 +32,18 @@ export interface AssistantFieldOptionHint {
   label: string;
   value: string | number | boolean;
   key?: string;
-  source?: 'field_option' | 'dictionary' | 'widget';
+  description?: string;
+  source?: 'field_option' | 'dictionary' | 'widget' | 'employee' | 'record';
+}
+
+export interface AssistantMetaQuestionLookup {
+  kind: 'remote_select';
+  endpoint: '/api/agent/meta-question-options';
+  source: 'employee' | 'record';
+  targetObjectKey?: string;
+  minKeywordLength: 1;
+  pageSize: number;
+  allowFreeText: false;
 }
 
 export interface AssistantRecordWritePreviewRow {
@@ -53,6 +64,7 @@ export interface AssistantMetaQuestion {
   placeholder?: string;
   currentValue?: string | number | boolean | string[];
   options?: AssistantFieldOptionHint[];
+  lookup?: AssistantMetaQuestionLookup;
   reason?: string;
 }
 
@@ -265,6 +277,7 @@ export interface AssistantRequestInput {
   sceneKey: string;
   conversationKey: string;
   attachments?: AssistantAttachment[];
+  clientAction?: AgentClientAction;
   resume?: {
     runId: string;
     action: 'confirm_writeback';
@@ -368,6 +381,7 @@ async function agentApiFetch(
       query: params.query,
       sceneKey: params.sceneKey,
       attachments: params.attachments ?? [],
+      ...(params.clientAction ? { clientAction: params.clientAction } : {}),
       tenantContext: {
         operatorOpenId: TEST_OPERATOR_OPEN_ID,
       },

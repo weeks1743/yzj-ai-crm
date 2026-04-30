@@ -4,6 +4,8 @@ import type {
   ApiErrorResponse,
   AppConfig,
   AgentChatRequest,
+  AgentMetaQuestionOptionsRequest,
+  AgentRecordSearchPageRequest,
   ArtifactSearchRequest,
   CompanyResearchArtifactRequest,
   EnterprisePptTemplatePromptResponse,
@@ -28,12 +30,15 @@ import { ArtifactService } from './artifact-service.js';
 import { EnterprisePptTemplateService } from './enterprise-ppt-template-service.js';
 import { ExternalSkillService } from './external-skill-service.js';
 import { OrgSyncService, getRunIdFromConflict } from './org-sync-service.js';
+import type { OrgSyncRepository } from './org-sync-repository.js';
 import { getTenantAppSettings, getYzjAuthSettings } from './settings-service.js';
 import { ShadowMetadataService } from './shadow-metadata-service.js';
+import { buildMetaQuestionOptionsResponse, buildRecordSearchPageResponse } from './crm-agent-pack.js';
 
 interface CreateAdminApiServerOptions {
   config: AppConfig;
   orgSyncService: OrgSyncService;
+  orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>;
   shadowMetadataService: ShadowMetadataService;
   approvalFileService: ApprovalFileService;
   externalSkillService: ExternalSkillService;
@@ -351,6 +356,38 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         }
         const payload = await readJsonBody<AgentChatRequest>(request);
         writeJson(response, 200, await options.agentService.chat(payload));
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/agent/record-search-page') {
+        const payload = await readJsonBody<AgentRecordSearchPageRequest>(request);
+        const objectKey = parseShadowObjectKey(payload.objectKey);
+        writeJson(
+          response,
+          200,
+          await buildRecordSearchPageResponse({
+            shadowMetadataService: options.shadowMetadataService,
+            request: {
+              ...payload,
+              objectKey,
+            },
+          }),
+        );
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/agent/meta-question-options') {
+        const payload = await readJsonBody<AgentMetaQuestionOptionsRequest>(request);
+        writeJson(
+          response,
+          200,
+          await buildMetaQuestionOptionsResponse({
+            config: options.config,
+            shadowMetadataService: options.shadowMetadataService,
+            orgSyncRepository: options.orgSyncRepository,
+            request: payload,
+          }),
+        );
         return;
       }
 

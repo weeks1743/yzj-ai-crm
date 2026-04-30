@@ -4,12 +4,13 @@ import { AgentRunRepository } from '../src/agent-run-repository.js';
 import { MainAgentRuntime } from '../src/agent-runtime.js';
 import { AgentService } from '../src/agent-service.js';
 import { arbitrateToolSemantic, type ToolArbitrationRule } from '../src/agent-tool-semantic-arbitrator.js';
-import { createCrmAgentRuntimeParts } from '../src/crm-agent-pack.js';
+import { buildMetaQuestionOptionsResponse, buildRecordSearchPageResponse, createCrmAgentRuntimeParts } from '../src/crm-agent-pack.js';
 import { YzjApiError } from '../src/errors.js';
 import { AgentToolRegistry, GENERIC_TOOL_CONTRACTS } from '../src/tool-registry.js';
 import { createInMemoryDatabase, createTestConfig } from './test-helpers.js';
 import type { AgentChatMessage, AppConfig, ExecutionState, IntentFrame, ShadowObjectKey, ShadowStandardizedField, TaskPlan } from '../src/contracts.js';
 import type { AgentToolDefinition, GenericIntentFrame } from '../src/agent-core.js';
+import type { OrgEmployeeCandidate } from '../src/org-sync-repository.js';
 
 function recordIntent(
   objectKey: ShadowObjectKey,
@@ -40,6 +41,20 @@ function companyIntent(companyName: string): IntentFrame {
     missingSlots: [],
     confidence: 0.9,
     source: 'fallback',
+  };
+}
+
+function companyWriteIntent(goal = '更新销售负责人为陈伟堂'): IntentFrame {
+  return {
+    actionType: 'write',
+    goal,
+    targetType: 'company',
+    targets: [],
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: [],
+    confidence: 1,
+    source: 'llm',
   };
 }
 
@@ -204,24 +219,27 @@ function seedRecordContext(
 function createAgentTestService(input: {
   config?: AppConfig;
   repository: AgentRunRepository;
-  intentFrame: IntentFrame;
+  intentFrame: IntentFrame | ((request: { query: string }) => IntentFrame);
   shadowMetadataService?: unknown;
+  orgSyncRepository?: unknown;
   externalSkillService?: unknown;
   artifactService?: unknown;
   companyResearchMaxWaitMs?: number;
 }) {
   const config = input.config ?? createTestConfig();
+  const resolveTestIntentFrame = (request: { query: string }) =>
+    typeof input.intentFrame === 'function' ? input.intentFrame(request) : input.intentFrame;
   const runtimeParts = createCrmAgentRuntimeParts({
     config,
     repository: input.repository,
     intentFrameService: {
-      createIntentFrame: async () => input.intentFrame,
+      createIntentFrame: async (request: { query: string }) => resolveTestIntentFrame(request),
     } as any,
     shadowMetadataService: (input.shadowMetadataService ?? {
       executeSearch: async () => ({ records: [] }),
       executeGet: async () => ({ record: null }),
       previewUpsert: async () => ({
-        objectKey: input.intentFrame.targetType,
+        objectKey: 'customer',
         operation: 'upsert',
         unresolvedDictionaries: [],
         resolvedDictionaryMappings: [],
@@ -233,7 +251,7 @@ function createAgentTestService(input: {
         requestBody: { formCodeId: 'test-form', data: [{ widgetValue: { _S_NAME: '测试记录' } }] },
       }),
       executeUpsert: async () => ({
-        objectKey: input.intentFrame.targetType,
+        objectKey: 'customer',
         operation: 'upsert',
         mode: 'live',
         writeMode: 'create',
@@ -241,6 +259,7 @@ function createAgentTestService(input: {
         formInstIds: ['form-001'],
       }),
     }) as any,
+    orgSyncRepository: input.orgSyncRepository as any,
     externalSkillService: (input.externalSkillService ?? {
       createSkillJob: async () => {
         throw new Error('not used');
@@ -348,6 +367,43 @@ function createSearchField(input: Partial<ShadowStandardizedField> & Pick<Shadow
   } as ShadowStandardizedField;
 }
 
+function createEmployeeCandidate(input: {
+  openId: string;
+  name: string;
+  phone?: string;
+  email?: string;
+}): OrgEmployeeCandidate {
+  return {
+    eid: '21024647',
+    appId: '501037729',
+    openId: input.openId,
+    uid: `${input.openId}-uid`,
+    name: input.name,
+    phone: input.phone ?? null,
+    email: input.email ?? null,
+    jobTitle: null,
+    status: '1',
+    syncedAt: '2026-04-29T00:00:00.000Z',
+  };
+}
+
+function createEmployeeLookup(candidates: OrgEmployeeCandidate[]) {
+  return {
+    findEmployees: ({ keyword, limit }: { keyword: string; limit?: number }) => {
+      const normalized = keyword.trim().toLowerCase();
+      return candidates
+        .filter((candidate) =>
+          candidate.name?.toLowerCase().includes(normalized)
+          || candidate.openId.toLowerCase() === normalized
+          || candidate.uid?.toLowerCase() === normalized
+          || candidate.phone === keyword
+          || candidate.email?.toLowerCase() === normalized,
+        )
+        .slice(0, limit ?? 20);
+    },
+  };
+}
+
 function createCustomerSearchFields(): ShadowStandardizedField[] {
   return [
     createSearchField({
@@ -418,6 +474,102 @@ function createCustomerSearchFields(): ShadowStandardizedField[] {
       edit: false,
       isSystemField: true,
     }),
+  ];
+}
+
+function createOpportunityWriteFields(): ShadowStandardizedField[] {
+  return [
+    createSearchField({
+      fieldCode: 'Mo_0',
+      label: '商机预算（元）',
+      widgetType: 'numberWidget',
+      writeParameterKey: 'opportunity_budget',
+    }),
+    createSearchField({
+      fieldCode: 'Da_0',
+      label: '预计成交时间',
+      widgetType: 'dateWidget',
+      writeParameterKey: 'expected_close_date',
+    }),
+    createSearchField({
+      fieldCode: 'Ra_0',
+      label: '销售阶段',
+      widgetType: 'radioWidget',
+      writeParameterKey: 'sales_stage',
+      options: [{ title: '初期沟通', key: 'initial', value: '初期沟通' }],
+    }),
+    createSearchField({
+      fieldCode: 'Ps_0',
+      label: '销售负责人',
+      widgetType: 'personSelectWidget',
+      writeParameterKey: 'owner_open_id',
+    }),
+  ];
+}
+
+function createCustomerWritePersonFields(): ShadowStandardizedField[] {
+  return [
+    createSearchField({
+      fieldCode: '_S_NAME',
+      label: '客户名称',
+      widgetType: 'textWidget',
+      writeParameterKey: 'customer_name',
+    }),
+    createSearchField({
+      fieldCode: 'Ps_service',
+      label: '售后服务代表',
+      widgetType: 'personSelectWidget',
+      writeParameterKey: 'service_rep_open_id',
+    }),
+  ];
+}
+
+function createFollowupWriteFields(): ShadowStandardizedField[] {
+  return [
+    createSearchField({
+      fieldCode: 'Ra_1',
+      label: '跟进方式',
+      widgetType: 'radioWidget',
+      writeParameterKey: 'followup_method',
+      options: [{ title: '电话', key: 'phone', value: '电话' }],
+    }),
+    createSearchField({
+      fieldCode: 'Bd_customer',
+      label: '客户编号',
+      widgetType: 'basicDataWidget',
+      writeParameterKey: 'linked_customer_form_inst_id',
+      relationBinding: {
+        kind: 'basic_data',
+        formCodeId: 'customer-form',
+        modelName: '客户',
+        displayCol: '_S_NAME',
+      },
+    }),
+    createSearchField({
+      fieldCode: 'Ps_owner',
+      label: '跟进负责人',
+      widgetType: 'personSelectWidget',
+      writeParameterKey: 'owner_open_id',
+    }),
+    createSearchField({
+      fieldCode: 'Ta_0',
+      label: '跟进记录',
+      widgetType: 'textAreaWidget',
+      writeParameterKey: 'followup_record',
+    }),
+  ];
+}
+
+function createCustomerLookupFields(): ShadowStandardizedField[] {
+  return [
+    createSearchField({
+      fieldCode: '_S_NAME',
+      label: '客户名称',
+      widgetType: 'textWidget',
+      searchParameterKey: 'customer_name',
+      writeParameterKey: 'customer_name',
+    }),
+    ...createCustomerSearchFields(),
   ];
 }
 
@@ -670,7 +822,54 @@ test('Agent runtime routes record query through record search tool', async () =>
   assert.equal(searchedObject, 'customer');
   assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.kind, 'record-search-results');
   assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.summary.displayMode, 'card');
+  assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.pagination?.endpoint, '/api/agent/record-search-page');
   assert.doesNotMatch(response.message.content, /```json/);
+});
+
+test('Agent runtime opens record detail from hidden client action without exposing formInstId in query', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let getInput: any = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('opportunity', 'query', '打开商机：数字化经营项目'),
+    shadowMetadataService: {
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async (_objectKey: ShadowObjectKey, input: any) => {
+        getInput = input;
+        return {
+          record: {
+            formInstId: input.formInstId,
+            fields: [{ title: '机会名称', value: '数字化经营项目' }],
+            rawRecord: {},
+          },
+        };
+      },
+      previewUpsert: async () => {
+        throw new Error('not used');
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-client-action-open-record',
+    sceneKey: 'chat',
+    query: '打开商机：数字化经营项目',
+    clientAction: {
+      type: 'record.open',
+      objectKey: 'opportunity',
+      formInstId: 'opportunity-live-001',
+      title: '数字化经营项目',
+    },
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.opportunity.get');
+  assert.equal(getInput.formInstId, 'opportunity-live-001');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.input.formInstId, 'opportunity-live-001');
 });
 
 test('Agent runtime returns A2UI surfaces for empty, single, and multi record search results', async () => {
@@ -746,9 +945,123 @@ test('Agent runtime returns A2UI surfaces for empty, single, and multi record se
     assert.equal(surface?.version, 'v0.9');
     assert.equal(surface?.catalogId, 'local://yzj-crm/record-result/v1');
     assert.equal(surface?.summary.displayMode, item.displayMode);
+    assert.equal(surface?.pagination?.request.searchInput.pageSize, 5);
     assert.equal(surface?.commands.some((command: any) => command.updateComponents), true);
     assert.doesNotMatch(response.message.content, /```json/);
   }
+});
+
+test('Record A2UI pagination endpoint returns one live page with the same view model shape', async () => {
+  let capturedInput: any = null;
+  const response = await buildRecordSearchPageResponse({
+    shadowMetadataService: {
+      executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
+        capturedInput = input;
+        return {
+          objectKey: 'customer',
+          operation: 'search',
+          mode: 'live',
+          requestBody: {},
+          pageNumber: input.pageNumber,
+          pageSize: input.pageSize,
+          totalPages: 3,
+          totalElements: 12,
+          records: [
+            {
+              formInstId: 'customer-form-006',
+              fields: [{ title: '客户名称', value: '第六个客户' }],
+              rawRecord: {},
+            },
+          ],
+        };
+      },
+    } as any,
+    request: {
+      objectKey: 'customer',
+      toolCode: 'record.customer.search',
+      searchInput: {
+        filters: [{ field: 'province', value: '安徽', operator: 'eq' }],
+        operatorOpenId: 'operator-001',
+        pageNumber: 2,
+        pageSize: 5,
+      },
+    },
+  });
+
+  assert.equal(capturedInput.pageNumber, 2);
+  assert.equal(capturedInput.pageSize, 5);
+  assert.equal(response.result.displayMode, 'list');
+  assert.equal(response.result.records[0]?.title, '第六个客户');
+  assert.equal(response.result.pagination?.endpoint, '/api/agent/record-search-page');
+  assert.deepEqual(response.result.pagination?.request.searchInput.filters, [
+    { field: 'province', value: '安徽', operator: 'eq' },
+  ]);
+});
+
+test('Agent runtime clears stale A2UI surfaces when the next tool waits for input', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: ({ query }) => query.includes('修改') || query.includes('改为')
+      ? recordIntent('customer', 'write', '这个客户')
+      : recordIntent('customer', 'query', ''),
+    shadowMetadataService: {
+      getObject: () => ({ fields: createCustomerSearchFields() }),
+      executeSearch: async () => ({
+        objectKey: 'customer',
+        operation: 'search',
+        mode: 'live',
+        requestBody: {},
+        pageNumber: 1,
+        pageSize: 5,
+        totalPages: 1,
+        totalElements: 1,
+        records: [
+          {
+            formInstId: 'customer-ahyy-001',
+            fields: [{ title: '客户名称', value: '安徽艳阳电气集团有限公司' }],
+            rawRecord: {},
+          },
+        ],
+      }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => ({
+        objectKey: 'customer',
+        operation: 'upsert',
+        unresolvedDictionaries: [],
+        resolvedDictionaryMappings: [],
+        missingRequiredParams: ['allocation_status'],
+        blockedReadonlyParams: [],
+        missingRuntimeInputs: [],
+        validationErrors: [],
+        readyToSend: false,
+        requestBody: { formCodeId: 'customer-form', data: [{ widgetValue: {} }] },
+      }),
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const search = await service.chat({
+    conversationKey: 'conv-stale-a2ui-surface',
+    sceneKey: 'chat',
+    query: '查询安徽艳阳电气客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.equal(search.message.extraInfo.uiSurfaces?.[0]?.summary.displayMode, 'card');
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-stale-a2ui-surface',
+    sceneKey: 'chat',
+    query: '将分配状态修改为已分配',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(waiting.executionState.status, 'waiting_input');
+  assert.equal(waiting.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.preview_update');
+  assert.equal(waiting.message.extraInfo.uiSurfaces?.length, 0);
+  assert.doesNotMatch(waiting.message.content, /已查询到客户/);
 });
 
 test('Agent runtime extracts metadata-driven record search filters before title fallback', async () => {
@@ -758,6 +1071,14 @@ test('Agent runtime extracts metadata-driven record search filters before title 
   }> = [
     {
       query: '查询安徽省的客户',
+      expectedFilter: { field: 'province', value: '安徽', operator: 'eq' },
+    },
+    {
+      query: '查询所有安徽省客户',
+      expectedFilter: { field: 'province', value: '安徽', operator: 'eq' },
+    },
+    {
+      query: '查询安徽省所有客户',
       expectedFilter: { field: 'province', value: '安徽', operator: 'eq' },
     },
     {
@@ -805,6 +1126,33 @@ test('Agent runtime keeps customer name fallback when field value is not a stand
       operator: 'like',
     },
   ]);
+});
+
+test('Agent runtime treats collection scope words as unfiltered record search', async () => {
+  const cases = ['查询所有客户', '查询全部客户', '查询客户列表'];
+
+  for (const query of cases) {
+    const { response, searchInput } = await runCustomerSearchExtractionCase(query);
+
+    assert.equal(response.executionState.status, 'completed', query);
+    assert.deepEqual(searchInput.filters, [], query);
+    assert.equal(searchInput.pageNumber, 1, query);
+    assert.equal(searchInput.pageSize, 5, query);
+    assert.equal(
+      response.message.extraInfo.agentTrace.selectedTool?.input.agentControl,
+      undefined,
+      query,
+    );
+  }
+});
+
+test('Agent runtime keeps pagination words out of record title fallback', async () => {
+  const { response, searchInput } = await runCustomerSearchExtractionCase('查询所有客户，第2页，每页10条');
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.deepEqual(searchInput.filters, []);
+  assert.equal(searchInput.pageNumber, 2);
+  assert.equal(searchInput.pageSize, 10);
 });
 
 test('Agent runtime clarifies ambiguous implicit record search field instead of title fallback', async () => {
@@ -2175,6 +2523,810 @@ test('Agent runtime hides internal formInstId requirement when update has no rec
   assert.equal(previewCalled, false);
 });
 
+test('Agent runtime extracts metadata-driven opportunity update fields from current record context', async () => {
+  const owner = createEmployeeCandidate({
+    openId: 'open-chen-weitang',
+    name: '陈伟堂',
+    phone: '13800000001',
+    email: 'chenweitang@example.com',
+  });
+  const cases: Array<{
+    query: string;
+    expectedParams: Record<string, unknown>;
+    widgetValue: Record<string, unknown>;
+  }> = [
+    {
+      query: '更新预算为5000000',
+      expectedParams: { opportunity_budget: 5000000 },
+      widgetValue: { Mo_0: 5000000 },
+    },
+    {
+      query: '更新商机预算改成500万',
+      expectedParams: { opportunity_budget: 5000000 },
+      widgetValue: { Mo_0: 5000000 },
+    },
+    {
+      query: '预计成交时间为2026-06-30',
+      expectedParams: { expected_close_date: '2026-06-30' },
+      widgetValue: { Da_0: '2026-06-30' },
+    },
+    {
+      query: '销售阶段改为初期沟通',
+      expectedParams: { sales_stage: 'initial' },
+      widgetValue: { Ra_0: 'initial' },
+    },
+    {
+      query: '更新销售负责人为陈伟堂',
+      expectedParams: {
+        owner_open_id: {
+          open_id: 'open-chen-weitang',
+          name: '陈伟堂',
+          phone: '13800000001',
+          email: 'chenweitang@example.com',
+        },
+      },
+      widgetValue: { Ps_0: ['open-chen-weitang'] },
+    },
+  ];
+
+  for (const item of cases) {
+    const repository = new AgentRunRepository(createInMemoryDatabase());
+    const conversationKey = `conv-opportunity-update-${Math.random().toString(16).slice(2)}`;
+    let previewInput: any = null;
+    seedRecordContext(repository, {
+      conversationKey,
+      objectKey: 'opportunity',
+      formInstId: 'opportunity-live-001',
+      name: '数字化经营项目',
+    });
+    const { service } = createAgentTestService({
+      repository,
+      intentFrame: recordIntent('opportunity', 'write', '这个商机'),
+      shadowMetadataService: {
+        getObject: () => ({ fields: createOpportunityWriteFields() }),
+        executeSearch: async () => ({ records: [] }),
+        executeGet: async () => ({ record: null }),
+        previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+          previewInput = input;
+          return {
+            objectKey: 'opportunity',
+            operation: 'upsert',
+            unresolvedDictionaries: [],
+            resolvedDictionaryMappings: [],
+            missingRequiredParams: [],
+            blockedReadonlyParams: [],
+            missingRuntimeInputs: [],
+            validationErrors: [],
+            readyToSend: true,
+            requestBody: {
+              formCodeId: 'opportunity-form',
+              data: [{ widgetValue: item.widgetValue }],
+            },
+          };
+        },
+        executeUpsert: async () => {
+          throw new Error('not used');
+        },
+      },
+      orgSyncRepository: createEmployeeLookup([owner]),
+    });
+
+    const response = await service.chat({
+      conversationKey,
+      sceneKey: 'chat',
+      query: item.query,
+      tenantContext: { operatorOpenId: 'operator-001' },
+    });
+
+    assert.equal(response.executionState.status, 'waiting_confirmation', item.query);
+    assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.opportunity.preview_update', item.query);
+    assert.equal(previewInput.formInstId, 'opportunity-live-001', item.query);
+    assert.deepEqual(previewInput.params, item.expectedParams, item.query);
+    if (item.query.includes('销售负责人')) {
+      assert.match(response.message.content, /陈伟堂/);
+      assert.equal(response.message.content.includes('open-chen-weitang'), false);
+    }
+    assert.equal(
+      response.message.extraInfo.agentTrace.policyDecisions?.some((policy) => policy.policyCode === 'record.preview_empty_payload_guard'),
+      false,
+      item.query,
+    );
+  }
+});
+
+test('Agent runtime keeps context-bound opportunity update when LLM mislabels write target as company', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const conversationKey = 'conv-opportunity-owner-context-write';
+  const owner = createEmployeeCandidate({
+    openId: 'open-chen-weitang',
+    name: '陈伟堂',
+    phone: '13800000001',
+    email: 'chenweitang@example.com',
+  });
+  let previewInput: any = null;
+  seedRecordContext(repository, {
+    conversationKey,
+    objectKey: 'opportunity',
+    formInstId: 'opportunity-live-001',
+    name: '数字化经营项目',
+  });
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: companyWriteIntent(),
+    shadowMetadataService: {
+      getObject: () => ({ fields: createOpportunityWriteFields() }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewInput = input;
+        return {
+          objectKey: 'opportunity',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: [],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: true,
+          requestBody: {
+            formCodeId: 'opportunity-form',
+            data: [{ widgetValue: { Ps_0: ['open-chen-weitang'] } }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+    orgSyncRepository: createEmployeeLookup([owner]),
+  });
+
+  const response = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '更新销售负责人为陈伟堂',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_confirmation');
+  assert.equal(response.message.extraInfo.agentTrace.intentFrame.targetType, 'opportunity');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.opportunity.preview_update');
+  assert.equal(previewInput.formInstId, 'opportunity-live-001');
+  assert.deepEqual(previewInput.params, {
+    owner_open_id: {
+      open_id: 'open-chen-weitang',
+      name: '陈伟堂',
+      phone: '13800000001',
+      email: 'chenweitang@example.com',
+    },
+  });
+});
+
+test('Agent runtime asks for clarification when personSelectWidget value matches multiple employees', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const conversationKey = 'conv-opportunity-owner-ambiguous';
+  const employees = [
+    createEmployeeCandidate({
+      openId: 'open-chen-weirong',
+      name: '陈伟荣',
+      phone: '13800000002',
+      email: 'chenweirong@example.com',
+    }),
+    createEmployeeCandidate({
+      openId: 'open-chen-weigang',
+      name: '陈伟刚',
+      phone: '13800000003',
+      email: 'chenweigang@example.com',
+    }),
+  ];
+  let previewInput: any = null;
+  let previewCallCount = 0;
+  seedRecordContext(repository, {
+    conversationKey,
+    objectKey: 'opportunity',
+    formInstId: 'opportunity-live-001',
+    name: '数字化经营项目',
+  });
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('opportunity', 'write', '这个商机'),
+    shadowMetadataService: {
+      getObject: () => ({ fields: createOpportunityWriteFields() }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewCallCount += 1;
+        previewInput = input;
+        return {
+          objectKey: 'opportunity',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: [],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: true,
+          requestBody: {
+            formCodeId: 'opportunity-form',
+            data: [{ widgetValue: { Ps_0: [input.params.owner_open_id.open_id] } }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+    orgSyncRepository: createEmployeeLookup(employees),
+  });
+
+  const waiting = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '更新销售负责人为陈伟',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
+  const question = pending?.questionCard?.questions[0];
+
+  assert.equal(waiting.executionState.status, 'waiting_input');
+  assert.equal(previewCallCount, 0);
+  assert.equal(question?.type, 'reference');
+  assert.equal(question?.lookup?.source, 'employee');
+  assert.deepEqual(
+    question?.options?.map((option) => option.value),
+    ['open-chen-weirong', 'open-chen-weigang'],
+  );
+  assert.deepEqual(
+    question?.options?.map((option) => option.label),
+    ['陈伟荣 · 13800000002 · chenweirong@example.com', '陈伟刚 · 13800000003 · chenweigang@example.com'],
+  );
+  assert.equal(question?.options?.some((option) => option.label.includes('open-chen')), false);
+
+  const continued = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '选择陈伟刚',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: pending!.interactionId,
+      answers: {
+        owner_open_id: 'open-chen-weigang',
+      },
+    },
+  });
+
+  assert.equal(continued.executionState.status, 'waiting_confirmation');
+  assert.equal(previewCallCount, 1);
+  assert.deepEqual(previewInput.params, {
+    owner_open_id: {
+      open_id: 'open-chen-weigang',
+      name: '陈伟刚',
+      phone: '13800000003',
+      email: 'chenweigang@example.com',
+    },
+  });
+});
+
+test('Agent runtime blocks personSelectWidget preview when employee lookup has no match', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const conversationKey = 'conv-opportunity-owner-not-found';
+  let previewCalled = false;
+  seedRecordContext(repository, {
+    conversationKey,
+    objectKey: 'opportunity',
+    formInstId: 'opportunity-live-001',
+    name: '数字化经营项目',
+  });
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('opportunity', 'write', '这个商机'),
+    shadowMetadataService: {
+      getObject: () => ({ fields: createOpportunityWriteFields() }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => {
+        previewCalled = true;
+        throw new Error('not used');
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+    orgSyncRepository: createEmployeeLookup([]),
+  });
+
+  const response = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '更新销售负责人为不存在的人',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const question = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions[0];
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(previewCalled, false);
+  assert.equal(question?.type, 'reference');
+  assert.equal(question?.lookup?.source, 'employee');
+  assert.match(response.message.content, /未在组织员工表中找到/);
+  assert.equal(
+    response.message.extraInfo.agentTrace.policyDecisions?.some((policy) => policy.policyCode === 'record.person_resolution_not_found'),
+    true,
+  );
+});
+
+test('Agent runtime resolves personSelectWidget fields generically beyond opportunity owner', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const serviceRep = createEmployeeCandidate({
+    openId: 'open-service-rep-1',
+    name: '陈伟堂',
+    phone: '13800000001',
+    email: 'chenweitang@example.com',
+  });
+  let previewInput: any = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '测试客户'),
+    shadowMetadataService: {
+      getObject: () => ({ fields: createCustomerWritePersonFields() }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewInput = input;
+        return {
+          objectKey: 'customer',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: [],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: true,
+          requestBody: {
+            formCodeId: 'customer-form',
+            data: [{ widgetValue: { _S_NAME: input.params.customer_name, Ps_service: [input.params.service_rep_open_id.open_id] } }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+    orgSyncRepository: createEmployeeLookup([serviceRep]),
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-customer-service-rep-person-resolution',
+    sceneKey: 'chat',
+    query: '新增客户 测试客户 售后服务代表为陈伟堂',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_confirmation');
+  assert.deepEqual(previewInput.params.service_rep_open_id, {
+    open_id: 'open-service-rep-1',
+    name: '陈伟堂',
+    phone: '13800000001',
+    email: 'chenweitang@example.com',
+  });
+  assert.equal(response.message.content.includes('open-service-rep-1'), false);
+});
+
+test('Agent runtime marks missing followup reference fields as remote lookup questions', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('followup', 'write', '跟进记录'),
+    shadowMetadataService: {
+      listObjects: () => [
+        { objectKey: 'customer', formCodeId: 'customer-form' },
+        { objectKey: 'followup', formCodeId: 'followup-form' },
+      ],
+      getObject: () => ({ fields: createFollowupWriteFields() }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => ({
+        objectKey: 'followup',
+        operation: 'upsert',
+        unresolvedDictionaries: [],
+        resolvedDictionaryMappings: [],
+        missingRequiredParams: ['followup_method', 'linked_customer_form_inst_id', 'owner_open_id', 'followup_record'],
+        blockedReadonlyParams: [],
+        missingRuntimeInputs: [],
+        validationErrors: [],
+        readyToSend: false,
+        requestBody: {
+          formCodeId: 'followup-form',
+          data: [{ widgetValue: {} }],
+        },
+      }),
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-followup-reference-lookup-card',
+    sceneKey: 'chat',
+    query: '新增跟进记录',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const questions = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions ?? [];
+  const customerQuestion = questions.find((question) => question.paramKey === 'linked_customer_form_inst_id');
+  const ownerQuestion = questions.find((question) => question.paramKey === 'owner_open_id');
+  const methodQuestion = questions.find((question) => question.paramKey === 'followup_method');
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(customerQuestion?.type, 'reference');
+  assert.equal(customerQuestion?.lookup?.source, 'record');
+  assert.equal(customerQuestion?.lookup?.targetObjectKey, 'customer');
+  assert.equal(customerQuestion?.lookup?.allowFreeText, false);
+  assert.equal(ownerQuestion?.type, 'reference');
+  assert.equal(ownerQuestion?.lookup?.source, 'employee');
+  assert.equal(ownerQuestion?.lookup?.allowFreeText, false);
+  assert.equal(methodQuestion?.type, 'single_select');
+});
+
+test('Agent meta question options search employees and customer records', async () => {
+  const employees = [
+    createEmployeeCandidate({
+      openId: 'open-chen-1',
+      name: '陈伟荣',
+      phone: '13800000002',
+      email: 'chenweirong@example.com',
+    }),
+  ];
+  const searchInputs: any[] = [];
+  const shadowMetadataService = {
+    listObjects: () => [
+      { objectKey: 'customer', formCodeId: 'customer-form' },
+      { objectKey: 'followup', formCodeId: 'followup-form' },
+    ],
+    getObject: (objectKey: ShadowObjectKey) => ({
+      fields: objectKey === 'followup' ? createFollowupWriteFields() : createCustomerLookupFields(),
+    }),
+    executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
+      searchInputs.push(input);
+      const hasProvinceFilter = input.filters?.some((filter: any) => filter.field === 'province');
+      const hasNameFilter = input.filters?.some((filter: any) => filter.field === 'customer_name');
+      return {
+        records: [
+          ...(hasProvinceFilter ? [{
+            formInstId: 'customer-ah-province-001',
+            fields: [{ title: '客户名称', value: '合肥样板客户' }, { title: '省', value: '安徽' }],
+            rawRecord: {},
+          }] : []),
+          ...(hasNameFilter ? [{
+            formInstId: 'customer-ah-name-001',
+            fields: [{ title: '客户名称', value: '安徽好客户' }],
+            rawRecord: {},
+          }] : []),
+        ],
+        totalElements: 1,
+        pageNumber: 1,
+        pageSize: input.pageSize,
+        totalPages: 1,
+      };
+    },
+  };
+
+  const employeeResponse = await buildMetaQuestionOptionsResponse({
+    config: createTestConfig(),
+    shadowMetadataService: shadowMetadataService as any,
+    orgSyncRepository: createEmployeeLookup(employees),
+    request: {
+      toolCode: 'record.followup.preview_create',
+      paramKey: 'owner_open_id',
+      keyword: '陈',
+      pageSize: 10,
+    },
+  });
+  assert.deepEqual(employeeResponse.options.map((option) => option.value), ['open-chen-1']);
+  assert.equal(employeeResponse.options[0]?.source, 'employee');
+  assert.match(employeeResponse.options[0]?.label ?? '', /陈伟荣/);
+
+  const customerResponse = await buildMetaQuestionOptionsResponse({
+    config: createTestConfig(),
+    shadowMetadataService: shadowMetadataService as any,
+    orgSyncRepository: createEmployeeLookup([]),
+    request: {
+      toolCode: 'record.followup.preview_create',
+      paramKey: 'linked_customer_form_inst_id',
+      keyword: '安徽',
+      pageSize: 10,
+      tenantContext: { operatorOpenId: 'operator-001' },
+    },
+  });
+  assert.equal(customerResponse.options.length, 2);
+  assert.deepEqual(
+    customerResponse.options.map((option) => option.value),
+    ['customer-ah-province-001', 'customer-ah-name-001'],
+  );
+  assert.equal(customerResponse.options.every((option) => option.source === 'record'), true);
+  assert.equal(searchInputs.some((input) => input.filters?.some((filter: any) => filter.field === 'province')), true);
+  assert.equal(searchInputs.some((input) => input.filters?.some((filter: any) => filter.field === 'customer_name')), true);
+});
+
+test('Agent runtime requires selecting basicDataWidget candidates before followup preview', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const owner = createEmployeeCandidate({
+    openId: 'open-followup-owner',
+    name: '陈伟堂',
+    phone: '13800000001',
+    email: 'chenweitang@example.com',
+  });
+  let previewCallCount = 0;
+  let previewInput: any = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('followup', 'write', '跟进记录'),
+    shadowMetadataService: {
+      listObjects: () => [
+        { objectKey: 'customer', formCodeId: 'customer-form' },
+        { objectKey: 'followup', formCodeId: 'followup-form' },
+      ],
+      getObject: (objectKey: ShadowObjectKey) => ({
+        fields: objectKey === 'followup' ? createFollowupWriteFields() : createCustomerLookupFields(),
+      }),
+      executeSearch: async () => ({
+        records: [{
+          formInstId: 'customer-ah-001',
+          fields: [{ title: '客户名称', value: '安徽好客户' }],
+          rawRecord: {},
+        }],
+        totalElements: 1,
+        pageNumber: 1,
+        pageSize: 10,
+        totalPages: 1,
+      }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewCallCount += 1;
+        previewInput = input;
+        const params = input.params ?? {};
+        const missing = ['linked_customer_form_inst_id', 'owner_open_id']
+          .filter((paramKey) => params[paramKey] === undefined);
+        return {
+          objectKey: 'followup',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: missing,
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: missing.length === 0,
+          requestBody: {
+            formCodeId: 'followup-form',
+            data: [{ widgetValue: missing.length ? {} : { Bd_customer: [params.linked_customer_form_inst_id], Ps_owner: [params.owner_open_id.open_id] } }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+    orgSyncRepository: createEmployeeLookup([owner]),
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-followup-reference-selection',
+    sceneKey: 'chat',
+    query: '新增跟进记录',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
+  const blocked = await service.chat({
+    conversationKey: 'conv-followup-reference-selection',
+    sceneKey: 'chat',
+    query: '客户编号：安徽，跟进负责人：陈伟堂',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: pending!.interactionId,
+      answers: {
+        linked_customer_form_inst_id: '安徽',
+        owner_open_id: 'open-followup-owner',
+      },
+    },
+  });
+
+  assert.equal(blocked.executionState.status, 'waiting_input');
+  assert.equal(previewCallCount, 1);
+  const blockedQuestion = blocked.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions[0];
+  assert.equal(blockedQuestion?.paramKey, 'linked_customer_form_inst_id');
+  assert.equal(blockedQuestion?.lookup?.source, 'record');
+  assert.deepEqual(blockedQuestion?.options?.map((option) => option.value), ['customer-ah-001']);
+
+  const continued = await service.chat({
+    conversationKey: 'conv-followup-reference-selection',
+    sceneKey: 'chat',
+    query: '选择安徽好客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: blocked.executionState.runId,
+      action: 'provide_input',
+      interactionId: blocked.message.extraInfo.agentTrace.pendingInteraction!.interactionId,
+      answers: {
+        linked_customer_form_inst_id: 'customer-ah-001',
+      },
+    },
+  });
+
+  assert.equal(continued.executionState.status, 'waiting_confirmation');
+  assert.equal(previewCallCount, 2);
+  assert.equal(previewInput.params.linked_customer_form_inst_id, 'customer-ah-001');
+  assert.equal(previewInput.params.owner_open_id.open_id, 'open-followup-owner');
+});
+
+test('Agent runtime resumes persisted followup question card without parsing option descriptions as search', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const owner = createEmployeeCandidate({
+    openId: 'open-followup-owner',
+    name: '陈伟棠',
+    phone: '13612952187',
+    email: 'weitang_chen@example.com',
+  });
+  let previewInput: any = null;
+  const shadowMetadataService = {
+    listObjects: () => [
+      { objectKey: 'customer', formCodeId: 'customer-form' },
+      { objectKey: 'followup', formCodeId: 'followup-form' },
+    ],
+    getObject: (objectKey: ShadowObjectKey) => ({
+      fields: objectKey === 'followup' ? createFollowupWriteFields() : createCustomerLookupFields(),
+    }),
+    executeSearch: async () => ({ records: [] }),
+    executeGet: async () => ({ record: null }),
+    previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+      previewInput = input;
+      const params = input.params ?? {};
+      const missing = ['linked_customer_form_inst_id', 'owner_open_id', 'followup_method', 'followup_record']
+        .filter((paramKey) => params[paramKey] === undefined);
+      return {
+        objectKey: 'followup',
+        operation: 'upsert',
+        unresolvedDictionaries: [],
+        resolvedDictionaryMappings: [],
+        missingRequiredParams: missing,
+        blockedReadonlyParams: [],
+        missingRuntimeInputs: [],
+        validationErrors: [],
+        readyToSend: missing.length === 0,
+        requestBody: {
+          formCodeId: 'followup-form',
+          data: [{ widgetValue: missing.length ? {} : { Bd_customer: [params.linked_customer_form_inst_id], Ps_owner: [params.owner_open_id.open_id], Tx_record: params.followup_record } }],
+        },
+      };
+    },
+    executeUpsert: async () => {
+      throw new Error('not used');
+    },
+  };
+  const createService = () => createAgentTestService({
+    repository,
+    intentFrame: recordIntent('followup', 'write', '跟进记录'),
+    shadowMetadataService,
+    orgSyncRepository: createEmployeeLookup([owner]),
+  }).service;
+
+  const waiting = await createService().chat({
+    conversationKey: 'conv-followup-persisted-question-resume',
+    sceneKey: 'chat',
+    query: '新增跟进记录',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
+  assert.ok(pending?.questionCard);
+
+  const resumed = await createService().chat({
+    conversationKey: 'conv-followup-persisted-question-resume',
+    sceneKey: 'chat',
+    query: '跟进负责人：陈伟棠，客户编号：安徽艳阳电气集团有限公司，客户状态：商机阶段客户，跟进方式：上门，跟进记录：已上门拜访',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: pending!.interactionId,
+      answers: {
+        linked_customer_form_inst_id: 'customer-ah-001',
+        owner_open_id: 'open-followup-owner',
+        followup_method: '上门',
+        followup_record: '已上门拜访',
+      },
+    },
+  });
+
+  assert.equal(resumed.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInput.params.linked_customer_form_inst_id, 'customer-ah-001');
+  assert.equal(previewInput.params.owner_open_id.open_id, 'open-followup-owner');
+  assert.equal(previewInput.params.followup_record, '已上门拜访');
+  assert.doesNotMatch(resumed.message.content, /已识别到字段「客户状态」/);
+});
+
+test('Agent runtime rejects stale meta question submissions instead of replanning as record search', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: ({ query }) => query.includes('跟进')
+      ? recordIntent('followup', 'write', '跟进记录')
+      : recordIntent('customer', 'query', '客户'),
+    shadowMetadataService: {
+      listObjects: () => [
+        { objectKey: 'customer', formCodeId: 'customer-form' },
+        { objectKey: 'followup', formCodeId: 'followup-form' },
+      ],
+      getObject: (objectKey: ShadowObjectKey) => ({
+        fields: objectKey === 'followup' ? createFollowupWriteFields() : createCustomerLookupFields(),
+      }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => ({
+        objectKey: 'followup',
+        operation: 'upsert',
+        unresolvedDictionaries: [],
+        resolvedDictionaryMappings: [],
+        missingRequiredParams: ['followup_method', 'linked_customer_form_inst_id', 'owner_open_id', 'followup_record'],
+        blockedReadonlyParams: [],
+        missingRuntimeInputs: [],
+        validationErrors: [],
+        readyToSend: false,
+        requestBody: {
+          formCodeId: 'followup-form',
+          data: [{ widgetValue: {} }],
+        },
+      }),
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-stale-meta-question-submit',
+    sceneKey: 'chat',
+    query: '新增跟进记录',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const stalePending = waiting.message.extraInfo.agentTrace.pendingInteraction;
+  assert.ok(stalePending?.questionCard);
+
+  const latestWaiting = await service.chat({
+    conversationKey: 'conv-stale-meta-question-submit',
+    sceneKey: 'chat',
+    query: '查询客户状态为商机阶段客户的客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.match(latestWaiting.message.content, /已识别到字段「客户状态」/);
+
+  const staleSubmit = await service.chat({
+    conversationKey: 'conv-stale-meta-question-submit',
+    sceneKey: 'chat',
+    query: '跟进负责人：陈伟棠，客户编号：安徽艳阳电气集团有限公司，客户状态：商机阶段客户，跟进方式：上门',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: stalePending!.interactionId,
+      answers: {
+        linked_customer_form_inst_id: 'customer-ah-001',
+        owner_open_id: 'open-followup-owner',
+        followup_method: '上门',
+      },
+    },
+  });
+
+  assert.equal(staleSubmit.executionState.status, 'waiting_input');
+  assert.match(staleSubmit.message.content, /这张补充卡已不是当前等待项/);
+  assert.doesNotMatch(staleSubmit.message.content, /已识别到字段「客户状态」/);
+});
+
 test('Agent run repository prefers persisted context subject over legacy intent fallback', () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   seedRecordContext(repository, {
@@ -2189,6 +3341,25 @@ test('Agent run repository prefers persisted context subject over legacy intent 
   assert.equal(context?.subject?.type, 'customer');
   assert.equal(context?.subject?.id, 'customer-live-001');
   assert.equal(context?.subject?.name, '上海松井机械有限公司');
+});
+
+test('Agent run repository skips opaque external id context and keeps recent record subject', () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const conversationKey = 'conv-skip-opaque-external-context';
+  const formInstId = '69f16bc40f31d40001b288bd';
+  seedRecordContext(repository, {
+    conversationKey,
+    objectKey: 'opportunity',
+    formInstId,
+    name: '数字化经营项目',
+  });
+  seedCompanyContext(repository, conversationKey, formInstId);
+
+  const context = repository.findContextFrame(conversationKey);
+
+  assert.equal(context?.subject?.kind, 'record');
+  assert.equal(context?.subject?.type, 'opportunity');
+  assert.equal(context?.subject?.id, formInstId);
 });
 
 test('Agent runtime uses subject-bound relation filter for contextual contact search', async () => {

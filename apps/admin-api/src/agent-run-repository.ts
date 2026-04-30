@@ -18,10 +18,12 @@ import type {
   TaskPlan,
 } from './contracts.js';
 import type {
+  AgentToolSelection,
   ConfirmationRequest,
   ContextFrame,
   ContextFrameSubject,
   ContextReferenceCandidate,
+  PendingInteraction,
 } from './agent-core.js';
 
 interface FocusRow {
@@ -108,6 +110,10 @@ interface AgentToolCallRow {
   started_at: string;
   finished_at: string | null;
   error_message: string | null;
+}
+
+interface PendingInteractionStateRow {
+  extra_info_json: string;
 }
 
 interface ConfirmationAuditRow extends ConfirmationRow {
@@ -253,6 +259,9 @@ export class AgentRunRepository {
     for (const row of rows) {
       const evidenceRefs = parseEvidenceRefs(row.evidence_refs_json);
       const subject = parseContextSubject(row.context_subject_json) ?? resolveSubjectFromRun(row.intent_frame_json, evidenceRefs);
+      if (isOpaqueInternalIdExternalSubject(subject)) {
+        continue;
+      }
       if (subject?.name) {
         return {
           subject,
@@ -337,6 +346,50 @@ export class AgentRunRepository {
     });
 
     return dedupeContextCandidates(candidates);
+  }
+
+  findPendingInteractionState(input: {
+    runId: string;
+    conversationKey?: string;
+    interactionId?: string;
+  }): { pendingInteraction: PendingInteraction; selectedTool?: AgentToolSelection } | null {
+    const clauses = ['run_id = ?', "role = 'assistant'"];
+    const params: string[] = [input.runId];
+    if (input.conversationKey?.trim()) {
+      clauses.push('conversation_key = ?');
+      params.push(input.conversationKey.trim());
+    }
+    const rows = this.database
+      .prepare(
+        `
+          SELECT extra_info_json
+          FROM agent_messages
+          WHERE ${clauses.join(' AND ')}
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT 20
+        `,
+      )
+      .all(...params) as unknown as PendingInteractionStateRow[];
+
+    for (const row of rows) {
+      const extraInfo = parseJson<Record<string, unknown>>(row.extra_info_json, {});
+      const agentTrace = readRecord(extraInfo.agentTrace);
+      const pendingInteraction = readRecord(agentTrace.pendingInteraction) as unknown as PendingInteraction | null;
+      if (
+        !pendingInteraction
+        || pendingInteraction.status !== 'pending'
+        || input.interactionId && pendingInteraction.interactionId !== input.interactionId
+      ) {
+        continue;
+      }
+      const selectedTool = readRecord(agentTrace.selectedTool) as unknown as AgentToolSelection | null;
+      return {
+        pendingInteraction,
+        ...(selectedTool?.toolCode ? { selectedTool } : {}),
+      };
+    }
+
+    return null;
   }
 
   findFocusedCompany(conversationKey: string): string | null {
@@ -560,6 +613,14 @@ export class AgentRunRepository {
   }
 }
 
+function isOpaqueInternalIdExternalSubject(subject?: ContextFrame['subject'] | null): boolean {
+  if (!subject || subject.kind !== 'external_subject') {
+    return false;
+  }
+  const value = `${subject.id ?? ''}${subject.name ?? ''}`.trim();
+  return /^[0-9a-f]{20,}$/i.test(value);
+}
+
 function normalizePagination(pageValue?: number, pageSizeValue?: number) {
   const page = Number.isFinite(pageValue) && Number(pageValue) > 0
     ? Math.floor(Number(pageValue))
@@ -739,6 +800,12 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function parseIntentFrame(value: string): IntentFrame | null {

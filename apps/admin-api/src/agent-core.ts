@@ -10,6 +10,7 @@ import type {
   AppConfig,
   ExecutionState,
   IntentFrame,
+  ShadowObjectKey,
   TaskPlan,
 } from './contracts.js';
 import { buildErrorDebugInfo } from './errors.js';
@@ -191,7 +192,18 @@ export interface FieldOptionHint {
   label: string;
   value: string | number | boolean;
   key?: string;
-  source?: 'field_option' | 'dictionary' | 'widget';
+  description?: string;
+  source?: 'field_option' | 'dictionary' | 'widget' | 'employee' | 'record';
+}
+
+export interface MetaQuestionLookup {
+  kind: 'remote_select';
+  endpoint: '/api/agent/meta-question-options';
+  source: 'employee' | 'record';
+  targetObjectKey?: ShadowObjectKey;
+  minKeywordLength: 1;
+  pageSize: number;
+  allowFreeText: false;
 }
 
 export interface RecordWritePreviewRow {
@@ -201,6 +213,7 @@ export interface RecordWritePreviewRow {
   reason?: string;
   source?: RecordWritePreviewRowSource;
   options?: FieldOptionHint[];
+  lookup?: MetaQuestionLookup;
 }
 
 export interface RecordWritePreviewView {
@@ -220,6 +233,7 @@ export interface MetaQuestion {
   placeholder?: string;
   currentValue?: string | number | boolean | string[];
   options?: FieldOptionHint[];
+  lookup?: MetaQuestionLookup;
   reason?: string;
 }
 

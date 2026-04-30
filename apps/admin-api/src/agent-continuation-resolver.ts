@@ -131,17 +131,39 @@ export function resolveProvidedInputContinuation(input: {
   }
   if (pending.kind !== 'input_required') {
     return {
+      decision: {
+        runId: input.runId,
+        action: 'wait_for_input',
+        interactionId: pending.interactionId,
+        query,
+        reason: '当前等待态不是补字段卡，已拒绝把结构化卡片提交当作新的自然语言查询执行。',
+      },
       resolution: {
         usedContinuation: false,
-        action: 'none',
-        reason: '当前等待态不是补充输入，不能使用 provide_input。',
+        action: 'wait_for_input',
+        reason: '当前等待态不是补字段卡，已拒绝把结构化卡片提交当作新的自然语言查询执行。',
         sourceInteractionId: pending.interactionId,
         toolCode: pending.toolCode,
       },
     };
   }
   if (pending.interactionId !== input.interactionId) {
-    return startNewTask(input.runId, query, pending, '结构化补充输入与当前等待态不匹配，改为重新规划。');
+    return {
+      decision: {
+        runId: input.runId,
+        action: 'wait_for_input',
+        interactionId: pending.interactionId,
+        query,
+        reason: '这张补充卡已不是当前等待项。请使用最新的补充卡重新提交，系统不会把卡片字段摘要降级为客户查询。',
+      },
+      resolution: {
+        usedContinuation: false,
+        action: 'wait_for_input',
+        reason: '结构化补充输入与当前等待态不匹配，已阻止重新规划为普通查询。',
+        sourceInteractionId: pending.interactionId,
+        toolCode: pending.toolCode,
+      },
+    };
   }
 
   const choiceDecision = resolveChoiceRouting({
