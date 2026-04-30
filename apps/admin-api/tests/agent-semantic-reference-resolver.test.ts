@@ -31,6 +31,36 @@ const recordTool = {
   },
 } satisfies AgentToolDefinition;
 
+const contactSearchTool = {
+  code: 'record.contact.search',
+  type: 'record',
+  provider: 'test',
+  description: 'test contact search',
+  whenToUse: 'test',
+  inputSchema: {},
+  outputSchema: {},
+  riskLevel: 'low',
+  confirmationPolicy: 'read_only',
+  displayCardType: 'test',
+  owner: 'test',
+  enabled: true,
+  recordCapability: {
+    objectLabels: ['联系人'],
+    subjectBinding: {
+      acceptedSubjectTypes: ['customer'],
+      searchFilterField: 'linked_customer_form_inst_id',
+      searchValueSource: 'subject_id',
+    },
+    identityFields: ['contact_name'],
+    fieldLabels: {
+      contact_name: '联系人姓名',
+    },
+  },
+  execute: async () => {
+    throw new Error('not used');
+  },
+} satisfies AgentToolDefinition;
+
 const genericIntent: GenericIntentFrame = {
   actionType: 'write',
   goal: '写入结构化记录',
@@ -228,4 +258,93 @@ test('semantic resolver coalesces same entity candidates from context and artifa
   assert.equal(result.intentFrame.target.name, companyName);
   assert.equal(result.semanticResolution.shouldClarify, false);
   assert.equal(result.semanticResolution.candidates.length, 1);
+});
+
+test('semantic resolver keeps collection queries from binding the current record subject', async () => {
+  for (const query of ['查询联系人', '查询所有的联系人']) {
+    const result = await resolveSemanticReference({
+      request: {
+        conversationKey: `conv-contact-list-${query}`,
+        sceneKey: 'chat',
+        query,
+      },
+      intentFrame: {
+        ...genericIntent,
+        actionType: 'query',
+        goal: '查询联系人信息',
+        target: {
+          kind: 'record',
+          objectType: 'contact',
+          name: '联系人',
+        },
+      },
+      contextCandidates: [
+        {
+          candidateId: 'contact-current',
+          subject: {
+            kind: 'record',
+            type: 'contact',
+            id: 'contact-lilingling-001',
+            name: '李玲玲',
+          },
+          sourceRunId: 'run-contact',
+          evidenceRefs: [],
+          text: 'record contact contact-lilingling-001 李玲玲',
+          recencyRank: 0,
+          confidence: 0.9,
+          source: 'context_subject',
+        },
+      ],
+      availableTools: [contactSearchTool],
+      embeddingProvider: null,
+    });
+
+    assert.equal(result.resolvedContext.usedContext, false, query);
+    assert.equal(result.resolvedContext.subject, undefined, query);
+    assert.equal(result.resolvedContext.usageMode, 'skipped_collection_query', query);
+    assert.equal(result.semanticResolution.selectedCandidate?.subject.name, '李玲玲', query);
+  }
+});
+
+test('semantic resolver still binds context for subject-scoped collection queries', async () => {
+  const result = await resolveSemanticReference({
+    request: {
+      conversationKey: 'conv-customer-contacts',
+      sceneKey: 'chat',
+      query: '查询这个客户的联系人',
+    },
+    intentFrame: {
+      ...genericIntent,
+      actionType: 'query',
+      goal: '查询客户关联联系人',
+      target: {
+        kind: 'record',
+        objectType: 'contact',
+        name: '这个客户',
+      },
+    },
+    contextCandidates: [
+      {
+        candidateId: 'customer-current',
+        subject: {
+          kind: 'record',
+          type: 'customer',
+          id: 'customer-c1-001',
+          name: '苏州恒达机电有限公司',
+        },
+        sourceRunId: 'run-customer',
+        evidenceRefs: [],
+        text: 'record customer customer-c1-001 苏州恒达机电有限公司',
+        recencyRank: 0,
+        confidence: 0.9,
+        source: 'context_subject',
+      },
+    ],
+    availableTools: [contactSearchTool],
+    embeddingProvider: null,
+  });
+
+  assert.equal(result.resolvedContext.usedContext, true);
+  assert.equal(result.resolvedContext.subject?.id, 'customer-c1-001');
+  assert.equal(result.semanticResolution.usageMode, 'used');
 });

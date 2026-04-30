@@ -65,7 +65,7 @@ export class AgentService {
         executionState: output.executionState,
         toolCalls: output.toolCalls,
         evidence: output.evidence,
-        contextFrame: output.contextFrame ?? contextFrame,
+        contextFrame: output.contextFrame !== undefined ? output.contextFrame : contextFrame,
         message,
       });
     } catch (error) {

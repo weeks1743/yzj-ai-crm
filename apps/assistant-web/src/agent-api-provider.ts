@@ -189,6 +189,8 @@ export interface AssistantChatMessage {
         };
         sourceRunId?: string;
         evidenceRefs?: AssistantEvidenceCard[];
+        usageMode?: 'used' | 'candidate_only' | 'skipped_collection_query' | 'none';
+        skipReasonCode?: string;
       } | null;
       semanticResolution?: {
         usedSemantic: boolean;
@@ -234,6 +236,8 @@ export interface AssistantChatMessage {
         margin: number;
         embeddingProvider: string;
         targetWasOverridden: boolean;
+        usageMode?: 'used' | 'candidate_only' | 'skipped_collection_query' | 'none';
+        skipReasonCode?: string;
       } | null;
       toolArbitration?: {
         usedArbitration: boolean;

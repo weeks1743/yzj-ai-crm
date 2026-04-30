@@ -246,7 +246,7 @@ export class AgentRunRepository {
     const rows = this.database
       .prepare(
         `
-          SELECT run_id, intent_frame_json, evidence_refs_json
+          SELECT run_id, user_input, intent_frame_json, evidence_refs_json
                , context_subject_json
           FROM agent_runs
           WHERE conversation_key = ?
@@ -258,7 +258,11 @@ export class AgentRunRepository {
 
     for (const row of rows) {
       const evidenceRefs = parseEvidenceRefs(row.evidence_refs_json);
-      const subject = parseContextSubject(row.context_subject_json) ?? resolveSubjectFromRun(row.intent_frame_json, evidenceRefs);
+      const subject = parseContextSubject(row.context_subject_json) ?? resolveSubjectFromRun({
+        intentJson: row.intent_frame_json,
+        evidenceRefs,
+        userInput: row.user_input,
+      });
       if (isOpaqueInternalIdExternalSubject(subject)) {
         continue;
       }
@@ -294,7 +298,11 @@ export class AgentRunRepository {
     rows.forEach((row, index) => {
       const evidenceRefs = parseEvidenceRefs(row.evidence_refs_json);
       const parsedIntent = parseIntentFrame(row.intent_frame_json);
-      const subject = parseContextSubject(row.context_subject_json) ?? resolveSubjectFromRun(row.intent_frame_json, evidenceRefs);
+      const subject = parseContextSubject(row.context_subject_json) ?? resolveSubjectFromRun({
+        intentJson: row.intent_frame_json,
+        evidenceRefs,
+        userInput: row.user_input,
+      });
       if (subject?.name) {
         candidates.push({
           candidateId: `${row.run_id ?? 'run'}:${subject.kind}:${subject.type ?? ''}:${subject.id ?? subject.name}`,
@@ -896,11 +904,15 @@ function isEvidenceRef(value: unknown): value is AgentEvidenceCard {
   );
 }
 
-function resolveSubjectFromRun(intentJson: string, evidenceRefs: AgentEvidenceCard[]): ContextFrameSubject | null {
+function resolveSubjectFromRun(input: {
+  intentJson: string;
+  evidenceRefs: AgentEvidenceCard[];
+  userInput?: string;
+}): ContextFrameSubject | null {
   try {
-    const intent = JSON.parse(intentJson) as IntentFrame;
+    const intent = JSON.parse(input.intentJson) as IntentFrame;
     const target = intent.targets.find((item) => item.name?.trim());
-    if (target) {
+    if (target && shouldUseIntentTargetAsContextSubject(intent, target, input.userInput)) {
       return {
         kind: mapTargetKind(target.type),
         type: target.type,
@@ -912,7 +924,7 @@ function resolveSubjectFromRun(intentJson: string, evidenceRefs: AgentEvidenceCa
     // Ignore malformed historical rows.
   }
 
-  const evidence = evidenceRefs.find((item) => item.anchorLabel?.trim());
+  const evidence = input.evidenceRefs.find((item) => item.anchorLabel?.trim());
   return evidence
     ? {
         kind: 'artifact',
@@ -921,6 +933,94 @@ function resolveSubjectFromRun(intentJson: string, evidenceRefs: AgentEvidenceCa
         name: evidence.anchorLabel,
       }
     : null;
+}
+
+function shouldUseIntentTargetAsContextSubject(
+  intent: IntentFrame,
+  target: NonNullable<IntentFrame['targets'][number]>,
+  userInput?: string,
+): boolean {
+  const name = target.name?.trim() ?? '';
+  if (!name) {
+    return false;
+  }
+  const inputText = userInput?.trim() ?? '';
+  if (intent.actionType === 'query' && mapTargetKind(intent.targetType) === 'record') {
+    if (!inputText.includes(name) && isLikelyBareRecordCollectionUserInput(inputText, intent.targetType)) {
+      return false;
+    }
+    if (isOpaqueIdentifier(name) && !inputText.includes(name)) {
+      return false;
+    }
+    if (!hasEntityNameSignal(name) && !inputText.includes(name)) {
+      return false;
+    }
+    if (isLikelyCollectionIntentTarget(intent, target, inputText)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isLikelyBareRecordCollectionUserInput(
+  userInput: string,
+  targetType: IntentFrame['targetType'],
+): boolean {
+  const compactInput = userInput.replace(/\s+/g, '');
+  if (!compactInput) {
+    return false;
+  }
+  const labelPattern = getRecordTargetLabelPattern(targetType);
+  if (!labelPattern) {
+    return false;
+  }
+  return new RegExp(`^(?:查询|查一下|查|查看|搜索|找一下|列出|看看|看下)(?:所有|全部|全量|全体)?(?:${labelPattern})(?:列表|清单|数据|信息|资料|记录)?$`).test(compactInput);
+}
+
+function getRecordTargetLabelPattern(targetType: IntentFrame['targetType']): string {
+  if (targetType === 'customer') {
+    return '客户|公司';
+  }
+  if (targetType === 'contact') {
+    return '联系人';
+  }
+  if (targetType === 'opportunity') {
+    return '商机|机会';
+  }
+  if (targetType === 'followup') {
+    return '拜访记录|跟进记录|回访记录|跟进|拜访|回访';
+  }
+  return '';
+}
+
+function isLikelyCollectionIntentTarget(
+  intent: IntentFrame,
+  target: NonNullable<IntentFrame['targets'][number]>,
+  userInput: string,
+): boolean {
+  const name = target.name?.trim() ?? '';
+  if (!userInput || !name) {
+    return false;
+  }
+  if (isOpaqueIdentifier(name)) {
+    return false;
+  }
+  const compactInput = userInput.replace(/\s+/g, '');
+  const compactName = name.replace(/\s+/g, '');
+  return intent.actionType === 'query'
+    && compactInput.includes(compactName)
+    && compactInput.length <= compactName.length + 8
+    && /^(?:查询|查一下|查|查看|搜索|找一下|打开|列出|看看|看下)/.test(compactInput);
+}
+
+function isOpaqueIdentifier(value: string): boolean {
+  return /^[a-f0-9]{16,}$/i.test(value)
+    || /^[A-Za-z0-9][A-Za-z0-9_-]{10,}$/.test(value);
+}
+
+function hasEntityNameSignal(value: string): boolean {
+  return /(公司|集团|有限|股份|银行|医院|学校|大学|研究院|事务所|协会|中心|工厂|厂)$/.test(value)
+    || /(公司|集团|有限|股份)/.test(value);
 }
 
 function mapTargetKind(type: IntentFrame['targetType']): ContextFrameSubject['kind'] {

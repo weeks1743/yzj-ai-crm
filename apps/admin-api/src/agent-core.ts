@@ -40,6 +40,14 @@ export interface GenericTargetRef {
   name?: string;
 }
 
+export interface TargetSanitizationTrace {
+  reasonCode: 'ignored_ungrounded_target';
+  reason: string;
+  source: 'intent_target';
+  ignoredTargetName?: string;
+  ignoredTargetId?: string;
+}
+
 export interface GenericIntentFrame {
   actionType: IntentFrame['actionType'];
   goal: string;
@@ -50,6 +58,7 @@ export interface GenericIntentFrame {
   confidence: number;
   source: IntentFrame['source'];
   fallbackReason?: string;
+  targetSanitization?: TargetSanitizationTrace;
   legacyIntentFrame: IntentFrame;
 }
 
@@ -85,6 +94,8 @@ export interface ReferenceResolution {
   subject?: ContextFrameSubject;
   sourceRunId?: string;
   evidenceRefs: EvidenceRef[];
+  usageMode?: 'used' | 'candidate_only' | 'skipped_collection_query' | 'none';
+  skipReasonCode?: string;
 }
 
 export interface SemanticResolutionCandidate extends ContextReferenceCandidate {
@@ -103,9 +114,12 @@ export interface SemanticReferenceResolution {
   margin: number;
   embeddingProvider: string;
   targetWasOverridden: boolean;
+  usageMode?: ReferenceResolution['usageMode'];
+  skipReasonCode?: string;
 }
 
 export interface RecordToolCapability {
+  objectLabels?: string[];
   subjectBinding?: {
     acceptedSubjectTypes?: string[];
     required?: boolean;

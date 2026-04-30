@@ -26,6 +26,7 @@ interface HarnessMock {
   validationErrors?: string[];
   companyResearchFailure?: boolean;
   artifactEvidence?: AgentEvidenceCard[];
+  intentFrame?: IntentFrame;
 }
 
 interface HarnessTurn {
@@ -52,12 +53,23 @@ interface AgentScenario {
   title: string;
   turns: HarnessTurn[];
   assertRegistry?: boolean;
+  qualityGate?: boolean;
 }
 
 interface LoggedCall {
   tool: string;
   objectKey?: ShadowObjectKey;
   input?: unknown;
+}
+
+interface TraceQualityReport {
+  scenarioId: string;
+  turnIndex: number;
+  query: string;
+  bugProbability: number;
+  riskFactors: string[];
+  hardFailures: string[];
+  recommendedFixArea: Array<'intent' | 'context' | 'tool input' | 'field extraction' | 'memory' | 'debug'>;
 }
 
 const CRM_OBJECT_KEYS: ShadowObjectKey[] = ['customer', 'contact', 'opportunity', 'followup'];
@@ -71,6 +83,7 @@ const recordObjectTitles: Record<ShadowObjectKey, string> = {
 class AgentScenarioHarness {
   readonly repository = new AgentRunRepository(createInMemoryDatabase());
   readonly calls: LoggedCall[] = [];
+  readonly qualityReports: TraceQualityReport[] = [];
   readonly service: AgentService;
   readonly registryCodes: string[];
   activeMock: HarnessMock = {};
@@ -81,7 +94,9 @@ class AgentScenarioHarness {
       config,
       repository: this.repository,
       intentFrameService: {
-        createIntentFrame: async (request: AgentChatRequest, focusedName?: string | null) => inferIntentFrame(request.query, focusedName),
+        createIntentFrame: async (request: AgentChatRequest, focusedName?: string | null) => (
+          this.activeMock.intentFrame ?? inferIntentFrame(request.query, focusedName)
+        ),
       } as any,
       shadowMetadataService: {
         executeSearch: async (objectKey: ShadowObjectKey, input: unknown) => {
@@ -226,6 +241,9 @@ async function runAgentScenarios(scenarios: AgentScenario[]): Promise<void> {
         resume,
       });
       assertTurnExpectation(scenario, turnIndex, turn, response, harness, beforeCallCount);
+      if (scenario.qualityGate) {
+        assertTraceQuality(scenario, turnIndex, turn, response, harness, beforeCallCount);
+      }
       previous = response;
     }
   }
@@ -270,6 +288,204 @@ function assertTurnExpectation(
     assert.equal(calls.some((item) => item.tool.startsWith(turn.expect.noToolPrefix!)), false, `${label}: should not call ${turn.expect.noToolPrefix}`);
   }
   turn.expect.assert?.(response, harness);
+}
+
+function assertTraceQuality(
+  scenario: AgentScenario,
+  turnIndex: number,
+  turn: HarnessTurn,
+  response: AgentChatResponse,
+  harness: AgentScenarioHarness,
+  beforeCallCount: number,
+): void {
+  const report = inspectTraceQuality(scenario, turnIndex, turn, response, harness, beforeCallCount);
+  harness.qualityReports.push(report);
+  assert.deepEqual(report.hardFailures, [], `${scenario.id} turn ${turnIndex + 1}: QA hard failures\n${JSON.stringify(report, null, 2)}`);
+  assert.ok(report.bugProbability < 0.15, `${scenario.id} turn ${turnIndex + 1}: QA risk too high\n${JSON.stringify(report, null, 2)}`);
+}
+
+function inspectTraceQuality(
+  scenario: AgentScenario,
+  turnIndex: number,
+  turn: HarnessTurn,
+  response: AgentChatResponse,
+  harness: AgentScenarioHarness,
+  beforeCallCount: number,
+): TraceQualityReport {
+  const trace = response.message.extraInfo.agentTrace;
+  const selectedToolCode = trace.selectedTool?.toolCode ?? '';
+  const selectedInput = (trace.selectedTool?.input ?? {}) as Record<string, any>;
+  const selectedParams = readEffectiveSelectedParams(trace);
+  const hardFailures: string[] = [];
+  const riskFactors: string[] = [];
+  const recommendedFixArea = new Set<TraceQualityReport['recommendedFixArea'][number]>();
+  const addHard = (area: TraceQualityReport['recommendedFixArea'][number], reason: string): void => {
+    hardFailures.push(reason);
+    recommendedFixArea.add(area);
+  };
+  const addRisk = (area: TraceQualityReport['recommendedFixArea'][number], reason: string): void => {
+    riskFactors.push(reason);
+    recommendedFixArea.add(area);
+  };
+
+  if (selectedToolCode.includes('.preview_') && hasUserFieldValueSignal(turn.query) && Object.keys(selectedParams).length === 0) {
+    addHard('field extraction', '写入意图包含字段和值，但 preview params 为空。');
+  }
+
+  if (trace.policyDecisions?.some((policy) => policy.policyCode === 'record.preview_empty_payload_guard') && hasUserFieldValueSignal(turn.query)) {
+    addHard('field extraction', '用户原文有可写字段值，却触发空 payload 守卫。');
+  }
+
+  const confirmationInput = trace.pendingConfirmation?.requestInput as Record<string, any> | undefined;
+  if (trace.pendingConfirmation && selectedToolCode.includes('.preview_') && Object.keys(readParamsFromInput(confirmationInput ?? {})).length === 0) {
+    addHard('tool input', 'readyToSend 写入确认缺少实际业务 params。');
+  }
+
+  const objectKey = parseToolObjectKey(selectedToolCode);
+  if (objectKey && selectedToolCode.endsWith('.search') && isHarnessBareCollectionQuery(turn.query, objectKey)) {
+    if (trace.resolvedContext?.usedContext) {
+      addHard('context', '裸集合查询错误使用历史上下文。');
+    }
+    if (trace.resolvedContext?.usageMode && trace.resolvedContext.usageMode !== 'skipped_collection_query') {
+      addRisk('debug', '裸集合查询未标记 skipped_collection_query，调试区难以看出跳过原因。');
+    }
+    if (harness.repository.getRunDetail(response.executionState.runId)?.contextSubject) {
+      addHard('memory', '裸集合查询把当前 run 沉淀成了新的上下文主体。');
+    }
+  }
+
+  const currentCalls = harness.calls.slice(beforeCallCount);
+  for (const call of currentCalls.filter((item) => item.tool.endsWith('.search'))) {
+    const callObjectKey = call.objectKey;
+    if (!callObjectKey || !isHarnessBareCollectionQuery(turn.query, callObjectKey)) {
+      continue;
+    }
+    const intentTarget = readFirstIntentTargetName(trace.intentFrame);
+    if (intentTarget && !isGroundedHarnessTarget(turn.query, callObjectKey, intentTarget)) {
+      if (searchCallContainsValue(call, intentTarget)) {
+        addHard('tool input', `未落在用户原文中的 LLM target 进入搜索过滤：${intentTarget}`);
+      } else if (!selectedInput.agentControl?.targetSanitization) {
+        addRisk('debug', `未落地 LLM target 未进入过滤，但调试 trace 缺少 targetSanitization：${intentTarget}`);
+      }
+    }
+  }
+
+  if (selectedToolCode.includes('.preview_') && response.executionState.status === 'waiting_confirmation') {
+    for (const [paramKey, value] of Object.entries(selectedParams)) {
+      if (!paramKey.endsWith('_form_inst_id')) {
+        continue;
+      }
+      const text = stringifyQaValue(value);
+      if (/[\u4e00-\u9fa5]/.test(text) && !/form-inst|customer-|contact-|opportunity-|followup-/.test(text)) {
+        addHard('tool input', `关系字段 ${paramKey} 被普通文本值直接写入：${text}`);
+      }
+    }
+  }
+
+  const bugProbability = hardFailures.length
+    ? 0.95
+    : Math.min(0.14, riskFactors.length * 0.05);
+  return {
+    scenarioId: scenario.id,
+    turnIndex,
+    query: turn.query,
+    bugProbability,
+    riskFactors,
+    hardFailures,
+    recommendedFixArea: Array.from(recommendedFixArea),
+  };
+}
+
+function readParamsFromInput(input: Record<string, any>): Record<string, unknown> {
+  const params = input.params;
+  return params && typeof params === 'object' && !Array.isArray(params) ? params : {};
+}
+
+function readEffectiveSelectedParams(trace: AgentChatResponse['message']['extraInfo']['agentTrace']): Record<string, unknown> {
+  const selectedInput = (trace.selectedTool?.input ?? {}) as Record<string, any>;
+  const selectedParams = readParamsFromInput(selectedInput);
+  if (Object.keys(selectedParams).length) {
+    return selectedParams;
+  }
+  const mergedInput = (trace.continuationResolution?.mergedInput ?? {}) as Record<string, any>;
+  const mergedParams = readParamsFromInput(mergedInput);
+  if (Object.keys(mergedParams).length) {
+    return mergedParams;
+  }
+  const confirmationInput = (trace.pendingConfirmation?.requestInput ?? {}) as Record<string, any>;
+  return readParamsFromInput(confirmationInput);
+}
+
+function hasUserFieldValueSignal(query: string): boolean {
+  return /(?:更新|修改|变更|调整|设置|改|补|填|写|关联|绑定|选择).{0,24}(?:为|是|=|：|:|，|,).{1,}/.test(query)
+    || /(?:备注|地址|职务|手机|电话|邮箱|Email|微信|客户状态|客户类型|销售阶段|预算|预计成交|跟进方式|跟进记录).{0,12}(?:为|是|=|：|:|，|,).{1,}/i.test(query);
+}
+
+function parseToolObjectKey(toolCode: string): ShadowObjectKey | null {
+  const matched = toolCode.match(/^record\.(customer|contact|opportunity|followup)\./);
+  return matched ? matched[1] as ShadowObjectKey : null;
+}
+
+function isHarnessBareCollectionQuery(query: string, objectKey: ShadowObjectKey): boolean {
+  const trimmed = query.trim();
+  if (!/^(?:查询|查一下|查看|搜索|找一下|打开|看看|看下|先查|帮我查|帮我搜|查)/.test(trimmed)) {
+    return false;
+  }
+  if (/(这个|该|当前|刚才|上一|上个|前面|上面|的联系人|的商机|的跟进|的拜访)/.test(trimmed)) {
+    return false;
+  }
+  const labels = objectKey === 'customer'
+    ? '(?:客户|公司)'
+    : objectKey === 'contact'
+      ? '联系人'
+      : objectKey === 'opportunity'
+        ? '(?:商机|机会|项目|单子)'
+        : '(?:跟进记录|拜访记录|回访记录|跟进|拜访|回访)';
+  return new RegExp(`^(?:查询|查一下|查看|搜索|找一下|打开|看看|看下|先查|帮我查|帮我搜|查)\\s*${labels}\\s*$`).test(trimmed);
+}
+
+function readFirstIntentTargetName(intentFrame: IntentFrame): string {
+  const target = intentFrame.targets?.[0];
+  const name = typeof target?.name === 'string' ? target.name.trim() : '';
+  const id = typeof target?.id === 'string' ? target.id.trim() : '';
+  return name || id;
+}
+
+function isGroundedHarnessTarget(query: string, objectKey: ShadowObjectKey, target: string): boolean {
+  if (!target.trim()) {
+    return false;
+  }
+  if (query.includes(target)) {
+    return true;
+  }
+  const labels = objectKey === 'customer'
+    ? ['customer', '客户', '公司', '客户名称']
+    : objectKey === 'contact'
+      ? ['contact', '联系人', '联系人姓名']
+      : objectKey === 'opportunity'
+        ? ['opportunity', '商机', '机会', '项目', '单子', '商机名称']
+        : ['followup', '跟进记录', '拜访记录', '回访记录', '跟进', '拜访', '回访'];
+  return labels.includes(target);
+}
+
+function searchCallContainsValue(call: LoggedCall, value: string): boolean {
+  const filters = Array.isArray((call.input as { filters?: unknown[] } | undefined)?.filters)
+    ? (call.input as { filters: Array<{ value?: unknown }> }).filters
+    : [];
+  return filters.some((filter) => stringifyQaValue(filter.value).includes(value));
+}
+
+function stringifyQaValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return JSON.stringify(value);
 }
 
 const fullCustomerInput = [
@@ -334,6 +550,11 @@ const harnessRecordFields: Record<ShadowObjectKey, ShadowStandardizedField[]> = 
   contact: [
     createHarnessField({ fieldCode: '_S_NAME', label: '联系人姓名', widgetType: 'textWidget', writeParameterKey: 'contact_name' }),
     createHarnessField({ fieldCode: 'Nu_0', label: '手机', widgetType: 'numberWidget', writeParameterKey: 'mobile_phone' }),
+    createHarnessField({ fieldCode: 'Te_1', label: '职务', widgetType: 'textWidget', writeParameterKey: 'Te_1' }),
+    createHarnessField({ fieldCode: 'Ta_0', label: '地址', widgetType: 'textAreaWidget', writeParameterKey: 'Ta_0' }),
+    createHarnessField({ fieldCode: 'Ta_1', label: '备注', widgetType: 'textAreaWidget', writeParameterKey: 'Ta_1' }),
+    createHarnessField({ fieldCode: 'Te_3', label: 'Email', widgetType: 'textWidget', writeParameterKey: 'Te_3' }),
+    createHarnessField({ fieldCode: 'Te_4', label: '微信号', widgetType: 'textWidget', writeParameterKey: 'Te_4' }),
     createHarnessField({ fieldCode: '_S_DISABLE', label: '启用状态', widgetType: 'switchWidget', writeParameterKey: 'enabled_state', options: [{ title: '启用', key: '1', value: '启用' }] }),
     createHarnessField({
       fieldCode: 'Bd_0',
@@ -346,6 +567,7 @@ const harnessRecordFields: Record<ShadowObjectKey, ShadowStandardizedField[]> = 
     createHarnessField({ fieldCode: 'Pw_0', label: '省', widgetType: 'publicOptBoxWidget', writeParameterKey: 'province', semanticSlot: 'province', options: [{ title: '安徽', dicId: 'ah' }, { title: '江苏', dicId: 'js' }] }),
     createHarnessField({ fieldCode: 'Pw_1', label: '市', widgetType: 'publicOptBoxWidget', writeParameterKey: 'city', semanticSlot: 'city', options: [{ title: '苏州', dicId: 'sz' }] }),
     createHarnessField({ fieldCode: 'Nu_1', label: '办公电话', widgetType: 'numberWidget', writeParameterKey: 'office_phone' }),
+    createHarnessField({ fieldCode: 'De_0', label: '说明文字', widgetType: 'textWidget', writeParameterKey: 'De_0', writePolicy: 'read_only', readOnly: true, edit: false }),
   ],
   opportunity: [
     createHarnessField({ fieldCode: 'Te_0', label: '商机名称', widgetType: 'textWidget', writeParameterKey: 'opportunity_name' }),
@@ -1431,6 +1653,584 @@ test('Agent scenario harness runs 30 Suzhou sales habit scenarios', async () => 
   await runAgentScenarios(suzhouSalesHabitScenarios);
 });
 
+const collectionContextIsolationScenarios: AgentScenario[] = [
+  {
+    id: '71b-collection-customer-ignores-ungrounded-llm-target',
+    title: '集合查询：LLM target 被旧联系人 ID 污染时不进入客户搜索',
+    turns: [
+      { query: '查询联系人 陈晨', mock: { searchRecords: [recordFixture('contact', '69f16bbd21bf2b00014fbc6f', '陈晨')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      {
+        query: '查询客户',
+        mock: { intentFrame: pollutedCollectionIntent('customer', '69f16bbd21bf2b00014fbc6f') },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          assert: (response, harness) => {
+            const input = response.message.extraInfo.agentTrace.selectedTool?.input as { filters?: unknown[]; agentControl?: { targetSanitization?: { reasonCode?: string } } } | undefined;
+            assert.deepEqual(input?.filters, []);
+            assert.equal(input?.agentControl?.targetSanitization?.reasonCode, 'ignored_ungrounded_target');
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usageMode, 'skipped_collection_query');
+            assertNoSearchFilterValue(harness, 'record.customer.search', '69f16bbd21bf2b00014fbc6f');
+            const candidates = harness.repository.findContextCandidates(`harness-71b-collection-customer-ignores-ungrounded-llm-target`);
+            assert.equal(candidates.some((candidate) => candidate.sourceRunId === response.executionState.runId), false);
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '71-collection-contact-does-not-bind-current-contact',
+    title: '集合查询：当前联系人后查询联系人列表不带旧联系人过滤',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      {
+        query: '查询联系人',
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.contact.search',
+          assert: (response, harness) => {
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false);
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usageMode, 'skipped_collection_query');
+            assertNoSearchFilterValue(harness, 'record.contact.search', 'contact-lilingling-001');
+            assertNoSearchFilterValue(harness, 'record.contact.search', '李玲玲');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '72-collection-customer-does-not-bind-current-customer',
+    title: '集合查询：当前客户后查询客户列表不带旧客户过滤',
+    turns: [
+      { query: '查询客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-c1-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      {
+        query: '查询客户',
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          assert: (response, harness) => {
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false);
+            assertNoSearchFilterValue(harness, 'record.customer.search', 'customer-c1-001');
+            assertNoSearchFilterValue(harness, 'record.customer.search', '苏州恒达机电有限公司');
+          },
+        },
+      },
+      {
+        query: '查询所有客户',
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          assert: (response, harness) => {
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false);
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usageMode, 'skipped_collection_query');
+            assertNoSearchFilterValue(harness, 'record.customer.search', 'customer-c1-001');
+            assertNoSearchFilterValue(harness, 'record.customer.search', '苏州恒达机电有限公司');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '73-collection-opportunity-does-not-bind-current-opportunity',
+    title: '集合查询：当前商机后查询商机列表不带旧商机过滤',
+    turns: [
+      { query: '查询商机 苏州MES升级项目', mock: { searchRecords: [recordFixture('opportunity', 'opportunity-c1-001', '苏州MES升级项目')] }, expect: { status: 'completed', selectedTool: 'record.opportunity.search' } },
+      {
+        query: '查询商机',
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.opportunity.search',
+          assert: (response, harness) => {
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false);
+            assertNoSearchFilterValue(harness, 'record.opportunity.search', 'opportunity-c1-001');
+            assertNoSearchFilterValue(harness, 'record.opportunity.search', '苏州MES升级项目');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '74-collection-followup-does-not-bind-current-followup',
+    title: '集合查询：当前拜访记录后查询拜访记录列表不带旧记录过滤',
+    turns: [
+      { query: '查询拜访记录 上次回访报价', mock: { searchRecords: [recordFixture('followup', 'followup-c1-001', '上次回访报价')] }, expect: { status: 'completed', selectedTool: 'record.followup.search' } },
+      {
+        query: '查询拜访记录',
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.followup.search',
+          assert: (response, harness) => {
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false);
+            assertNoSearchFilterValue(harness, 'record.followup.search', 'followup-c1-001');
+            assertNoSearchFilterValue(harness, 'record.followup.search', '上次回访报价');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '75-subject-scoped-contact-search-keeps-relation-binding',
+    title: '关系查询：查询这个客户的联系人继续绑定当前客户',
+    turns: [
+      { query: '查询客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-c1-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      {
+        query: '查询这个客户的联系人',
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.contact.search',
+          assert: (response, harness) => {
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, true);
+            assertSearchFilterValue(harness, 'record.contact.search', 'linked_customer_form_inst_id', 'customer-c1-001');
+            const sources = response.message.extraInfo.agentTrace.selectedTool?.input?.agentControl as { searchExtraction?: { filterSources?: Array<{ source?: string }> } } | undefined;
+            assert.equal(sources?.searchExtraction?.filterSources?.some((item) => item.source === 'relation_context'), true);
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '76-current-contact-update-still-binds-current-contact',
+    title: '指代更新：更新这个联系人仍使用当前联系人',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      {
+        query: '更新这个联系人手机号为13612952099',
+        mock: { previewReady: true },
+        expect: {
+          status: 'waiting_confirmation',
+          selectedTool: 'record.contact.preview_update',
+          assert: (_response, harness) => {
+            const call = harness.calls.findLast((item) => item.tool === 'record.contact.preview_update');
+            assert.equal((call?.input as ShadowPreviewUpsertInput | undefined)?.formInstId, 'contact-lilingling-001');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '77-customer-name-search-after-contact-context-is-not-polluted',
+    title: '名称查询：联系人上下文后查询安徽客户不被旧联系人污染',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      {
+        query: '查询安徽的客户',
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          assert: (response, harness) => {
+            assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false);
+            assertNoSearchFilterValue(harness, 'record.customer.search', 'contact-lilingling-001');
+            assertSearchFilterContainsValue(harness, 'record.customer.search', '安徽');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '78-collection-all-objects-ignore-polluted-llm-target',
+    title: '集合查询：四类对象均忽略未落地 LLM target',
+    turns: [
+      {
+        query: '查询联系人',
+        mock: { intentFrame: pollutedCollectionIntent('contact', 'stale-contact-id-001') },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.contact.search',
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assertNoSearchFilterValue(harness, 'record.contact.search', 'stale-contact-id-001');
+          },
+        },
+      },
+      {
+        query: '查询商机',
+        mock: { intentFrame: pollutedCollectionIntent('opportunity', 'stale-opportunity-id-001') },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.opportunity.search',
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assertNoSearchFilterValue(harness, 'record.opportunity.search', 'stale-opportunity-id-001');
+          },
+        },
+      },
+      {
+        query: '查询拜访记录',
+        mock: { intentFrame: pollutedCollectionIntent('followup', 'stale-followup-id-001') },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.followup.search',
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assertNoSearchFilterValue(harness, 'record.followup.search', 'stale-followup-id-001');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '79-collection-all-objects-ignore-polluted-llm-record-name',
+    title: '集合查询：四类对象均忽略未落在用户原文中的旧记录名 target',
+    turns: [
+      {
+        query: '查询客户',
+        mock: { intentFrame: pollutedCollectionIntent('customer', '苏州恒达机电有限公司') },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assert.equal((response.message.extraInfo.agentTrace.selectedTool?.input?.agentControl as { targetSanitization?: { reasonCode?: string } } | undefined)?.targetSanitization?.reasonCode, 'ignored_ungrounded_target');
+            assertNoSearchFilterValue(harness, 'record.customer.search', '苏州恒达机电有限公司');
+          },
+        },
+      },
+      {
+        query: '查询联系人',
+        mock: { intentFrame: pollutedCollectionIntent('contact', '李玲玲') },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.contact.search',
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assert.equal((response.message.extraInfo.agentTrace.selectedTool?.input?.agentControl as { targetSanitization?: { reasonCode?: string } } | undefined)?.targetSanitization?.reasonCode, 'ignored_ungrounded_target');
+            assertNoSearchFilterValue(harness, 'record.contact.search', '李玲玲');
+          },
+        },
+      },
+      {
+        query: '查询商机',
+        mock: { intentFrame: pollutedCollectionIntent('opportunity', '苏州ERP升级项目') },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.opportunity.search',
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assert.equal((response.message.extraInfo.agentTrace.selectedTool?.input?.agentControl as { targetSanitization?: { reasonCode?: string } } | undefined)?.targetSanitization?.reasonCode, 'ignored_ungrounded_target');
+            assertNoSearchFilterValue(harness, 'record.opportunity.search', '苏州ERP升级项目');
+          },
+        },
+      },
+      {
+        query: '查询拜访记录',
+        mock: { intentFrame: pollutedCollectionIntent('followup', '报价后回访记录') },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.followup.search',
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assert.equal((response.message.extraInfo.agentTrace.selectedTool?.input?.agentControl as { targetSanitization?: { reasonCode?: string } } | undefined)?.targetSanitization?.reasonCode, 'ignored_ungrounded_target');
+            assertNoSearchFilterValue(harness, 'record.followup.search', '报价后回访记录');
+          },
+        },
+      },
+    ],
+  },
+];
+
+test('Agent scenario harness keeps collection queries isolated from current record context', async () => {
+  await runAgentScenarios(collectionContextIsolationScenarios);
+});
+
+const qaTraceReplayScenarios: AgentScenario[] = [
+  {
+    id: '81-qa-trace-f66b5851-contact-remark-comma',
+    title: 'Trace 回放：联系人备注用逗号口语更新',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '更新备注，喜欢喝茶', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update', assert: assertLatestPreviewParam('record.contact.preview_update', 'Ta_1', '喜欢喝茶') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+    ],
+  },
+  {
+    id: '82-qa-trace-f66b5851-contact-remark-colon',
+    title: 'Trace 回放：联系人备注冒号更新',
+    turns: [
+      { query: '查询联系人 陈燕', mock: { searchRecords: [recordFixture('contact', 'contact-chenyan-001', '陈燕')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '备注：喜欢喝茶', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update', assert: assertLatestPreviewParam('record.contact.preview_update', 'Ta_1', '喜欢喝茶') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+    ],
+  },
+  {
+    id: '83-qa-trace-279a3af1-customer-collection-polluted-id',
+    title: 'Trace 回放：查询客户时 LLM target 被旧 ID 污染',
+    turns: [
+      { query: '查询联系人 陈晨', mock: { searchRecords: [recordFixture('contact', '69f16bbd21bf2b00014fbc6f', '陈晨')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '查询客户', mock: { intentFrame: pollutedCollectionIntent('customer', '69f16bbd21bf2b00014fbc6f') }, expect: { status: 'completed', selectedTool: 'record.customer.search', assert: assertCollectionQueryClean('record.customer.search', '69f16bbd21bf2b00014fbc6f') } },
+      { query: '查询客户 安徽艳阳电气', mock: { intentFrame: pollutedCollectionIntent('customer', '69f16bbd21bf2b00014fbc6f') }, expect: { status: 'completed', selectedTool: 'record.customer.search', assert: (_response, harness) => assertSearchFilterContainsValue(harness, 'record.customer.search', '安徽艳阳电气') } },
+    ],
+  },
+  {
+    id: '84-qa-trace-2ed9c7bf-contact-collection-after-contact',
+    title: 'Trace 回放：查询联系人列表不承接当前联系人',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '查询联系人', expect: { status: 'completed', selectedTool: 'record.contact.search', assert: assertCollectionQueryClean('record.contact.search', '李玲玲') } },
+      { query: '查询联系人 陈燕', expect: { status: 'completed', selectedTool: 'record.contact.search', assert: (_response, harness) => assertSearchFilterContainsValue(harness, 'record.contact.search', '陈燕') } },
+      { query: '查询联系人', expect: { status: 'completed', selectedTool: 'record.contact.search', assert: assertCollectionQueryClean('record.contact.search', '陈燕') } },
+    ],
+  },
+  {
+    id: '85-qa-trace-anhui-relation-not-province',
+    title: 'Trace 回放：联系人关联客户不写成省份',
+    turns: [
+      { query: '查联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '关联安徽的客户', mock: { searchRecords: [] }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', pendingInteractionKind: 'input_required' } },
+      { query: '将这个联系人的客户信息更新为安徽艳阳电气', mock: { searchRecords: [recordFixture('customer', 'customer-ah-001', '安徽艳阳电气')] }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', pendingInteractionKind: 'input_required', assert: assertNoPreviewParam('record.contact.preview_update', 'province') } },
+      { query: '查询安徽的客户', expect: { status: 'completed', selectedTool: 'record.customer.search', assert: (_response, harness) => assertSearchFilterContainsValue(harness, 'record.customer.search', '安徽') } },
+    ],
+  },
+  {
+    id: '86-qa-trace-remark-update-then-contact-list',
+    title: 'Trace 回放：更新联系人备注后再查联系人列表',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '更新备注，喜欢喝茶', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+      { query: '查询联系人', expect: { status: 'completed', selectedTool: 'record.contact.search', assert: assertCollectionQueryClean('record.contact.search', 'contact-lilingling-001') } },
+    ],
+  },
+  {
+    id: '87-qa-trace-customer-update-then-customer-list',
+    title: 'Trace 回放：更新客户后再查客户列表',
+    turns: [
+      { query: '查询客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-a-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '客户状态改为成交', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update', assert: assertLatestPreviewParam('record.customer.preview_update', 'customer_status', 'won') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+      { query: '查询客户', expect: { status: 'completed', selectedTool: 'record.customer.search', assert: assertCollectionQueryClean('record.customer.search', '苏州恒达机电有限公司') } },
+    ],
+  },
+  {
+    id: '88-qa-trace-followup-update-no-empty-payload',
+    title: 'Trace 回放：跟进记录备注式更新不触发空 payload',
+    turns: [
+      { query: '查询拜访记录 上次回访报价', mock: { searchRecords: [recordFixture('followup', 'followup-a-001', '上次回访报价')] }, expect: { status: 'completed', selectedTool: 'record.followup.search' } },
+      { query: '跟进记录：客户让下周带方案', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_update', assert: assertLatestPreviewParam('record.followup.preview_update', 'followup_record', '客户让下周带方案') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.followup.commit_update' } },
+    ],
+  },
+];
+
+const qaMetadataFieldScenarios: AgentScenario[] = [
+  qaUpdateParamScenario('89-qa-meta-contact-remark-comma', '元数据字段：联系人备注逗号更新', 'contact', '查询联系人 李玲玲', recordFixture('contact', 'contact-meta-001', '李玲玲'), '更新备注，喜欢喝茶', 'record.contact.preview_update', 'Ta_1', '喜欢喝茶'),
+  qaUpdateParamScenario('90-qa-meta-contact-remark-colon', '元数据字段：联系人备注冒号更新', 'contact', '查询联系人 陈燕', recordFixture('contact', 'contact-meta-002', '陈燕'), '备注：喜欢喝茶', 'record.contact.preview_update', 'Ta_1', '喜欢喝茶'),
+  qaUpdateParamScenario('91-qa-meta-contact-address', '元数据字段：联系人地址更新', 'contact', '查询联系人 王工', recordFixture('contact', 'contact-meta-003', '王工'), '地址：苏州工业园区星湖街', 'record.contact.preview_update', 'Ta_0', '苏州工业园区星湖街'),
+  qaUpdateParamScenario('92-qa-meta-contact-title', '元数据字段：联系人职务更新', 'contact', '查询联系人 周敏', recordFixture('contact', 'contact-meta-004', '周敏'), '职务改为信息化负责人', 'record.contact.preview_update', 'Te_1', '信息化负责人'),
+  qaUpdateParamScenario('93-qa-meta-contact-email', '元数据字段：联系人 Email 更新', 'contact', '查询联系人 赵强', recordFixture('contact', 'contact-meta-005', '赵强'), 'Email：zhaoqiang@example.com', 'record.contact.preview_update', 'Te_3', 'zhaoqiang@example.com'),
+  qaUpdateParamScenario('94-qa-meta-contact-wechat', '元数据字段：联系人微信号更新', 'contact', '查询联系人 陆晨', recordFixture('contact', 'contact-meta-006', '陆晨'), '微信号：wx-luchen', 'record.contact.preview_update', 'Te_4', 'wx-luchen'),
+  qaUpdateParamScenario('95-qa-meta-contact-mobile', '元数据字段：联系人手机更新', 'contact', '查询联系人 沈洁', recordFixture('contact', 'contact-meta-007', '沈洁'), '手机号改为13612952088', 'record.contact.preview_update', 'mobile_phone', 13612952088),
+  qaUpdateParamScenario('96-qa-meta-contact-enabled', '元数据字段：联系人启用状态更新', 'contact', '查询联系人 吴昊', recordFixture('contact', 'contact-meta-008', '吴昊'), '启用状态：启用', 'record.contact.preview_update', 'enabled_state', '1'),
+  qaUpdateParamScenario('97-qa-meta-customer-status', '元数据字段：客户状态更新', 'customer', '查询客户 苏州恒达机电有限公司', recordFixture('customer', 'customer-meta-001', '苏州恒达机电有限公司'), '客户状态改为成交', 'record.customer.preview_update', 'customer_status', 'won'),
+  qaUpdateParamScenario('98-qa-meta-customer-type', '元数据字段：客户类型更新', 'customer', '查询客户 苏州明纬自动化有限公司', recordFixture('customer', 'customer-meta-002', '苏州明纬自动化有限公司'), '客户类型改为普通客户', 'record.customer.preview_update', 'customer_type', 'normal'),
+  qaUpdateParamScenario('99-qa-meta-customer-province', '元数据字段：客户省份更新', 'customer', '查询客户 苏州协同机械有限公司', recordFixture('customer', 'customer-meta-003', '苏州协同机械有限公司'), '省：安徽', 'record.customer.preview_update', 'province', '安徽'),
+  qaUpdateParamScenario('100-qa-meta-opportunity-budget', '元数据字段：商机预算更新', 'opportunity', '查询商机 苏州ERP升级项目', recordFixture('opportunity', 'opportunity-meta-001', '苏州ERP升级项目'), '商机预算（元）：28万', 'record.opportunity.preview_update', 'opportunity_budget', 280000),
+  qaUpdateParamScenario('101-qa-meta-opportunity-stage', '元数据字段：商机阶段更新', 'opportunity', '查询商机 昆山WMS项目', recordFixture('opportunity', 'opportunity-meta-002', '昆山WMS项目'), '销售阶段改为方案报价', 'record.opportunity.preview_update', 'sales_stage', 'quote'),
+  qaUpdateParamScenario('102-qa-meta-opportunity-date', '元数据字段：商机预计成交时间更新', 'opportunity', '查询商机 太仓MES项目', recordFixture('opportunity', 'opportunity-meta-003', '太仓MES项目'), '预计成交时间：2026-07-31', 'record.opportunity.preview_update', 'expected_close_date', '2026-07-31'),
+  qaUpdateParamScenario('103-qa-meta-followup-method', '元数据字段：跟进方式更新', 'followup', '查询拜访记录 昨天拜访', recordFixture('followup', 'followup-meta-001', '昨天拜访'), '跟进方式改为微信', 'record.followup.preview_update', 'followup_method', 'wechat'),
+  qaUpdateParamScenario('104-qa-meta-followup-record', '元数据字段：跟进记录更新', 'followup', '查询拜访记录 报价回访', recordFixture('followup', 'followup-meta-002', '报价回访'), '跟进记录：客户让下周带方案', 'record.followup.preview_update', 'followup_record', '客户让下周带方案'),
+];
+
+const qaContextMemoryScenarios: AgentScenario[] = [
+  {
+    id: '105-qa-memory-customer-a-b-switch',
+    title: '记忆隔离：A 客户确认后切 B 客户再更新',
+    turns: [
+      { query: '查客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-a-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '客户状态改为意向', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+      { query: '查客户 苏州明纬自动化有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-b-001', '苏州明纬自动化有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '把这个客户状态改成成交', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update', assert: assertLatestPreviewFormInstId('record.customer.preview_update', 'customer-b-001') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+    ],
+  },
+  {
+    id: '106-qa-memory-contact-update-current-after-list',
+    title: '记忆隔离：联系人详情后更新当前联系人',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-a-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '查询联系人', expect: { status: 'completed', selectedTool: 'record.contact.search', assert: assertCollectionQueryClean('record.contact.search', '李玲玲') } },
+      { query: '查询联系人 陈燕', mock: { searchRecords: [recordFixture('contact', 'contact-b-001', '陈燕')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '更新备注，下午三点后联系', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update', assert: assertLatestPreviewFormInstId('record.contact.preview_update', 'contact-b-001') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+    ],
+  },
+  {
+    id: '107-qa-memory-customer-relation-search-keeps-parent',
+    title: '记忆隔离：关系查询继续绑定当前客户',
+    turns: [
+      { query: '查询客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-rel-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '查询这个客户的联系人', expect: { status: 'completed', selectedTool: 'record.contact.search', assert: (_response, harness) => assertSearchFilterValue(harness, 'record.contact.search', 'linked_customer_form_inst_id', 'customer-rel-001') } },
+      { query: '查询联系人', expect: { status: 'completed', selectedTool: 'record.contact.search', assert: assertCollectionQueryClean('record.contact.search', 'customer-rel-001') } },
+    ],
+  },
+  {
+    id: '108-qa-memory-opportunity-list-after-opportunity',
+    title: '记忆隔离：当前商机后查商机列表',
+    turns: [
+      { query: '查询商机 苏州ERP升级项目', mock: { searchRecords: [recordFixture('opportunity', 'opportunity-a-001', '苏州ERP升级项目')] }, expect: { status: 'completed', selectedTool: 'record.opportunity.search' } },
+      { query: '销售阶段改为方案报价', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_update' } },
+      { query: '查询商机', expect: { status: 'completed', selectedTool: 'record.opportunity.search', assert: assertCollectionQueryClean('record.opportunity.search', '苏州ERP升级项目') } },
+    ],
+  },
+  {
+    id: '109-qa-memory-followup-list-after-followup',
+    title: '记忆隔离：当前拜访记录后查拜访记录列表',
+    turns: [
+      { query: '查询拜访记录 报价后回访', mock: { searchRecords: [recordFixture('followup', 'followup-a-001', '报价后回访')] }, expect: { status: 'completed', selectedTool: 'record.followup.search' } },
+      { query: '跟进方式改为微信', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.followup.commit_update' } },
+      { query: '查询拜访记录', expect: { status: 'completed', selectedTool: 'record.followup.search', assert: assertCollectionQueryClean('record.followup.search', '报价后回访') } },
+    ],
+  },
+  {
+    id: '110-qa-memory-contact-context-customer-explicit-search',
+    title: '记忆隔离：联系人上下文后显式查安徽客户',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-a-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '更新备注，喜欢喝茶', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+      { query: '查询安徽的客户', expect: { status: 'completed', selectedTool: 'record.customer.search', assert: (_response, harness) => assertSearchFilterContainsValue(harness, 'record.customer.search', '安徽') } },
+    ],
+  },
+  {
+    id: '111-qa-memory-pending-customer-interrupted-by-search',
+    title: '记忆隔离：客户录入中插入查询后仍可补录',
+    turns: [
+      { query: '新增客户 苏州恒达机电有限公司', expect: { status: 'waiting_input', selectedTool: 'record.customer.preview_create' } },
+      { query: '先查客户 苏州明纬自动化有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-b-001', '苏州明纬自动化有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search', continuationAction: 'start_new_task' } },
+      { query: `新增客户 苏州恒达机电有限公司 ${fullCustomerInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+    ],
+  },
+  {
+    id: '112-qa-memory-query-after-update-binds-latest-result',
+    title: '记忆隔离：查询后更新查询对象而不是旧对象',
+    turns: [
+      { query: '查询客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-old-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '查询客户 苏州协同机械有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-new-001', '苏州协同机械有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '客户类型改为VIP客户', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update', assert: assertLatestPreviewFormInstId('record.customer.preview_update', 'customer-new-001') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+    ],
+  },
+];
+
+const qaTargetPollutionScenarios: AgentScenario[] = [
+  qaPollutedCollectionScenario('113-qa-pollution-customer-old-id', 'LLM target 污染：客户旧 ID', 'customer', '查询客户', 'stale-customer-id-001', '苏州恒达机电有限公司'),
+  qaPollutedCollectionScenario('114-qa-pollution-contact-old-id', 'LLM target 污染：联系人旧 ID', 'contact', '查询联系人', 'stale-contact-id-001', '李玲玲'),
+  qaPollutedCollectionScenario('115-qa-pollution-opportunity-old-id', 'LLM target 污染：商机旧 ID', 'opportunity', '查询商机', 'stale-opportunity-id-001', '苏州ERP升级项目'),
+  qaPollutedCollectionScenario('116-qa-pollution-followup-old-id', 'LLM target 污染：拜访记录旧 ID', 'followup', '查询拜访记录', 'stale-followup-id-001', '报价后回访'),
+  qaPollutedCollectionScenario('117-qa-pollution-customer-old-name', 'LLM target 污染：客户旧名称', 'customer', '查询客户', '苏州恒达机电有限公司', '苏州恒达机电有限公司'),
+  qaPollutedCollectionScenario('118-qa-pollution-contact-old-name', 'LLM target 污染：联系人旧名称', 'contact', '查询联系人', '李玲玲', '李玲玲'),
+  qaPollutedCollectionScenario('119-qa-pollution-customer-object-label', 'LLM target 污染：对象标签串入客户 target', 'customer', '查询客户', '联系人', '苏州恒达机电有限公司'),
+  qaPollutedCollectionScenario('120-qa-pollution-contact-other-object-id', 'LLM target 污染：其他对象 ID 串入联系人 target', 'contact', '查询联系人', 'customer-old-001', '陈燕'),
+];
+
+const qaRecoveryScenarios: AgentScenario[] = [
+  {
+    id: '121-qa-recovery-contact-fill-confirm',
+    title: '恢复补槽：联系人缺启用状态后补齐确认',
+    turns: [
+      { query: '新增联系人 陈燕 手机：13612952011', expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_create' } },
+      { query: '启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create' } },
+    ],
+  },
+  {
+    id: '122-qa-recovery-opportunity-fill-confirm',
+    title: '恢复补槽：商机缺字段后补齐确认',
+    turns: [
+      { query: '新增商机 苏州ERP升级项目', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create' } },
+      { query: fullOpportunityInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+    ],
+  },
+  {
+    id: '123-qa-recovery-followup-fill-confirm',
+    title: '恢复补槽：拜访记录缺字段后补齐确认',
+    turns: [
+      { query: '新增拜访记录 今天电话沟通ERP升级', expect: { status: 'waiting_input', selectedTool: 'record.followup.preview_create' } },
+      { query: fullFollowupInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.followup.commit_create' } },
+    ],
+  },
+  {
+    id: '124-qa-recovery-duplicate-update-existing',
+    title: '恢复补槽：客户查重后选择更新已有',
+    turns: [
+      { query: `新增客户 苏州恒达机电有限公司 ${fullCustomerInput}`, mock: { searchRecords: [recordFixture('customer', 'customer-existing-001', '苏州恒达机电有限公司')] }, expect: { status: 'waiting_selection', selectedTool: 'record.customer.preview_create' } },
+      { query: '更新已有 formInstId:customer-existing-001', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update', continuationAction: 'select_candidate' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+    ],
+  },
+  {
+    id: '125-qa-recovery-duplicate-create-new',
+    title: '恢复补槽：客户查重后仍新建',
+    turns: [
+      { query: `新增客户 苏州恒达机电有限公司 ${fullCustomerInput}`, mock: { searchRecords: [recordFixture('customer', 'customer-existing-001', '苏州恒达机电有限公司')] }, expect: { status: 'waiting_selection', selectedTool: 'record.customer.preview_create' } },
+      { query: '仍要新建一条', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create', continuationAction: 'select_candidate' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+    ],
+  },
+  {
+    id: '126-qa-recovery-reject-writeback',
+    title: '恢复补槽：写回预览后取消',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-cancel-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '更新备注，暂时不要联系', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update' } },
+      { query: '取消写回', resumeDecision: 'reject', expect: { status: 'cancelled', selectedTool: 'record.contact.commit_update' } },
+    ],
+  },
+  {
+    id: '127-qa-recovery-empty-payload-guard-visible',
+    title: '恢复补槽：空 payload 守卫可见但不吞掉上下文',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-empty-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '更新这个联系人', mock: { previewEmptyPayload: true }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', policyCode: 'record.preview_empty_payload_guard' } },
+      { query: '备注：喜欢喝茶', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update', continuationAction: 'resume_pending_interaction', assert: assertLatestPreviewParam('record.contact.preview_update', 'Ta_1', '喜欢喝茶') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+    ],
+  },
+  {
+    id: '128-qa-recovery-relation-candidate-then-id-confirm',
+    title: '恢复补槽：关系字段候选后用 ID 补齐确认',
+    turns: [
+      { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-relation-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '将这个联系人的客户信息更新为安徽艳阳电气', mock: { searchRecords: [recordFixture('customer', 'customer-ah-001', '安徽艳阳电气')] }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', pendingInteractionKind: 'input_required', assert: assertNoPreviewParam('record.contact.preview_update', 'province') } },
+      { query: '客户编号：customer-ah-001', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update', continuationAction: 'resume_pending_interaction', assert: assertLatestPreviewParam('record.contact.preview_update', 'linked_customer_form_inst_id', 'customer-ah-001') } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+    ],
+  },
+];
+
+const qaAgentQualityScenarios: AgentScenario[] = [
+  ...qaTraceReplayScenarios,
+  ...qaMetadataFieldScenarios,
+  ...qaContextMemoryScenarios,
+  ...qaTargetPollutionScenarios,
+  ...qaRecoveryScenarios,
+].map((scenario) => ({ ...scenario, qualityGate: true }));
+
+test('Agent scenario harness runs 48 QA-agent quality scenarios with deterministic trace scoring', async () => {
+  assert.equal(qaAgentQualityScenarios.length, 48);
+  assert.ok(qaAgentQualityScenarios.reduce((sum, scenario) => sum + scenario.turns.length, 0) >= 176);
+  await runAgentScenarios(qaAgentQualityScenarios);
+});
+
+function pollutedCollectionIntent(objectKey: ShadowObjectKey, pollutedTarget: string): IntentFrame {
+  return {
+    actionType: 'query',
+    goal: `查询${recordObjectTitles[objectKey]}`,
+    targetType: objectKey,
+    targets: [{ type: 'company', id: pollutedTarget, name: pollutedTarget }],
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: [],
+    confidence: 0.95,
+    source: 'llm',
+  };
+}
+
 function inferIntentFrame(query: string, focusedName?: string | null): IntentFrame {
   const objectKey = inferObjectKey(query);
   const actionType: IntentFrame['actionType'] = /(录入|创建|新增|新建|补录|写入|修改|更新|关联|绑定|选择)/.test(query)
@@ -1582,6 +2382,153 @@ const requiredFields: Record<ShadowObjectKey, string[]> = {
 
 function hasMeaningfulValue(value: unknown): boolean {
   return value !== undefined && value !== null && String(value).trim().length > 0;
+}
+
+function assertNoSearchFilterValue(harness: AgentScenarioHarness, tool: string, value: string): void {
+  const call = harness.calls.findLast((item) => item.tool === tool);
+  const filters = Array.isArray((call?.input as { filters?: unknown[] } | undefined)?.filters)
+    ? (call?.input as { filters: Array<{ value?: unknown }> }).filters
+    : [];
+  assert.equal(filters.some((filter) => String(filter.value ?? '') === value), false, `${tool} should not filter by ${value}`);
+}
+
+function assertSearchFilterValue(harness: AgentScenarioHarness, tool: string, field: string, value: string): void {
+  const call = harness.calls.findLast((item) => item.tool === tool);
+  const filters = Array.isArray((call?.input as { filters?: unknown[] } | undefined)?.filters)
+    ? (call?.input as { filters: Array<{ field?: unknown; value?: unknown }> }).filters
+    : [];
+  assert.equal(
+    filters.some((filter) => filter.field === field && String(filter.value ?? '') === value),
+    true,
+    `${tool} should filter ${field} by ${value}`,
+  );
+}
+
+function assertSearchFilterContainsValue(harness: AgentScenarioHarness, tool: string, value: string): void {
+  const call = harness.calls.findLast((item) => item.tool === tool);
+  const filters = Array.isArray((call?.input as { filters?: unknown[] } | undefined)?.filters)
+    ? (call?.input as { filters: Array<{ value?: unknown }> }).filters
+    : [];
+  assert.equal(
+    filters.some((filter) => {
+      const filterValue = String(filter.value ?? '');
+      return filterValue.includes(value) || value.includes(filterValue);
+    }),
+    true,
+    `${tool} should include filter value ${value}; filters=${JSON.stringify(filters)}`,
+  );
+}
+
+function assertLatestPreviewParam(tool: string, paramKey: string, expected: unknown): HarnessTurn['expect']['assert'] {
+  return (_response, harness) => {
+    const call = harness.calls.findLast((item) => item.tool === tool);
+    const params = (call?.input as ShadowPreviewUpsertInput | undefined)?.params ?? {};
+    assert.deepEqual(params[paramKey], expected, `${tool} should set ${paramKey}`);
+  };
+}
+
+function assertNoPreviewParam(tool: string, paramKey: string): HarnessTurn['expect']['assert'] {
+  return (_response, harness) => {
+    const call = harness.calls.findLast((item) => item.tool === tool);
+    const params = (call?.input as ShadowPreviewUpsertInput | undefined)?.params ?? {};
+    assert.equal(Object.prototype.hasOwnProperty.call(params, paramKey), false, `${tool} should not set ${paramKey}`);
+  };
+}
+
+function assertLatestPreviewFormInstId(tool: string, expected: string): HarnessTurn['expect']['assert'] {
+  return (_response, harness) => {
+    const call = harness.calls.findLast((item) => item.tool === tool);
+    assert.equal((call?.input as ShadowPreviewUpsertInput | undefined)?.formInstId, expected, `${tool} should update ${expected}`);
+  };
+}
+
+function assertCollectionQueryClean(tool: string, staleValue: string): HarnessTurn['expect']['assert'] {
+  return (response, harness) => {
+    assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false);
+    assertNoSearchFilterValue(harness, tool, staleValue);
+  };
+}
+
+function qaUpdateParamScenario(
+  id: string,
+  title: string,
+  objectKey: ShadowObjectKey,
+  searchQuery: string,
+  record: ReturnType<typeof recordFixture>,
+  updateQuery: string,
+  previewTool: string,
+  paramKey: string,
+  expected: unknown,
+): AgentScenario {
+  return {
+    id,
+    title,
+    turns: [
+      { query: searchQuery, mock: { searchRecords: [record] }, expect: { status: 'completed', selectedTool: `record.${objectKey}.search` } },
+      { query: updateQuery, mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: previewTool, assert: assertLatestPreviewParam(previewTool, paramKey, expected) } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: `record.${objectKey}.commit_update` } },
+    ],
+  };
+}
+
+function qaPollutedCollectionScenario(
+  id: string,
+  title: string,
+  objectKey: ShadowObjectKey,
+  query: string,
+  pollutedTarget: string,
+  previousName: string,
+): AgentScenario {
+  const explicitQuery = `${query} ${previousName}`;
+  return {
+    id,
+    title,
+    turns: [
+      { query: explicitQuery, mock: { searchRecords: [recordFixture(objectKey, `${objectKey}-previous-001`, previousName)] }, expect: { status: 'completed', selectedTool: `record.${objectKey}.search` } },
+      {
+        query,
+        mock: { intentFrame: pollutedCollectionIntent(objectKey, pollutedTarget) },
+        expect: {
+          status: 'completed',
+          selectedTool: `record.${objectKey}.search`,
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assert.equal((response.message.extraInfo.agentTrace.selectedTool?.input?.agentControl as { targetSanitization?: { reasonCode?: string } } | undefined)?.targetSanitization?.reasonCode, 'ignored_ungrounded_target');
+            assertNoSearchFilterValue(harness, `record.${objectKey}.search`, pollutedTarget);
+          },
+        },
+      },
+      {
+        query: explicitQuery,
+        mock: { intentFrame: pollutedCollectionIntent(objectKey, pollutedTarget) },
+        expect: {
+          status: 'completed',
+          selectedTool: `record.${objectKey}.search`,
+          assert: (_response, harness) => assertSearchFilterContainsValue(harness, `record.${objectKey}.search`, previousName),
+        },
+      },
+      {
+        query,
+        mock: { intentFrame: pollutedCollectionIntent(objectKey, pollutedTarget) },
+        expect: {
+          status: 'completed',
+          selectedTool: `record.${objectKey}.search`,
+          assert: (response, harness) => {
+            assert.deepEqual(response.message.extraInfo.agentTrace.selectedTool?.input?.filters, []);
+            assertNoSearchFilterValue(harness, `record.${objectKey}.search`, pollutedTarget);
+          },
+        },
+      },
+      {
+        query: explicitQuery,
+        expect: {
+          status: 'completed',
+          selectedTool: `record.${objectKey}.search`,
+          assert: (_response, harness) => assertSearchFilterContainsValue(harness, `record.${objectKey}.search`, previousName),
+        },
+      },
+    ],
+  };
 }
 
 function escapeRegExp(value: string): string {

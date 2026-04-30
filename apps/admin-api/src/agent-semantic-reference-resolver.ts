@@ -41,6 +41,11 @@ export async function resolveSemanticReference(input: {
   const providerName = embeddingProvider
     ? embeddingProvider.providerName ?? embeddingProvider.constructor.name ?? 'embedding_provider'
     : 'recency_fallback';
+  const collectionQueryWithoutReference = isRecordCollectionQueryWithoutReference({
+    query: input.request.query,
+    intentFrame: input.intentFrame,
+    availableTools: input.availableTools,
+  });
 
   if (!compatibleCandidates.length) {
     const reason = candidates.length
@@ -55,6 +60,13 @@ export async function resolveSemanticReference(input: {
       usedContext: false,
       targetWasOverridden: false,
       shouldClarify: false,
+      ...(collectionQueryWithoutReference
+        ? {
+            reason: '本轮是对象集合查询，未承接历史上下文主体。',
+            usageMode: 'skipped_collection_query' as const,
+            skipReasonCode: 'record.collection_query',
+          }
+        : {}),
     });
   }
 
@@ -63,6 +75,7 @@ export async function resolveSemanticReference(input: {
     request: input.request,
     intentFrame: input.intentFrame,
     candidates: compatibleCandidates,
+    availableTools: input.availableTools,
     embeddingProvider,
   });
   const sorted = [...scoreResult.candidates].sort((a, b) => {
@@ -74,7 +87,11 @@ export async function resolveSemanticReference(input: {
   const selected = sorted[0] ?? null;
   const second = sorted[1] ?? null;
   const margin = selected && second ? selected.score - second.score : 1;
-  const directTargetMatch = selected ? hasDirectTargetMatch(input.intentFrame.target.name, selected.subject) : false;
+  const directTargetMatch = selected ? hasDirectTargetMatch({
+    intentFrame: input.intentFrame,
+    subject: selected.subject,
+    availableTools: input.availableTools,
+  }) : false;
   const metadataBindingMatch = selected ? hasStrongToolBinding({
     intentFrame: input.intentFrame,
     candidate: selected,
@@ -96,6 +113,21 @@ export async function resolveSemanticReference(input: {
       usedContext: false,
       targetWasOverridden: false,
       shouldClarify: false,
+    });
+  }
+
+  if (collectionQueryWithoutReference) {
+    return buildResolutionOutput({
+      intentFrame: input.intentFrame,
+      reason: '本轮是对象集合查询，仅记录历史候选，不承接为当前上下文主体。',
+      providerName: scoreResult.providerName,
+      candidates: sorted,
+      selected,
+      usedContext: false,
+      targetWasOverridden: false,
+      shouldClarify: false,
+      usageMode: 'skipped_collection_query',
+      skipReasonCode: 'record.collection_query',
     });
   }
 
@@ -180,19 +212,24 @@ function buildResolutionOutput(input: {
   usedContext: boolean;
   targetWasOverridden: boolean;
   shouldClarify: boolean;
+  usageMode?: ReferenceResolution['usageMode'];
+  skipReasonCode?: string;
 }): {
   intentFrame: GenericIntentFrame;
   resolvedContext: ReferenceResolution;
   semanticResolution: SemanticReferenceResolution;
 } {
+  const usageMode = input.usageMode ?? (input.usedContext ? 'used' : input.selected ? 'candidate_only' : 'none');
   return {
     intentFrame: input.intentFrame,
     resolvedContext: {
       usedContext: input.usedContext,
       reason: input.reason,
-      subject: input.selected?.subject,
-      sourceRunId: input.selected?.sourceRunId,
-      evidenceRefs: input.selected?.evidenceRefs ?? [],
+      subject: input.usedContext ? input.selected?.subject : undefined,
+      sourceRunId: input.usedContext ? input.selected?.sourceRunId : undefined,
+      evidenceRefs: input.usedContext ? input.selected?.evidenceRefs ?? [] : [],
+      usageMode,
+      ...(input.skipReasonCode ? { skipReasonCode: input.skipReasonCode } : {}),
     },
     semanticResolution: {
       usedSemantic: input.usedContext,
@@ -204,6 +241,8 @@ function buildResolutionOutput(input: {
       margin: DEFAULT_MARGIN,
       embeddingProvider: input.providerName,
       targetWasOverridden: input.targetWasOverridden,
+      usageMode,
+      ...(input.skipReasonCode ? { skipReasonCode: input.skipReasonCode } : {}),
     },
   };
 }
@@ -329,6 +368,7 @@ async function scoreCandidates(input: {
   request: AgentChatRequest;
   intentFrame: GenericIntentFrame;
   candidates: ContextReferenceCandidate[];
+  availableTools: AgentToolDefinition[];
   embeddingProvider?: SemanticEmbeddingProvider | null;
 }): Promise<{
   providerName: string;
@@ -349,7 +389,11 @@ async function scoreCandidates(input: {
           providerName: input.embeddingProvider.providerName ?? input.embeddingProvider.constructor.name ?? 'embedding_provider',
           scoreLabel: 'embedding',
           candidates: input.candidates.map((candidate, index) => {
-            const directMatch = hasDirectTargetMatch(input.intentFrame.target.name, candidate.subject);
+            const directMatch = hasDirectTargetMatch({
+              intentFrame: input.intentFrame,
+              subject: candidate.subject,
+              availableTools: input.availableTools,
+            });
             const embeddingScore = cosineSimilarity(queryVector, candidateVectors[index] ?? []);
             const score = directMatch ? Math.max(embeddingScore, 0.98) : embeddingScore;
             return {
@@ -525,8 +569,16 @@ function hasStrongTargetIdentity(intentFrame: GenericIntentFrame, query?: string
   return countCjk(name) >= 5 && hasEntityNameSignal(name);
 }
 
-function hasDirectTargetMatch(targetName: string | undefined, subject: ContextFrameSubject): boolean {
-  const target = normalizeText(targetName ?? '');
+function hasDirectTargetMatch(input: {
+  intentFrame: GenericIntentFrame;
+  subject: ContextFrameSubject;
+  availableTools: AgentToolDefinition[];
+}): boolean {
+  const target = normalizeText(input.intentFrame.target.name ?? '');
+  if (isGenericRecordTargetLabel(input.intentFrame, input.availableTools)) {
+    return false;
+  }
+  const subject = input.subject;
   const subjectName = normalizeText(subject.name ?? '');
   if (!target || !subjectName) {
     return false;
@@ -535,6 +587,113 @@ function hasDirectTargetMatch(targetName: string | undefined, subject: ContextFr
     return false;
   }
   return subjectName.includes(target) || target.includes(subjectName);
+}
+
+function isRecordCollectionQueryWithoutReference(input: {
+  query?: string;
+  intentFrame: GenericIntentFrame;
+  availableTools: AgentToolDefinition[];
+}): boolean {
+  const target = input.intentFrame.target;
+  if (input.intentFrame.actionType !== 'query' || target.kind !== 'record' || !target.objectType) {
+    return false;
+  }
+  const query = input.query?.trim() ?? '';
+  if (!query) {
+    return false;
+  }
+  if (!hasCollectionReadSignal(query)) {
+    return false;
+  }
+  if (isBareRecordCollectionQueryText(query, target.objectType, input.availableTools)) {
+    return true;
+  }
+  if (hasExplicitContextReference(query)) {
+    return false;
+  }
+  return false;
+}
+
+function hasCollectionReadSignal(query: string): boolean {
+  return /(?:查询|查一下|查|查看|搜索|找一下|打开|列出|看看|看下|list|search|show)/i.test(query)
+    || /(?:列表|清单|所有|全部|全量|记录|数据|信息|资料)/.test(query);
+}
+
+function hasExplicitContextReference(query: string): boolean {
+  return /(?:这个|该|当前|刚才|上一|上个|前面|上面|其|它|他|她|this|that|current|previous)/i.test(query)
+    || /(?:的)\s*[\p{Script=Han}A-Za-z0-9_ -]{1,20}$/u.test(query);
+}
+
+function isBareRecordCollectionQueryText(
+  query: string,
+  objectType: string,
+  availableTools: AgentToolDefinition[],
+): boolean {
+  const labels = buildRecordObjectLabels(objectType, availableTools)
+    .map(escapeRegExp)
+    .sort((left, right) => right.length - left.length)
+    .join('|');
+  if (!labels) {
+    return false;
+  }
+  const text = query.replace(/^\/\S+\s*/, '').trim();
+  const operation = '(?:查询|查一下|查|查看|搜索|找一下|打开|列出|看看|看下|list|search|show)';
+  const scope = '(?:所有|全部|全量|全体)?';
+  const suffix = '(?:列表|清单|数据|信息|资料|记录)?';
+  return new RegExp(`^${operation}\\s*${scope}\\s*(?:的)?\\s*(?:${labels})\\s*${suffix}$`, 'i').test(text);
+}
+
+function isGenericRecordTargetLabel(intentFrame: GenericIntentFrame, availableTools: AgentToolDefinition[]): boolean {
+  const targetName = normalizeText(intentFrame.target.name ?? '');
+  if (!targetName) {
+    return true;
+  }
+  const labels = buildGenericTargetLabels(intentFrame, availableTools);
+  return labels.has(targetName);
+}
+
+function buildRecordObjectLabels(objectType: string, availableTools: AgentToolDefinition[]): string[] {
+  const labels = new Set<string>([objectType]);
+  for (const capability of findRecordCapabilities(availableTools, objectType)) {
+    for (const label of capability.objectLabels ?? []) {
+      if (label.trim()) {
+        labels.add(label.trim());
+      }
+    }
+  }
+  return [...labels];
+}
+
+function buildGenericTargetLabels(intentFrame: GenericIntentFrame, availableTools: AgentToolDefinition[]): Set<string> {
+  const labels = new Set<string>();
+  const add = (value?: string) => {
+    const normalized = normalizeText(value ?? '');
+    if (normalized) {
+      labels.add(normalized);
+      const singular = normalized.replace(/(?:名称|姓名|编号|信息|资料|列表|详情|数据)$/, '');
+      if (singular) {
+        labels.add(singular);
+      }
+    }
+  };
+  add(intentFrame.target.kind);
+  add(intentFrame.target.objectType);
+  if (intentFrame.target.kind === 'record' && intentFrame.target.objectType) {
+    for (const capability of findRecordCapabilities(availableTools, intentFrame.target.objectType)) {
+      for (const label of capability.objectLabels ?? []) {
+        add(label);
+      }
+      for (const identityField of capability.identityFields ?? []) {
+        add(identityField);
+        add(capability.fieldLabels?.[identityField]);
+      }
+    }
+  }
+  return labels;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function hasDistinctiveLength(value: string): boolean {

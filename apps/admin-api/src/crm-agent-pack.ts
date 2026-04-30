@@ -43,6 +43,7 @@ import {
   type RecordWritePreviewRow,
   type RecordWritePreviewView,
   type RecordToolCapability,
+  type TargetSanitizationTrace,
   type ToolArbitrationTrace,
   createPolicyDecision,
   createToolCall,
@@ -95,6 +96,7 @@ const SEARCH_EXTRACTOR_WIDGET_TYPES = new Set([
 
 const CRM_RECORD_CAPABILITIES: Record<ShadowObjectKey, RecordToolCapability> = {
   customer: {
+    objectLabels: ['客户', '公司'],
     subjectBinding: {
       acceptedSubjectTypes: ['company', 'customer', 'artifact_anchor'],
       identityFromSubject: true,
@@ -170,6 +172,7 @@ const CRM_RECORD_CAPABILITIES: Record<ShadowObjectKey, RecordToolCapability> = {
     },
   },
   contact: {
+    objectLabels: ['联系人'],
     subjectBinding: {
       acceptedSubjectTypes: ['customer'],
       searchFilterField: 'linked_customer_form_inst_id',
@@ -202,6 +205,7 @@ const CRM_RECORD_CAPABILITIES: Record<ShadowObjectKey, RecordToolCapability> = {
     },
   },
   opportunity: {
+    objectLabels: ['商机', '机会', '项目', '单子'],
     subjectBinding: {
       acceptedSubjectTypes: ['customer'],
       searchFilterField: 'linked_customer_form_inst_id',
@@ -246,6 +250,7 @@ const CRM_RECORD_CAPABILITIES: Record<ShadowObjectKey, RecordToolCapability> = {
     },
   },
   followup: {
+    objectLabels: ['跟进记录', '拜访记录', '回访记录', '跟进', '拜访', '回访'],
     subjectBinding: {
       acceptedSubjectTypes: ['customer'],
       searchFilterField: 'linked_customer_form_inst_id',
@@ -455,20 +460,38 @@ function toGenericIntentFrame(
   contextFrame?: ContextFrame | null,
 ) {
   const recordObject = resolveRecordObject(request.query, legacyIntentFrame, contextFrame ?? null);
+  let targetSanitization: TargetSanitizationTrace | undefined;
   const target = (() => {
     if (recordObject) {
       const contextSubject = contextFrame?.subject?.type === recordObject ? contextFrame.subject : null;
+      const rawTarget = legacyIntentFrame.targets[0];
+      const targetGrounding = resolveRecordTargetGrounding({
+        query: request.query,
+        objectKey: recordObject,
+        actionType: legacyIntentFrame.actionType,
+        targetName: rawTarget?.name,
+        targetId: rawTarget?.id,
+        capability: CRM_RECORD_CAPABILITIES[recordObject],
+      });
+      targetSanitization = targetGrounding.targetSanitization;
+      const useContextSubjectAsFallback = Boolean(contextSubject)
+        && shouldUseRecordTargetContextFallback({
+          query: request.query,
+          objectKey: recordObject,
+          actionType: legacyIntentFrame.actionType,
+        });
       const recordTargetName = resolveRecordSubjectName({
         query: request.query,
         objectKey: recordObject,
-        targetName: legacyIntentFrame.targets[0]?.name,
-        fallbackName: contextSubject?.name || extractRecordName(request.query, recordObject),
+        targetName: targetGrounding.targetName,
+        fallbackName: (useContextSubjectAsFallback ? contextSubject?.name : undefined)
+          || extractRecordName(request.query, recordObject),
         capability: CRM_RECORD_CAPABILITIES[recordObject],
       });
       return {
         kind: 'record' as const,
         objectType: recordObject,
-        id: legacyIntentFrame.targets[0]?.id || contextSubject?.id,
+        id: targetGrounding.targetId || (useContextSubjectAsFallback ? contextSubject?.id : undefined),
         name: recordTargetName || undefined,
       };
     }
@@ -506,6 +529,7 @@ function toGenericIntentFrame(
     confidence: legacyIntentFrame.confidence,
     source: legacyIntentFrame.source,
     fallbackReason: legacyIntentFrame.fallbackReason,
+    ...(targetSanitization ? { targetSanitization } : {}),
     legacyIntentFrame: normalizedLegacyIntentFrame,
   };
 }
@@ -515,17 +539,20 @@ function normalizeRecordLegacyIntentFrame(
   objectKey: ShadowObjectKey,
   targetName?: string,
 ): IntentFrame {
-  if (intentFrame.targetType === objectKey) {
-    return intentFrame;
-  }
+  const fallbackName = CRM_RECORD_CAPABILITIES[objectKey].objectLabels?.[0] ?? objectKey;
+  const originalTarget = intentFrame.targets[0];
+  const normalizedTarget = {
+    type: objectKey,
+    id: targetName || objectKey,
+    name: targetName || fallbackName,
+  };
   return {
     ...intentFrame,
     targetType: objectKey,
     targets: [
       {
-        type: objectKey,
-        id: intentFrame.targets[0]?.id || targetName || objectKey,
-        name: targetName || intentFrame.targets[0]?.name || objectKey,
+        ...originalTarget,
+        ...normalizedTarget,
       },
     ],
   };
@@ -608,7 +635,7 @@ function inferExplicitRecordObject(query: string): string | null {
     return '跟进记录';
   }
 
-  return query.match(/(?:录入|创建|新增|新建|补录|写入|查询|查一下|搜索|找一下|更新|修改|打开)\s*(?:一个|这?个)?\s*(客户|公司|联系人|商机|机会|跟进记录|拜访记录|回访记录|跟进|拜访|回访)/)?.[1] ?? null;
+  return query.match(/(?:录入|创建|新增|新建|补录|写入|查询|查一下|查|搜索|找一下|查看|看下|帮我查|帮我搜|更新|修改|打开)\s*(?:一个|一条|一位|一名|这?个|该|当前|所有|全部|全量|全体)?\s*(?:的)?\s*(客户|公司|联系人|商机|机会|跟进记录|拜访记录|回访记录|跟进|拜访|回访)/)?.[1] ?? null;
 }
 
 interface CrmToolSelectionResult {
@@ -736,6 +763,8 @@ function selectTool(
         operation,
         operatorOpenId: input.request.tenantContext?.operatorOpenId,
         targetName: target.name,
+        targetId: target.id,
+        targetSanitization: input.intentFrame.targetSanitization,
         tool,
         fields: readRecordFields({ shadowMetadataService }, objectKey),
         contextFrame: input.contextFrame ?? null,
@@ -967,6 +996,8 @@ function buildRecordToolInput(input: {
   operation: string;
   operatorOpenId?: string;
   targetName?: string;
+  targetId?: string;
+  targetSanitization?: TargetSanitizationTrace;
   tool?: AgentToolDefinition;
   fields?: ShadowStandardizedField[];
   contextFrame?: ContextFrame | null;
@@ -974,10 +1005,24 @@ function buildRecordToolInput(input: {
 }): Record<string, unknown> {
   const capability = input.tool?.recordCapability ?? CRM_RECORD_CAPABILITIES[input.objectKey as ShadowObjectKey];
   const identityField = capability.identityFields?.[0] ?? inferRecordNameParam(input.objectKey);
+  const objectKey = input.objectKey as ShadowObjectKey;
+  const targetGrounding = CRM_RECORD_OBJECTS.includes(objectKey)
+    ? resolveRecordTargetGrounding({
+        query: input.query,
+        objectKey,
+        actionType: input.operation === 'search' || input.operation === 'get' ? 'query' : 'write',
+        targetName: input.targetName,
+        targetId: input.targetId,
+        capability,
+      })
+    : {};
+  const localTargetSanitization = targetGrounding.targetSanitization;
+  const targetSanitization = input.targetSanitization ?? localTargetSanitization;
+  const effectiveTargetName = localTargetSanitization ? undefined : targetGrounding.targetName ?? input.targetName;
   const name = resolveRecordSubjectName({
     query: input.query,
     objectKey: input.objectKey,
-    targetName: input.targetName,
+    targetName: effectiveTargetName,
     fallbackName: extractRecordName(input.query, input.objectKey),
     capability,
   });
@@ -999,10 +1044,11 @@ function buildRecordToolInput(input: {
       objectKey: input.objectKey,
       capability,
       identityField,
-      targetName: input.targetName,
+      targetName: effectiveTargetName,
       fields: input.fields ?? [],
       boundFilters: boundSearchInput?.filters ?? [],
       operatorOpenId: input.operatorOpenId,
+      targetSanitization,
     });
   }
   if (input.operation === 'get') {
@@ -1132,6 +1178,7 @@ function buildRecordSearchInput(input: {
   fields: ShadowStandardizedField[];
   boundFilters: RecordSearchFilter[];
   operatorOpenId?: string;
+  targetSanitization?: TargetSanitizationTrace;
 }): Record<string, unknown> {
   const pagination = extractRecordSearchPagination(input.query);
   const queryWithoutPagination = removeRecordSearchPaginationText(input.query);
@@ -1168,14 +1215,24 @@ function buildRecordSearchInput(input: {
   const searchExtraction = buildSearchExtractionControl({
     extraction,
     fallbackName,
+    filterSources: buildRecordSearchFilterSources({
+      boundFilters: input.boundFilters,
+      extraction,
+      fallbackName,
+      identityField: input.identityField,
+    }),
   });
+  const agentControl = {
+    ...(searchExtraction ? { searchExtraction } : {}),
+    ...(input.targetSanitization ? { targetSanitization: input.targetSanitization } : {}),
+  };
 
   return {
     filters,
     operatorOpenId: input.operatorOpenId,
     pageNumber: pagination.pageNumber,
     pageSize: pagination.pageSize,
-    ...(searchExtraction ? { agentControl: { searchExtraction } } : {}),
+    ...(Object.keys(agentControl).length ? { agentControl } : {}),
   };
 }
 
@@ -1646,6 +1703,36 @@ function resolveRecordSearchFallbackName(input: {
   return isMeaningfulRecordNameCandidate(normalized, input.objectKey) ? normalized : '';
 }
 
+function buildRecordSearchFilterSources(input: {
+  boundFilters: RecordSearchFilter[];
+  extraction: RecordSearchExtraction;
+  fallbackName: string;
+  identityField: string;
+}): Array<{ field: string; value: string; source: string; label?: string }> {
+  return [
+    ...input.boundFilters.map((filter) => ({
+      field: String(filter.field),
+      value: String(filter.value ?? ''),
+      source: 'relation_context',
+      label: '关系上下文绑定',
+    })),
+    ...input.extraction.conditions.map((condition) => ({
+      field: condition.field,
+      value: condition.value,
+      source: condition.source === 'explicit' ? 'explicit_condition' : 'implicit_condition',
+      label: condition.label,
+    })),
+    ...(input.fallbackName
+      ? [{
+          field: input.identityField,
+          value: input.fallbackName,
+          source: 'name_fallback',
+          label: '名称 fallback',
+        }]
+      : []),
+  ];
+}
+
 function removeConsumedSearchTexts(query: string, consumedTexts: string[]): string {
   return consumedTexts
     .filter(Boolean)
@@ -1723,13 +1810,15 @@ function getRecordCollectionScopePattern(): string {
 function buildSearchExtractionControl(input: {
   extraction: RecordSearchExtraction;
   fallbackName: string;
+  filterSources: Array<{ field: string; value: string; source: string; label?: string }>;
 }): Record<string, unknown> | null {
   const { extraction } = input;
   if (
     extraction.conditions.length === 0 &&
     extraction.ambiguities.length === 0 &&
     extraction.unresolvedValues.length === 0 &&
-    !input.fallbackName
+    !input.fallbackName &&
+    input.filterSources.length === 0
   ) {
     return null;
   }
@@ -1738,6 +1827,7 @@ function buildSearchExtractionControl(input: {
     ambiguities: extraction.ambiguities,
     unresolvedValues: extraction.unresolvedValues,
     ...(input.fallbackName ? { fallbackName: input.fallbackName } : {}),
+    ...(input.filterSources.length ? { filterSources: input.filterSources } : {}),
   };
 }
 
@@ -1781,16 +1871,6 @@ function buildRecordParams(
   });
   const params: Record<string, unknown> = options.includeSubjectName && normalizedName ? { [subjectNameParam]: normalizedName } : {};
 
-  for (const paramKey of capability.previewInputPolicy?.writableParams ?? []) {
-    if (Object.prototype.hasOwnProperty.call(params, paramKey)) {
-      continue;
-    }
-    const value = extractLabeledParamValue(query, paramKey, capability);
-    if (value !== undefined) {
-      params[paramKey] = value;
-    }
-  }
-
   const metadataParams = extractRecordWriteParamsFromQuery({
     query,
     capability,
@@ -1799,6 +1879,19 @@ function buildRecordParams(
   });
   for (const [paramKey, value] of Object.entries(metadataParams)) {
     if (!hasMeaningfulValue(params[paramKey])) {
+      params[paramKey] = value;
+    }
+  }
+
+  for (const { paramKey } of buildWritableFieldEntries({
+    capability,
+    fields: options.fields ?? [],
+  })) {
+    if (Object.prototype.hasOwnProperty.call(params, paramKey)) {
+      continue;
+    }
+    const value = extractLabeledParamValue(query, paramKey, capability);
+    if (value !== undefined) {
       params[paramKey] = value;
     }
   }
@@ -1831,6 +1924,107 @@ function resolveRecordSubjectName(input: {
   });
 }
 
+function resolveRecordTargetGrounding(input: {
+  query: string;
+  objectKey: ShadowObjectKey;
+  actionType: IntentFrame['actionType'];
+  targetName?: string;
+  targetId?: string;
+  capability: RecordToolCapability;
+}): {
+  targetName?: string;
+  targetId?: string;
+  targetSanitization?: TargetSanitizationTrace;
+} {
+  const targetName = input.targetName?.trim();
+  const targetId = input.targetId?.trim();
+  if (!targetName && !targetId) {
+    return {};
+  }
+  if (input.actionType === 'query' && targetName) {
+    const targetIsGrounded = isRecordTargetGroundedInQuery({
+      query: input.query,
+      objectKey: input.objectKey,
+      targetName,
+      capability: input.capability,
+    });
+    const userExplicitName = normalizeRecordSubjectNameCandidate({
+      value: extractRecordName(input.query, input.objectKey),
+      objectKey: input.objectKey,
+      capability: input.capability,
+      subjectNameParam: input.capability.previewInputPolicy?.subjectNameParam ?? inferRecordNameParam(input.objectKey),
+    });
+    if (!targetIsGrounded && (isBareRecordCollectionQuery(input.query, input.objectKey) || userExplicitName)) {
+      return {
+        targetSanitization: {
+          reasonCode: 'ignored_ungrounded_target',
+          reason: userExplicitName
+            ? '查询中的 LLM target 未出现在用户输入中，已优先使用用户显式查询条件。'
+            : '集合查询中的 LLM target 未出现在用户输入中，已忽略以避免历史上下文污染搜索条件。',
+          source: 'intent_target',
+          ignoredTargetName: targetName,
+          ...(targetId ? { ignoredTargetId: targetId } : {}),
+        },
+      };
+    }
+  }
+  return {
+    ...(targetName ? { targetName } : {}),
+    ...(targetId ? { targetId } : {}),
+  };
+}
+
+function isRecordTargetGroundedInQuery(input: {
+  query: string;
+  objectKey: ShadowObjectKey;
+  targetName: string;
+  capability: RecordToolCapability;
+}): boolean {
+  const query = normalizeSearchComparable(input.query);
+  const target = normalizeSearchComparable(input.targetName);
+  if (!target) {
+    return false;
+  }
+  if (query.includes(target)) {
+    return true;
+  }
+  const objectLabels = new Set([
+    input.objectKey,
+    ...(input.capability.objectLabels ?? []),
+    ...(input.capability.identityFields ?? []).map((field) => input.capability.fieldLabels?.[field] ?? field),
+  ].map(normalizeSearchComparable));
+  return objectLabels.has(target);
+}
+
+function shouldUseRecordTargetContextFallback(input: {
+  query: string;
+  objectKey: ShadowObjectKey;
+  actionType: IntentFrame['actionType'];
+}): boolean {
+  if (input.actionType === 'query' && isBareRecordCollectionQuery(input.query, input.objectKey)) {
+    return false;
+  }
+  return true;
+}
+
+function isBareRecordCollectionQuery(query: string, objectKey: ShadowObjectKey): boolean {
+  if (!isReadOnlyRecordQuery(query)) {
+    return false;
+  }
+  if (hasRecordContextReference(query)) {
+    return false;
+  }
+  if (extractRecordName(query, objectKey)) {
+    return false;
+  }
+  const explicitObject = mapExplicitRecordObjectToKey(inferExplicitRecordObject(query));
+  return explicitObject === objectKey || isRecordCollectionScopeCandidate(cleanupRecordNameCandidate(query, objectKey));
+}
+
+function hasRecordContextReference(query: string): boolean {
+  return /(?:这个|该|当前|刚才|上一|上个|前面|上面)/.test(query);
+}
+
 function normalizeRecordSubjectNameCandidate(input: {
   value: string;
   objectKey: string;
@@ -1849,12 +2043,15 @@ function extractRecordWriteParamsFromQuery(input: {
   currentParams?: Record<string, unknown>;
 }): Record<string, unknown> {
   const params: Record<string, unknown> = {};
-  const writableParams = input.capability.previewInputPolicy?.writableParams ?? [];
-  for (const paramKey of writableParams) {
+  for (const entry of buildWritableFieldEntries({
+    capability: input.capability,
+    fields: input.fields,
+  })) {
+    const { paramKey } = entry;
     if (hasMeaningfulValue(input.currentParams?.[paramKey])) {
       continue;
     }
-    const field = findFieldByParamKey(paramKey, input.fields);
+    const field = entry.field ?? findFieldByParamKey(paramKey, input.fields);
     if (field && field.writePolicy !== undefined && field.writePolicy !== 'promptable') {
       continue;
     }
@@ -1919,13 +2116,52 @@ function buildFieldSemanticCatalog(input: {
   capability: RecordToolCapability;
   fields: ShadowStandardizedField[];
 }): FieldSemanticEntry[] {
-  return (input.capability.previewInputPolicy?.writableParams ?? []).map((paramKey) =>
+  return buildWritableFieldEntries(input).map(({ paramKey, field }) =>
     buildFieldSemanticEntry({
       paramKey,
-      field: findFieldByParamKey(paramKey, input.fields),
+      field,
       capability: input.capability,
     }),
   );
+}
+
+function buildWritableFieldEntries(input: {
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+}): Array<{ paramKey: string; field?: ShadowStandardizedField }> {
+  const entries: Array<{ paramKey: string; field?: ShadowStandardizedField }> = [];
+  const seen = new Set<string>();
+  const addEntry = (paramKey: string, field?: ShadowStandardizedField): void => {
+    const key = paramKey.trim();
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    entries.push({
+      paramKey: key,
+      ...(field ? { field } : {}),
+    });
+  };
+
+  for (const paramKey of input.capability.previewInputPolicy?.writableParams ?? []) {
+    addEntry(paramKey, findFieldByParamKey(paramKey, input.fields));
+  }
+  for (const field of input.fields) {
+    if (!isMetadataPromptableWriteField(field)) {
+      continue;
+    }
+    addEntry(field.writeParameterKey?.trim() || field.fieldCode, field);
+  }
+
+  return entries;
+}
+
+function isMetadataPromptableWriteField(field: ShadowStandardizedField): boolean {
+  const paramKey = field.writeParameterKey?.trim() || field.fieldCode?.trim();
+  if (!paramKey || field.readOnly || field.edit === false) {
+    return false;
+  }
+  return field.writePolicy === 'promptable';
 }
 
 function buildFieldSemanticEntry(input: {
@@ -1960,7 +2196,7 @@ function buildFieldSemanticEntry(input: {
       candidates
         .flatMap((label) => [label, ...buildShortLabelVariants(label)])
         .map((label) => label.trim())
-        .filter((label) => label.length >= 2),
+        .filter((label) => label.length >= 2 && !isAmbiguousFieldAlias(label, input.field)),
     ),
   ).sort((left, right) => right.length - left.length);
   return {
@@ -1970,6 +2206,16 @@ function buildFieldSemanticEntry(input: {
     isReference: input.field?.widgetType === 'basicDataWidget',
     ...(targetModelName ? { targetModelName } : {}),
   };
+}
+
+function isAmbiguousFieldAlias(alias: string, field?: ShadowStandardizedField): boolean {
+  if (alias === '信息') {
+    return true;
+  }
+  if (field?.widgetType === 'basicDataWidget' && ['名称', '编号'].includes(alias)) {
+    return true;
+  }
+  return false;
 }
 
 function findExplicitWriteFieldIntent(input: {
@@ -2038,6 +2284,7 @@ function matchExplicitWriteFieldValue(
     const escaped = escapeRegExp(alias);
     const patterns = [
       new RegExp(`${escaped}\\s*(?:改成|改为|更新为|调整为|设置为|设为|变更为|变为|为|是|=|：|:)\\s*([^，。；;\\n]+)`),
+      new RegExp(`(?:更新|修改|变更|调整|设置|改)\\s*(?:这个|该|当前)?[^，。；;\\n]{0,12}?${escaped}\\s*[，,]\\s*([^，。；;\\n]+)`),
       new RegExp(`(?:更新|修改|变更|调整|设置|改|关联|绑定|选择)\\s*(?:这个|该|当前)?[^，。；;\\n]{0,12}?${escaped}\\s*(?:到|至|成|为)?\\s*([^，。；;\\n]+)`),
     ];
     for (const pattern of patterns) {
@@ -3210,7 +3457,7 @@ function buildRecordContextFrame(input: {
     }
     const records = Array.isArray(input.result?.records) ? input.result.records : [];
     if (records.length !== 1) {
-      return input.fallback ?? null;
+      return null;
     }
     const record = records[0];
     return {
@@ -3335,7 +3582,14 @@ interface RecordAgentControl {
       reason?: string;
     }>;
     fallbackName?: string;
+    filterSources?: Array<{
+      field?: string;
+      value?: string;
+      source?: string;
+      label?: string;
+    }>;
   };
+  targetSanitization?: TargetSanitizationTrace;
   choiceRouting?: {
     answerParamKey?: string;
     choices?: Record<string, unknown>;
@@ -3516,7 +3770,10 @@ function enrichRecordParamsFromQuery(input: {
   if (explicitReferenceIntent) {
     return params;
   }
-  for (const paramKey of input.capability.previewInputPolicy?.writableParams ?? []) {
+  for (const { paramKey } of buildWritableFieldEntries({
+    capability: input.capability,
+    fields: input.fields,
+  })) {
     if (hasMeaningfulValue(params[paramKey])) {
       continue;
     }
@@ -3543,7 +3800,10 @@ function resolvePersonSelectParams(input: {
   const nextParams = { ...params };
   const issues: PersonResolutionIssue[] = [];
 
-  for (const paramKey of input.capability.previewInputPolicy?.writableParams ?? []) {
+  for (const { paramKey } of buildWritableFieldEntries({
+    capability: input.capability,
+    fields: input.fields,
+  })) {
     if (!hasMeaningfulValue(nextParams[paramKey])) {
       continue;
     }
@@ -3795,7 +4055,10 @@ async function resolveReferenceSelectParams(input: {
   const nextParams = { ...params };
   const issues: ReferenceResolutionIssue[] = [];
 
-  for (const paramKey of input.capability.previewInputPolicy?.writableParams ?? []) {
+  for (const { paramKey } of buildWritableFieldEntries({
+    capability: input.capability,
+    fields: input.fields,
+  })) {
     if (!hasMeaningfulValue(nextParams[paramKey])) {
       continue;
     }

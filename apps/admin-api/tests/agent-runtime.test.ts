@@ -30,6 +30,24 @@ function recordIntent(
   };
 }
 
+function pollutedRecordQueryIntent(
+  objectKey: ShadowObjectKey,
+  pollutedTarget: string,
+  targetType: IntentFrame['targets'][number]['type'] = 'company',
+): IntentFrame {
+  return {
+    actionType: 'query',
+    goal: `查询 ${objectKey}`,
+    targetType: objectKey,
+    targets: [{ type: targetType, id: pollutedTarget, name: pollutedTarget }],
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: [],
+    confidence: 0.96,
+    source: 'llm',
+  };
+}
+
 function companyIntent(companyName: string): IntentFrame {
   return {
     actionType: 'analyze',
@@ -205,6 +223,73 @@ function seedRecordContext(
         agentTrace: {
           traceId: executionState.traceId,
           intentFrame: recordIntent(input.objectKey, 'query', input.name),
+          taskPlan,
+          executionState,
+          toolCalls: [],
+          pendingConfirmation: null,
+          policyDecisions: [],
+        },
+      },
+    },
+  });
+}
+
+function saveRunWithoutContext(
+  repository: AgentRunRepository,
+  input: {
+    conversationKey: string;
+    runId: string;
+    query: string;
+    intentFrame: IntentFrame;
+  },
+): void {
+  const taskPlan: TaskPlan = {
+    planId: `${input.runId}-plan`,
+    kind: 'tool_execution',
+    title: '无上下文测试运行',
+    status: 'completed',
+    steps: [],
+    evidenceRequired: false,
+  };
+  const executionState: ExecutionState = {
+    runId: input.runId,
+    traceId: `${input.runId}-trace`,
+    status: 'completed',
+    currentStepKey: null,
+    message: '无上下文测试运行完成',
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+  };
+
+  repository.saveRun({
+    request: {
+      conversationKey: input.conversationKey,
+      sceneKey: 'chat',
+      query: input.query,
+    },
+    runId: executionState.runId,
+    traceId: executionState.traceId,
+    eid: '21024647',
+    appId: '501037729',
+    intentFrame: input.intentFrame,
+    taskPlan,
+    executionState,
+    toolCalls: [],
+    evidence: [],
+    contextFrame: null,
+    message: {
+      role: 'assistant',
+      content: '无上下文测试运行完成',
+      attachments: [],
+      extraInfo: {
+        feedback: 'default',
+        sceneKey: 'chat',
+        headline: '无上下文测试运行完成',
+        references: [],
+        evidence: [],
+        agentTrace: {
+          traceId: executionState.traceId,
+          intentFrame: input.intentFrame,
           taskPlan,
           executionState,
           toolCalls: [],
@@ -1129,7 +1214,7 @@ test('Agent runtime keeps customer name fallback when field value is not a stand
 });
 
 test('Agent runtime treats collection scope words as unfiltered record search', async () => {
-  const cases = ['查询所有客户', '查询全部客户', '查询客户列表'];
+  const cases = ['查询所有客户', '查询全部客户', '查询所有的客户', '查询客户列表'];
 
   for (const query of cases) {
     const { response, searchInput } = await runCustomerSearchExtractionCase(query);
@@ -1144,6 +1229,221 @@ test('Agent runtime treats collection scope words as unfiltered record search', 
       query,
     );
   }
+});
+
+test('Agent runtime does not use previous customer context for scoped collection search', async () => {
+  const cases = ['查询所有客户', '查询全部客户', '查询所有的客户'];
+
+  for (const query of cases) {
+    const repository = new AgentRunRepository(createInMemoryDatabase());
+    const conversationKey = `conv-scoped-collection-${query}`;
+    seedRecordContext(repository, {
+      conversationKey,
+      objectKey: 'customer',
+      formInstId: 'customer-ah-001',
+      name: '安徽艳阳电气集团有限公司',
+    });
+    let searchInput: any = null;
+    const { service } = createAgentTestService({
+      repository,
+      intentFrame: recordIntent('customer', 'query', '客户'),
+      shadowMetadataService: {
+        getObject: () => ({ fields: createCustomerSearchFields() }),
+        executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
+          searchInput = input;
+          return { records: [] };
+        },
+        executeGet: async () => ({ record: null }),
+        previewUpsert: async () => {
+          throw new Error('not used');
+        },
+        executeUpsert: async () => {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    const response = await service.chat({
+      conversationKey,
+      sceneKey: 'chat',
+      query,
+      tenantContext: { operatorOpenId: 'operator-001' },
+    });
+
+    assert.equal(response.executionState.status, 'completed', query);
+    assert.deepEqual(searchInput?.filters, [], query);
+    assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false, query);
+    assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usageMode, 'skipped_collection_query', query);
+    assert.equal(repository.getRunDetail(response.executionState.runId)?.contextSubject, null, query);
+  }
+});
+
+test('Agent runtime ignores ungrounded LLM targets for bare collection search payloads', async () => {
+  const cases: Array<{ objectKey: ShadowObjectKey; query: string; pollutedTarget: string; previousName: string }> = [
+    { objectKey: 'customer', query: '查询客户', pollutedTarget: '69f16bbd21bf2b00014fbc6f', previousName: '苏州恒达机电有限公司' },
+    { objectKey: 'contact', query: '查询联系人', pollutedTarget: 'stale-contact-id-001', previousName: '李玲玲' },
+    { objectKey: 'opportunity', query: '查询商机', pollutedTarget: 'stale-opportunity-id-001', previousName: '苏州ERP升级项目' },
+    { objectKey: 'followup', query: '查询拜访记录', pollutedTarget: 'stale-followup-id-001', previousName: '报价后回访记录' },
+  ];
+
+  for (const item of cases) {
+    const repository = new AgentRunRepository(createInMemoryDatabase());
+    const conversationKey = `conv-polluted-collection-${item.objectKey}`;
+    seedRecordContext(repository, {
+      conversationKey,
+      objectKey: item.objectKey,
+      formInstId: item.pollutedTarget,
+      name: item.previousName,
+    });
+    let searchInput: any = null;
+    const { service } = createAgentTestService({
+      repository,
+      intentFrame: pollutedRecordQueryIntent(item.objectKey, item.pollutedTarget),
+      shadowMetadataService: {
+        executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
+          searchInput = input;
+          return { records: [] };
+        },
+        executeGet: async () => ({ record: null }),
+        previewUpsert: async () => {
+          throw new Error('not used');
+        },
+        executeUpsert: async () => {
+          throw new Error('not used');
+        },
+      },
+    });
+
+    const response = await service.chat({
+      conversationKey,
+      sceneKey: 'chat',
+      query: item.query,
+      tenantContext: { operatorOpenId: 'operator-001' },
+    });
+
+    assert.equal(response.executionState.status, 'completed', item.query);
+    assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, `record.${item.objectKey}.search`, item.query);
+    assert.deepEqual(searchInput?.filters, [], item.query);
+    const selectedInput = response.message.extraInfo.agentTrace.selectedTool?.input as any;
+    assert.equal(selectedInput?.agentControl?.searchExtraction?.fallbackName, undefined, item.query);
+    assert.equal(selectedInput?.agentControl?.targetSanitization?.reasonCode, 'ignored_ungrounded_target', item.query);
+    assert.equal(selectedInput?.agentControl?.targetSanitization?.ignoredTargetName, item.pollutedTarget, item.query);
+    assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false, item.query);
+    assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usageMode, 'skipped_collection_query', item.query);
+    assert.equal(repository.getRunDetail(response.executionState.runId)?.contextSubject, null, item.query);
+    assert.equal(
+      repository.findContextCandidates(conversationKey).some((candidate) => candidate.sourceRunId === response.executionState.runId),
+      false,
+      item.query,
+    );
+  }
+});
+
+test('Agent runtime lets explicit user query text win over stale LLM target fallback', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let searchInput: any = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: pollutedRecordQueryIntent('customer', '苏州恒达机电有限公司'),
+    shadowMetadataService: {
+      getObject: () => ({ fields: createCustomerSearchFields() }),
+      executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
+        searchInput = input;
+        return { records: [] };
+      },
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => {
+        throw new Error('not used');
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-explicit-query-over-stale-target',
+    sceneKey: 'chat',
+    query: '查询客户 安徽艳阳电气',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  const filters = Array.isArray(searchInput?.filters) ? searchInput.filters : [];
+  assert.equal(filters.some((filter: { value?: unknown }) => filter.value === '安徽艳阳电气'), true);
+  assert.equal(filters.some((filter: { value?: unknown }) => filter.value === '苏州恒达机电有限公司'), false);
+  const selectedInput = response.message.extraInfo.agentTrace.selectedTool?.input as any;
+  const filterSources = selectedInput?.agentControl?.searchExtraction?.filterSources ?? [];
+  assert.equal(
+    filterSources.some((source: { source?: string }) => source.source === 'explicit_condition' || source.source === 'name_fallback'),
+    true,
+  );
+  assert.equal(selectedInput?.agentControl?.targetSanitization?.reasonCode, 'ignored_ungrounded_target');
+  assert.equal(selectedInput?.agentControl?.targetSanitization?.ignoredTargetName, '苏州恒达机电有限公司');
+});
+
+test('Agent runtime persists record context only for unique search results', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const conversationKey = 'conv-search-context-persistence';
+  seedRecordContext(repository, {
+    conversationKey,
+    objectKey: 'customer',
+    formInstId: 'customer-old-001',
+    name: '旧上下文客户有限公司',
+  });
+  let searchRecords: unknown[] = [];
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: ({ query }) => recordIntent('customer', 'query', query.includes('安徽') ? '安徽艳阳电气' : '客户'),
+    shadowMetadataService: {
+      executeSearch: async () => ({ records: searchRecords }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => {
+        throw new Error('not used');
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  searchRecords = [];
+  const emptySearch = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '查询客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.equal(emptySearch.executionState.status, 'completed');
+  assert.equal(repository.getRunDetail(emptySearch.executionState.runId)?.contextSubject, null);
+
+  searchRecords = [
+    { formInstId: 'customer-a-001', fields: [{ title: '客户名称', value: '客户 A' }], rawRecord: {} },
+    { formInstId: 'customer-b-001', fields: [{ title: '客户名称', value: '客户 B' }], rawRecord: {} },
+  ];
+  const multiSearch = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '查询客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.equal(multiSearch.executionState.status, 'completed');
+  assert.equal(repository.getRunDetail(multiSearch.executionState.runId)?.contextSubject, null);
+
+  searchRecords = [
+    { formInstId: 'customer-ah-001', fields: [{ title: '客户名称', value: '安徽艳阳电气' }], rawRecord: {} },
+  ];
+  const uniqueSearch = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '查询客户 安徽艳阳电气',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.equal(uniqueSearch.executionState.status, 'completed');
+  const uniqueContext = repository.getRunDetail(uniqueSearch.executionState.runId)?.contextSubject;
+  assert.equal(uniqueContext?.type, 'customer');
+  assert.equal(uniqueContext?.id, 'customer-ah-001');
+  assert.equal(uniqueContext?.name, '安徽艳阳电气');
 });
 
 test('Agent runtime keeps pagination words out of record title fallback', async () => {
@@ -3411,6 +3711,30 @@ test('Agent run repository skips opaque external id context and keeps recent rec
   assert.equal(context?.subject?.kind, 'record');
   assert.equal(context?.subject?.type, 'opportunity');
   assert.equal(context?.subject?.id, formInstId);
+});
+
+test('Agent run repository skips collection query intent targets as context candidates', () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const conversationKey = 'conv-collection-intent-targets';
+  saveRunWithoutContext(repository, {
+    conversationKey,
+    runId: 'run-collection-contact-label',
+    query: '查询联系人',
+    intentFrame: pollutedRecordQueryIntent('contact', '联系人', 'contact'),
+  });
+  saveRunWithoutContext(repository, {
+    conversationKey,
+    runId: 'run-collection-customer-stale-name',
+    query: '查询客户',
+    intentFrame: pollutedRecordQueryIntent('customer', '苏州恒达机电有限公司'),
+  });
+
+  const candidates = repository.findContextCandidates(conversationKey);
+  const context = repository.findContextFrame(conversationKey);
+
+  assert.equal(candidates.some((candidate) => candidate.sourceRunId === 'run-collection-contact-label'), false);
+  assert.equal(candidates.some((candidate) => candidate.sourceRunId === 'run-collection-customer-stale-name'), false);
+  assert.equal(context, null);
 });
 
 test('Agent runtime uses subject-bound relation filter for contextual contact search', async () => {

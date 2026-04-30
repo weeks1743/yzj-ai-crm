@@ -254,8 +254,7 @@ function buildRunFlowNodes(agentTrace: AgentTrace): RunFlowNode[] {
   const params = readSelectedToolParams(selectedTool?.input);
   const paramsEmpty = selectedTool?.toolCode?.includes('.preview_') && Object.keys(params).length === 0;
   const emptyGuard = policyDecisions.some((item: any) => item.policyCode === 'record.preview_empty_payload_guard');
-  const contextSubject = agentTrace.resolvedContext?.subject
-    ?? agentTrace.pendingInteraction?.contextSubject;
+  const contextFlow = summarizeContextFlow(agentTrace);
 
   return [
     {
@@ -271,11 +270,9 @@ function buildRunFlowNodes(agentTrace: AgentTrace): RunFlowNode[] {
     {
       key: 'context',
       title: '2. 上下文绑定',
-      status: contextSubject ? 'success' : 'default',
-      summary: contextSubject
-        ? `已绑定 ${contextSubject.type ?? contextSubject.kind}：${contextSubject.name ?? contextSubject.id ?? '-'}`
-        : '本轮未绑定明确上下文主体',
-      details: agentTrace.resolvedContext?.reason,
+      status: contextFlow.status,
+      summary: contextFlow.summary,
+      details: contextFlow.details,
     },
     {
       key: 'tool',
@@ -340,15 +337,138 @@ function readSelectedToolParams(input?: Record<string, unknown>): Record<string,
     : {};
 }
 
-function summarizeSelectedToolInput(input?: Record<string, unknown>): string {
+export function summarizeSelectedToolInput(input?: Record<string, unknown>): string {
   if (!input) {
     return '暂无工具输入';
+  }
+  const filters = Array.isArray(input.filters) ? input.filters : null;
+  if (filters) {
+    const filterText = filters.length
+      ? `查询过滤：${filters.map(formatSearchFilter).join('、')}`
+      : '查询过滤：无';
+    const sourceText = summarizeSearchFilterSources(input);
+    const targetText = summarizeTargetSanitization(input);
+    return [filterText, sourceText, targetText].filter(Boolean).join('；');
   }
   const formInstId = typeof input.formInstId === 'string' && input.formInstId ? '已绑定记录' : '';
   const params = readSelectedToolParams(input);
   const paramKeys = Object.keys(params);
   const paramsText = paramKeys.length ? `写入字段：${paramKeys.join('、')}` : '写入字段：无';
   return [formInstId, paramsText].filter(Boolean).join('；') || JSON.stringify(input);
+}
+
+export function summarizeContextFlow(agentTrace: AgentTrace): Pick<RunFlowNode, 'status' | 'summary' | 'details'> {
+  const resolvedContext = agentTrace.resolvedContext;
+  const semanticResolution = agentTrace.semanticResolution;
+  const usedSubject = resolvedContext?.usedContext ? resolvedContext.subject : null;
+  if (usedSubject) {
+    return {
+      status: 'success',
+      summary: `已使用上下文：${formatContextSubject(usedSubject)}`,
+      details: resolvedContext?.reason,
+    };
+  }
+
+  if (resolvedContext?.usageMode === 'skipped_collection_query'
+    || semanticResolution?.usageMode === 'skipped_collection_query'
+    || resolvedContext?.skipReasonCode === 'record.collection_query') {
+    return {
+      status: 'default',
+      summary: '未使用上下文：本轮是集合查询',
+      details: formatCandidateOnlyDetails(agentTrace),
+    };
+  }
+
+  const candidate = semanticResolution?.selectedCandidate;
+  if (candidate) {
+    return {
+      status: 'default',
+      summary: `仅记录候选：${formatContextSubject(candidate.subject)}`,
+      details: resolvedContext?.reason || semanticResolution?.reason,
+    };
+  }
+
+  const pendingSubject = agentTrace.pendingInteraction?.contextSubject;
+  if (pendingSubject) {
+    return {
+      status: 'warning',
+      summary: `等待态上下文：${formatContextSubject(pendingSubject)}`,
+      details: agentTrace.pendingInteraction?.summary,
+    };
+  }
+
+  return {
+    status: 'default',
+    summary: '本轮未绑定明确上下文主体',
+    details: resolvedContext?.reason || semanticResolution?.reason,
+  };
+}
+
+function formatContextSubject(subject: { kind?: string; type?: string; id?: string; name?: string }): string {
+  return `${subject.type ?? subject.kind ?? 'subject'}：${subject.name ?? subject.id ?? '-'}`;
+}
+
+function formatCandidateOnlyDetails(agentTrace: AgentTrace): string | undefined {
+  const reason = agentTrace.resolvedContext?.reason || agentTrace.semanticResolution?.reason;
+  const candidate = agentTrace.semanticResolution?.selectedCandidate?.subject;
+  const candidateText = candidate ? `候选未承接：${formatContextSubject(candidate)}` : '';
+  return [reason, candidateText].filter(Boolean).join('；') || undefined;
+}
+
+function formatSearchFilter(filter: unknown): string {
+  if (!filter || typeof filter !== 'object') {
+    return String(filter);
+  }
+  const record = filter as { field?: unknown; operator?: unknown; value?: unknown };
+  return `${String(record.field ?? '-')}${String(record.operator ?? '=')}${String(record.value ?? '')}`;
+}
+
+function summarizeSearchFilterSources(input: Record<string, unknown>): string {
+  const control = input.agentControl && typeof input.agentControl === 'object'
+    ? input.agentControl as { searchExtraction?: { filterSources?: unknown[]; fallbackName?: unknown; conditions?: unknown[] } }
+    : {};
+  const filterSources = Array.isArray(control.searchExtraction?.filterSources)
+    ? control.searchExtraction.filterSources
+    : [];
+  const labels = filterSources
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return '';
+      }
+      const source = String((item as { source?: unknown }).source ?? '');
+      if (source === 'relation_context') {
+        return '关系上下文绑定';
+      }
+      if (source === 'name_fallback') {
+        return '名称 fallback';
+      }
+      if (source === 'explicit_condition') {
+        return '用户显式条件';
+      }
+      if (source === 'implicit_condition') {
+        return '隐式条件抽取';
+      }
+      return source;
+    })
+    .filter(Boolean);
+  if (!labels.length && typeof control.searchExtraction?.fallbackName === 'string') {
+    labels.push('名称 fallback');
+  }
+  if (!labels.length && Array.isArray(control.searchExtraction?.conditions) && control.searchExtraction.conditions.length) {
+    labels.push('用户显式条件');
+  }
+  return labels.length ? `过滤来源：${Array.from(new Set(labels)).join('、')}` : '过滤来源：无';
+}
+
+function summarizeTargetSanitization(input: Record<string, unknown>): string {
+  const control = input.agentControl && typeof input.agentControl === 'object'
+    ? input.agentControl as { targetSanitization?: { reasonCode?: unknown; ignoredTargetName?: unknown } }
+    : {};
+  const target = control.targetSanitization;
+  if (target?.reasonCode !== 'ignored_ungrounded_target') {
+    return '';
+  }
+  return `已忽略未落在用户输入中的 LLM target：${String(target.ignoredTargetName ?? '-')}`;
 }
 
 function buildAdminTraceUrl(adminBaseUrl: string, traceId: string) {

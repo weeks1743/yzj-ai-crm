@@ -503,6 +503,7 @@ function extractLabeledParamValue(query: string, paramKey: string, capability: R
     const escaped = escapeRegExp(label);
     const patterns = [
       new RegExp(`${escaped}\\s*(?:改成|改为|更新为|调整为|设置为|设为|变更为|变为|为|是|=|：|:)\\s*([^，。；;\\n]+)`),
+      new RegExp(`(?:更新|修改|变更|调整|设置|改)\\s*(?:这个|该|当前)?[^，。；;\\n]{0,12}?${escaped}\\s*[，,]\\s*([^，。；;\\n]+)`),
       new RegExp(`(?:更新|修改|变更|调整|设置|改|关联|绑定|选择)\\s*(?:这个|该|当前)?[^，。；;\\n]{0,12}?${escaped}\\s*(?:到|至|成|为)?\\s*([^，。；;\\n]+)`),
     ];
     for (const pattern of patterns) {

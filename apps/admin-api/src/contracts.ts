@@ -532,6 +532,8 @@ export interface AgentChatMessage {
         };
         sourceRunId?: string;
         evidenceRefs?: AgentEvidenceCard[];
+        usageMode?: 'used' | 'candidate_only' | 'skipped_collection_query' | 'none';
+        skipReasonCode?: string;
       } | null;
       semanticResolution?: {
         usedSemantic: boolean;
@@ -577,6 +579,8 @@ export interface AgentChatMessage {
         margin: number;
         embeddingProvider: string;
         targetWasOverridden: boolean;
+        usageMode?: 'used' | 'candidate_only' | 'skipped_collection_query' | 'none';
+        skipReasonCode?: string;
       } | null;
       toolArbitration?: {
         usedArbitration: boolean;
