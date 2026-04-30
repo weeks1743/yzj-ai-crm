@@ -458,11 +458,18 @@ function toGenericIntentFrame(
   const target = (() => {
     if (recordObject) {
       const contextSubject = contextFrame?.subject?.type === recordObject ? contextFrame.subject : null;
+      const recordTargetName = resolveRecordSubjectName({
+        query: request.query,
+        objectKey: recordObject,
+        targetName: legacyIntentFrame.targets[0]?.name,
+        fallbackName: contextSubject?.name || extractRecordName(request.query, recordObject),
+        capability: CRM_RECORD_CAPABILITIES[recordObject],
+      });
       return {
         kind: 'record' as const,
         objectType: recordObject,
         id: legacyIntentFrame.targets[0]?.id || contextSubject?.id,
-        name: legacyIntentFrame.targets[0]?.name || contextSubject?.name || extractRecordName(request.query, recordObject),
+        name: recordTargetName || undefined,
       };
     }
     if (legacyIntentFrame.targetType === 'artifact') {
@@ -875,8 +882,14 @@ function buildRecordToolInput(input: {
   resolvedContext?: AgentPlannerInput['resolvedContext'];
 }): Record<string, unknown> {
   const capability = input.tool?.recordCapability ?? CRM_RECORD_CAPABILITIES[input.objectKey as ShadowObjectKey];
-  const name = input.targetName || extractRecordName(input.query, input.objectKey);
   const identityField = capability.identityFields?.[0] ?? inferRecordNameParam(input.objectKey);
+  const name = resolveRecordSubjectName({
+    query: input.query,
+    objectKey: input.objectKey,
+    targetName: input.targetName,
+    fallbackName: extractRecordName(input.query, input.objectKey),
+    capability,
+  });
   const contextRecordId = resolveContextRecordFormInstId({
     objectKey: input.objectKey,
     contextFrame: input.contextFrame ?? null,
@@ -1560,8 +1573,20 @@ function cleanupRecordNameCandidate(value: string, objectKey: string): string {
 function isMeaningfulRecordNameCandidate(value: string, objectKey: string): boolean {
   const labels = getRecordObjectLabelPattern(objectKey);
   const scope = getRecordCollectionScopePattern();
+  const operation = getRecordOperationVerbPattern();
+  const quantity = getRecordQuantityWordPattern();
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (new RegExp(`^(?:${operation})\\s*(?:${quantity})?\\s*(?:${labels})?(?:信息|资料|数据|记录)?$`).test(trimmed)) {
+    return false;
+  }
+  if (new RegExp(`^(?:${quantity})?\\s*(?:${labels})(?:信息|资料|数据|记录)?$`).test(trimmed)) {
+    return false;
+  }
   const normalized = value
-    .replace(new RegExp(`^(?:查询|查一下|找一下|搜索|查看|打开)?(?:的)?(?:${labels})?$`), '')
+    .replace(new RegExp(`^(?:${operation})?\\s*(?:${quantity})?\\s*(?:的)?(?:${labels})?$`), '')
     .replace(new RegExp(`(?:\\s*的)?\\s*(?:${scope})?\\s*(?:${labels})(?:数据|列表|信息|资料)?$`), '')
     .replace(/(?:数据|列表|信息|资料|记录)$/, '')
     .replace(/^的$/, '')
@@ -1583,6 +1608,14 @@ function getRecordObjectLabelPattern(objectKey: string): string {
     return '跟进记录|拜访记录|跟进';
   }
   return '客户|公司';
+}
+
+function getRecordOperationVerbPattern(): string {
+  return '录入|创建|新增|新建|补录|写入|添加|建立|查询|查一下|找一下|搜索|查看|打开|修改|更新|改成|改为|变更|调整|设置|改';
+}
+
+function getRecordQuantityWordPattern(): string {
+  return '一个|一条|一位|一名|这?个|该|当前';
 }
 
 function isRecordCollectionScopeCandidate(value: string): boolean {
@@ -1649,7 +1682,12 @@ function buildRecordParams(
   },
 ): Record<string, unknown> {
   const subjectNameParam = capability.previewInputPolicy?.subjectNameParam ?? inferRecordNameParam(objectKey);
-  const normalizedName = trimValueBeforeKnownLabels(name, capability, subjectNameParam);
+  const normalizedName = normalizeRecordSubjectNameCandidate({
+    value: name,
+    objectKey,
+    capability,
+    subjectNameParam,
+  });
   const params: Record<string, unknown> = options.includeSubjectName && normalizedName ? { [subjectNameParam]: normalizedName } : {};
 
   for (const paramKey of capability.previewInputPolicy?.writableParams ?? []) {
@@ -1675,6 +1713,42 @@ function buildRecordParams(
   }
 
   return params;
+}
+
+function resolveRecordSubjectName(input: {
+  query: string;
+  objectKey: string;
+  targetName?: string;
+  fallbackName?: string;
+  capability: RecordToolCapability;
+}): string {
+  const subjectNameParam = input.capability.previewInputPolicy?.subjectNameParam ?? inferRecordNameParam(input.objectKey);
+  const targetName = normalizeRecordSubjectNameCandidate({
+    value: input.targetName ?? '',
+    objectKey: input.objectKey,
+    capability: input.capability,
+    subjectNameParam,
+  });
+  if (targetName) {
+    return targetName;
+  }
+  return normalizeRecordSubjectNameCandidate({
+    value: input.fallbackName ?? extractRecordName(input.query, input.objectKey),
+    objectKey: input.objectKey,
+    capability: input.capability,
+    subjectNameParam,
+  });
+}
+
+function normalizeRecordSubjectNameCandidate(input: {
+  value: string;
+  objectKey: string;
+  capability: RecordToolCapability;
+  subjectNameParam: string;
+}): string {
+  const trimmed = trimValueBeforeKnownLabels(input.value, input.capability, input.subjectNameParam);
+  const cleaned = cleanupCompanyName(trimmed);
+  return isMeaningfulRecordNameCandidate(cleaned, input.objectKey) ? cleaned : '';
 }
 
 function extractRecordWriteParamsFromQuery(input: {
@@ -1872,6 +1946,7 @@ function trimValueBeforeKnownLabels(
   }
   const labelPattern = labels.join('|');
   return normalized
+    .replace(new RegExp(`^(?:${labelPattern})\\s*(?:为|是|=|：|:).*$`), '')
     .replace(new RegExp(`\\s+(?:${labelPattern})\\s*(?:为|是|=|：|:).*$`), '')
     .trim();
 }
@@ -1906,7 +1981,8 @@ function extractRecordName(query: string, objectKey: string): string {
         : '客户|公司';
   const pattern = new RegExp(`(?:录入|创建|新增|新建|补录|查询|查一下|找一下|搜索)?(?:一个|这?个)?(?:${labels})?[，,：:\\s]*([^，。！？\\n]+)`);
   const matched = withoutSlash.match(pattern)?.[1] ?? '';
-  return cleanupCompanyName(matched) || cleanupCompanyName(withoutSlash);
+  const candidate = cleanupCompanyName(matched) || cleanupCompanyName(withoutSlash);
+  return isMeaningfulRecordNameCandidate(candidate, objectKey) ? candidate : '';
 }
 
 function extractFormInstId(query: string): string | undefined {

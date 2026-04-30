@@ -2064,6 +2064,56 @@ test('Agent runtime surfaces missing required record fields with user-readable l
   assert.equal(response.message.extraInfo.agentTrace.pendingConfirmation, null);
 });
 
+test('Agent runtime does not treat create command text as customer name', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let searchCount = 0;
+  let previewParams: Record<string, unknown> | null = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '新增客户'),
+    shadowMetadataService: {
+      executeSearch: async () => {
+        searchCount += 1;
+        return { records: [] };
+      },
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewParams = input.params;
+        return {
+          objectKey: 'customer',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: ['customer_name', 'contact_name'],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: false,
+          requestBody: { formCodeId: 'customer-form', data: [{ widgetValue: {} }] },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-create-command-is-not-name',
+    sceneKey: 'chat',
+    query: '新增客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.preview_create');
+  assert.deepEqual(previewParams, {});
+  assert.equal(searchCount, 0);
+  assert.doesNotMatch(response.message.content, /客户名称：新增客户/);
+  assert.match(response.message.content, /客户名称/);
+  assert.equal(response.message.extraInfo.agentTrace.pendingConfirmation, null);
+});
+
 test('Agent runtime returns Meta Question Card with field options for missing enum fields', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const { service } = createAgentTestService({
@@ -3117,7 +3167,7 @@ test('Agent runtime requires selecting basicDataWidget candidates before followu
   const waiting = await service.chat({
     conversationKey: 'conv-followup-reference-selection',
     sceneKey: 'chat',
-    query: '新增跟进记录',
+    query: '新增跟进记录 已电话沟通',
     tenantContext: { operatorOpenId: 'operator-001' },
   });
   const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
@@ -3163,6 +3213,7 @@ test('Agent runtime requires selecting basicDataWidget candidates before followu
   assert.equal(previewCallCount, 2);
   assert.equal(previewInput.params.linked_customer_form_inst_id, 'customer-ah-001');
   assert.equal(previewInput.params.owner_open_id.open_id, 'open-followup-owner');
+  assert.equal(previewInput.params.followup_record, '已电话沟通');
 });
 
 test('Agent runtime resumes persisted followup question card without parsing option descriptions as search', async () => {
