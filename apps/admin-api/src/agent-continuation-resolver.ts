@@ -404,6 +404,16 @@ function mergeContinuationInput(input: {
   const params = cloneRecord(readObject(baseInput.params));
 
   if (capability) {
+    const questionParams = new Set(
+      input.pending.questionCard?.questions
+        .map((question) => question.paramKey)
+        .filter(Boolean) ?? [],
+    );
+    const answeredParams = new Set(
+      Object.entries(input.answers ?? {})
+        .filter(([, value]) => !isEmptyAnswer(value))
+        .map(([paramKey]) => paramKey),
+    );
     mergeStructuredAnswers({
       params,
       answers: input.answers ?? {},
@@ -413,7 +423,7 @@ function mergeContinuationInput(input: {
 
     for (const paramKey of capability.previewInputPolicy?.writableParams ?? []) {
       const value = extractLabeledParamValue(input.request.query, paramKey, capability);
-      if (value !== undefined && !hasMeaningfulValue(params[paramKey])) {
+      if (value !== undefined && (!hasMeaningfulValue(params[paramKey]) || (questionParams.has(paramKey) && !answeredParams.has(paramKey)))) {
         params[paramKey] = value;
       }
     }
@@ -476,7 +486,7 @@ function startNewTask(
 }
 
 function isExplicitTaskSwitch(query: string): boolean {
-  return /(先查|查一下|查询|搜索|找一下|打开|详情|先看|帮我查|帮我搜|先研究|研究这家公司|分析这家公司|有什么风险|值得关注|最近有什么|新增|新建|创建|录入|写入)/.test(query);
+  return /(先查|查一下|查询|查客户|查联系人|查商机|查跟进|搜索|找一下|打开|详情|先看|帮我查|帮我搜|先研究|研究这家公司|分析这家公司|有什么风险|值得关注|最近有什么|新增|新建|创建|录入|写入)/.test(query);
 }
 
 function extractLabeledParamValue(query: string, paramKey: string, capability: RecordToolCapability): string | undefined {
@@ -491,9 +501,15 @@ function extractLabeledParamValue(query: string, paramKey: string, capability: R
 
   for (const label of labels) {
     const escaped = escapeRegExp(label);
-    const matched = query.match(new RegExp(`${escaped}\\s*(?:为|是|=|：|:)\\s*([^，。；;\\n]+)`));
-    if (matched?.[1]?.trim()) {
-      return trimContinuationValue(matched[1]);
+    const patterns = [
+      new RegExp(`${escaped}\\s*(?:改成|改为|更新为|调整为|设置为|设为|变更为|变为|为|是|=|：|:)\\s*([^，。；;\\n]+)`),
+      new RegExp(`(?:更新|修改|变更|调整|设置|改|关联|绑定|选择)\\s*(?:这个|该|当前)?[^，。；;\\n]{0,12}?${escaped}\\s*(?:到|至|成|为)?\\s*([^，。；;\\n]+)`),
+    ];
+    for (const pattern of patterns) {
+      const matched = query.match(pattern);
+      if (matched?.[1]?.trim()) {
+        return trimContinuationValue(matched[1]);
+      }
     }
   }
 
@@ -521,6 +537,13 @@ function buildLabelVariants(label?: string): string[] {
     label.includes('手机') ? '手机' : '',
     label.includes('手机') || label.includes('电话') ? '电话' : '',
     label.includes('手机') || label.includes('电话') ? '手机号' : '',
+    label.includes('客户') ? '客户信息' : '',
+    label.includes('客户') ? '客户名称' : '',
+    label.includes('客户') ? '客户编号' : '',
+    label.includes('客户') ? '绑定客户' : '',
+    label.includes('客户') ? '选择客户' : '',
+    label.includes('联系人') ? '联系人信息' : '',
+    label.includes('商机') ? '商机信息' : '',
   ].filter((item) => item && item !== label);
 }
 

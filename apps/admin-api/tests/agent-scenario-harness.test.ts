@@ -13,6 +13,7 @@ import type {
   ShadowObjectKey,
   ShadowPreviewResponse,
   ShadowPreviewUpsertInput,
+  ShadowStandardizedField,
 } from '../src/contracts.js';
 
 const TEST_OPERATOR_OPEN_ID = '69e75eb5e4b0e65b61c014da';
@@ -59,6 +60,14 @@ interface LoggedCall {
   input?: unknown;
 }
 
+const CRM_OBJECT_KEYS: ShadowObjectKey[] = ['customer', 'contact', 'opportunity', 'followup'];
+const recordObjectTitles: Record<ShadowObjectKey, string> = {
+  customer: '客户',
+  contact: '联系人',
+  opportunity: '商机',
+  followup: '商机跟进记录',
+};
+
 class AgentScenarioHarness {
   readonly repository = new AgentRunRepository(createInMemoryDatabase());
   readonly calls: LoggedCall[] = [];
@@ -81,7 +90,10 @@ class AgentScenarioHarness {
         },
         executeGet: async (objectKey: ShadowObjectKey, input: unknown) => {
           this.calls.push({ tool: `record.${objectKey}.get`, objectKey, input });
-          return { record: null };
+          const formInstId = typeof (input as { formInstId?: unknown })?.formInstId === 'string'
+            ? (input as { formInstId: string }).formInstId
+            : `${objectKey}-form-inst-001`;
+          return { record: recordFixture(objectKey, formInstId, `${recordObjectTitles[objectKey]}样例`) };
         },
         previewUpsert: async (objectKey: ShadowObjectKey, input: ShadowPreviewUpsertInput) => {
           const mode = input.mode === 'update' ? 'update' : 'create';
@@ -100,6 +112,17 @@ class AgentScenarioHarness {
             formInstIds: [`${objectKey}-form-inst-001`],
           };
         },
+        getObject: (objectKey: ShadowObjectKey) => ({
+          objectKey,
+          formCodeId: `${objectKey}-form`,
+          title: recordObjectTitles[objectKey],
+          fields: harnessRecordFields[objectKey],
+        }),
+        listObjects: () => CRM_OBJECT_KEYS.map((objectKey) => ({
+          objectKey,
+          formCodeId: `${objectKey}-form`,
+          title: recordObjectTitles[objectKey],
+        })),
       } as any,
       externalSkillService: {
         createSkillJob: async () => {
@@ -219,7 +242,7 @@ function assertTurnExpectation(
   const label = `${scenario.id} turn ${turnIndex + 1}`;
   const trace = response.message.extraInfo.agentTrace;
   if (turn.expect.status) {
-    assert.equal(response.executionState.status, turn.expect.status, `${label}: status`);
+    assert.equal(response.executionState.status, turn.expect.status, `${label}: status\n${response.message.content}`);
   }
   if (turn.expect.selectedTool) {
     assert.equal(trace.selectedTool?.toolCode, turn.expect.selectedTool, `${label}: selected tool`);
@@ -270,6 +293,101 @@ const fullFollowupInput = [
   '客户编号：customer-form-inst-001',
   `跟进负责人：${TEST_OPERATOR_OPEN_ID}`,
 ].join(' ');
+
+function createHarnessField(input: Partial<ShadowStandardizedField> & {
+  fieldCode: string;
+  label: string;
+  widgetType: string;
+}): ShadowStandardizedField {
+  return {
+    fieldCode: input.fieldCode,
+    label: input.label,
+    widgetType: input.widgetType,
+    required: input.required ?? false,
+    readOnly: input.readOnly ?? false,
+    edit: input.edit ?? true,
+    view: input.view ?? true,
+    writePolicy: input.writePolicy ?? 'promptable',
+    isSystemField: input.isSystemField ?? false,
+    provenance: input.provenance ?? { sources: ['public_view_form_def'], truthSource: 'public_view_form_def' },
+    multi: input.multi ?? false,
+    options: input.options ?? [],
+    ...(input.writeParameterKey ? { writeParameterKey: input.writeParameterKey } : {}),
+    ...(input.searchParameterKey ? { searchParameterKey: input.searchParameterKey } : {}),
+    ...(input.semanticSlot ? { semanticSlot: input.semanticSlot } : {}),
+    ...(input.relationBinding ? { relationBinding: input.relationBinding } : {}),
+  };
+}
+
+const harnessRecordFields: Record<ShadowObjectKey, ShadowStandardizedField[]> = {
+  customer: [
+    createHarnessField({ fieldCode: '_S_NAME', label: '客户名称', widgetType: 'textWidget', writeParameterKey: 'customer_name', searchParameterKey: 'customer_name', semanticSlot: 'customer_name' }),
+    createHarnessField({ fieldCode: 'Te_5', label: '联系人姓名', widgetType: 'textWidget', writeParameterKey: 'contact_name' }),
+    createHarnessField({ fieldCode: 'Nu_1', label: '联系人手机', widgetType: 'numberWidget', writeParameterKey: 'contact_phone' }),
+    createHarnessField({ fieldCode: '_S_DISABLE', label: '启用状态', widgetType: 'switchWidget', writeParameterKey: 'enabled_state', options: [{ title: '启用', key: '1', value: '启用' }, { title: '停用', key: '0', value: '停用' }] }),
+    createHarnessField({ fieldCode: 'Ra_3', label: '客户类型', widgetType: 'radioWidget', writeParameterKey: 'customer_type', options: [{ title: '直客', key: 'direct', value: '直客' }, { title: '普通客户', key: 'normal', value: '普通客户' }, { title: 'VIP客户', key: 'vip', value: 'VIP客户' }] }),
+    createHarnessField({ fieldCode: 'Ra_0', label: '客户状态', widgetType: 'radioWidget', writeParameterKey: 'customer_status', options: [{ title: '意向', key: 'intent', value: '意向' }, { title: '销售线索阶段', key: 'lead', value: '销售线索阶段' }, { title: '成交', key: 'won', value: '成交' }] }),
+    createHarnessField({ fieldCode: 'Ra_1', label: '客户是否分配', widgetType: 'radioWidget', writeParameterKey: 'Ra_1', options: [{ title: '是', key: 'yes', value: '是' }, { title: '已分配', key: 'assigned', value: '已分配' }] }),
+    createHarnessField({ fieldCode: 'Pw_0', label: '省', widgetType: 'publicOptBoxWidget', writeParameterKey: 'province', searchParameterKey: 'province', semanticSlot: 'province', options: [{ title: '安徽', dicId: 'ah' }, { title: '江苏', dicId: 'js' }, { title: '浙江', dicId: 'zj' }] }),
+    createHarnessField({ fieldCode: 'Ps_0', label: '负责人', widgetType: 'personSelectWidget', writeParameterKey: 'owner_open_id' }),
+  ],
+  contact: [
+    createHarnessField({ fieldCode: '_S_NAME', label: '联系人姓名', widgetType: 'textWidget', writeParameterKey: 'contact_name' }),
+    createHarnessField({ fieldCode: 'Nu_0', label: '手机', widgetType: 'numberWidget', writeParameterKey: 'mobile_phone' }),
+    createHarnessField({ fieldCode: '_S_DISABLE', label: '启用状态', widgetType: 'switchWidget', writeParameterKey: 'enabled_state', options: [{ title: '启用', key: '1', value: '启用' }] }),
+    createHarnessField({
+      fieldCode: 'Bd_0',
+      label: '选择客户',
+      widgetType: 'basicDataWidget',
+      writeParameterKey: 'linked_customer_form_inst_id',
+      semanticSlot: 'linked_customer_form_inst_id',
+      relationBinding: { kind: 'basic_data', formCodeId: 'customer-form', modelName: '客户', displayCol: '_S_NAME' },
+    }),
+    createHarnessField({ fieldCode: 'Pw_0', label: '省', widgetType: 'publicOptBoxWidget', writeParameterKey: 'province', semanticSlot: 'province', options: [{ title: '安徽', dicId: 'ah' }, { title: '江苏', dicId: 'js' }] }),
+    createHarnessField({ fieldCode: 'Pw_1', label: '市', widgetType: 'publicOptBoxWidget', writeParameterKey: 'city', semanticSlot: 'city', options: [{ title: '苏州', dicId: 'sz' }] }),
+    createHarnessField({ fieldCode: 'Nu_1', label: '办公电话', widgetType: 'numberWidget', writeParameterKey: 'office_phone' }),
+  ],
+  opportunity: [
+    createHarnessField({ fieldCode: 'Te_0', label: '商机名称', widgetType: 'textWidget', writeParameterKey: 'opportunity_name' }),
+    createHarnessField({
+      fieldCode: 'Bd_0',
+      label: '关联客户',
+      widgetType: 'basicDataWidget',
+      writeParameterKey: 'linked_customer_form_inst_id',
+      relationBinding: { kind: 'basic_data', formCodeId: 'customer-form', modelName: '客户', displayCol: '_S_NAME' },
+    }),
+    createHarnessField({
+      fieldCode: 'Bd_1',
+      label: '关联联系人',
+      widgetType: 'basicDataWidget',
+      writeParameterKey: 'linked_contact_form_inst_id',
+      relationBinding: { kind: 'basic_data', formCodeId: 'contact-form', modelName: '联系人', displayCol: '_S_NAME' },
+    }),
+    createHarnessField({ fieldCode: 'Ra_0', label: '销售阶段', widgetType: 'radioWidget', writeParameterKey: 'sales_stage', options: [{ title: '初步沟通', key: 'initial', value: '初步沟通' }, { title: '方案报价', key: 'quote', value: '方案报价' }, { title: '商务谈判', key: 'business', value: '商务谈判' }] }),
+    createHarnessField({ fieldCode: 'Da_0', label: '预计成交时间', widgetType: 'dateWidget', writeParameterKey: 'expected_close_date' }),
+    createHarnessField({ fieldCode: 'Mo_0', label: '商机预算（元）', widgetType: 'moneyWidget', writeParameterKey: 'opportunity_budget' }),
+    createHarnessField({ fieldCode: 'Ps_0', label: '负责人', widgetType: 'personSelectWidget', writeParameterKey: 'owner_open_id' }),
+  ],
+  followup: [
+    createHarnessField({ fieldCode: 'Ta_0', label: '跟进记录', widgetType: 'textAreaWidget', writeParameterKey: 'followup_record' }),
+    createHarnessField({ fieldCode: 'Ra_1', label: '跟进方式', widgetType: 'radioWidget', writeParameterKey: 'followup_method', options: [{ title: '电话', key: 'phone', value: '电话' }, { title: '拜访', key: 'visit', value: '拜访' }, { title: '微信', key: 'wechat', value: '微信' }] }),
+    createHarnessField({
+      fieldCode: 'Bd_0',
+      label: '关联客户',
+      widgetType: 'basicDataWidget',
+      writeParameterKey: 'linked_customer_form_inst_id',
+      relationBinding: { kind: 'basic_data', formCodeId: 'customer-form', modelName: '客户', displayCol: '_S_NAME' },
+    }),
+    createHarnessField({
+      fieldCode: 'Bd_3',
+      label: '关联商机',
+      widgetType: 'basicDataWidget',
+      writeParameterKey: 'linked_opportunity_form_inst_id',
+      relationBinding: { kind: 'basic_data', formCodeId: 'opportunity-form', modelName: '商机', displayCol: '_S_NAME' },
+    }),
+    createHarnessField({ fieldCode: 'Ps_0', label: '跟进负责人', widgetType: 'personSelectWidget', writeParameterKey: 'owner_open_id' }),
+  ],
+};
 
 const scenarios: AgentScenario[] = [
   {
@@ -908,9 +1026,414 @@ test('Agent scenario harness runs 20 complex sales scenarios', async () => {
   await runAgentScenarios(complexScenarios);
 });
 
+function recordFixture(objectKey: ShadowObjectKey, formInstId: string, title: string) {
+  const titleLabel = objectKey === 'customer'
+    ? '客户名称'
+    : objectKey === 'contact'
+      ? '联系人姓名'
+      : objectKey === 'opportunity'
+        ? '商机名称'
+        : '跟进记录';
+  return {
+    formInstId,
+    fields: [
+      { title: titleLabel, value: title, rawValue: title },
+      { title: '标题', value: title, rawValue: title },
+    ],
+    rawRecord: {
+      _S_TITLE: title,
+      _S_NAME: title,
+    },
+  };
+}
+
+const suzhouCustomerInput = [
+  '联系人姓名：周敏',
+  '联系人手机：13612952001',
+  '启用状态：启用',
+  '客户类型：直客',
+  '客户状态：意向',
+  '客户是否分配：是',
+].join(' ');
+const suzhouOpportunityInput = [
+  '客户编号：customer-form-inst-001',
+  '销售阶段：初步沟通',
+  '预计成交时间：2026-06-30',
+  '商机预算（元）：260000',
+].join(' ');
+const suzhouFollowupInput = [
+  '跟进方式：电话',
+  '客户编号：customer-form-inst-001',
+  `跟进负责人：${TEST_OPERATOR_OPEN_ID}`,
+].join(' ');
+
+const suzhouSalesHabitScenarios: AgentScenario[] = [
+  {
+    id: '41-suzhou-1t-search-customer',
+    title: '1轮：查客户',
+    turns: [{ query: '查客户 苏州恒达机电有限公司', expect: { status: 'completed', selectedTool: 'record.customer.search' } }],
+  },
+  {
+    id: '42-suzhou-1t-fast-contact',
+    title: '1轮：快速新增联系人',
+    turns: [{ query: '新增联系人 陈燕 手机：13612952011 启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create' } }],
+  },
+  {
+    id: '43-suzhou-1t-followup',
+    title: '1轮：一次性补拜访记录',
+    turns: [{ query: `新增拜访记录 今天电话沟通ERP升级，客户让下周带方案 跟进方式：电话 客户编号：customer-form-inst-001 跟进负责人：${TEST_OPERATOR_OPEN_ID}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create' } }],
+  },
+  {
+    id: '44-suzhou-2t-customer-fill',
+    title: '2轮：客户先记后补',
+    turns: [
+      { query: '新增客户 苏州恒达机电有限公司', expect: { status: 'waiting_input', selectedTool: 'record.customer.preview_create' } },
+      { query: suzhouCustomerInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create', continuationAction: 'resume_pending_interaction' } },
+    ],
+  },
+  {
+    id: '45-suzhou-2t-opportunity-fill',
+    title: '2轮：商机先记后补',
+    turns: [
+      { query: '新增商机 苏州ERP升级项目', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create' } },
+      { query: suzhouOpportunityInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create', continuationAction: 'resume_pending_interaction' } },
+    ],
+  },
+  {
+    id: '46-suzhou-2t-research-followup',
+    title: '2轮：研究后追问',
+    turns: [
+      { query: '研究这家公司 苏州恒达机电有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      { query: '这个客户最近有什么值得关注', expect: { status: 'completed', selectedTool: 'artifact.search' } },
+    ],
+  },
+  {
+    id: '47-suzhou-3t-contact-approve',
+    title: '3轮：联系人补字段并确认',
+    turns: [
+      { query: '新增联系人 王丽 手机：13612952012', expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_create' } },
+      { query: '启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create', continuationAction: 'confirm_writeback' } },
+    ],
+  },
+  {
+    id: '48-suzhou-3t-duplicate-update',
+    title: '3轮：查重后更新已有',
+    turns: [
+      { query: `新增客户 苏州恒达机电有限公司 ${suzhouCustomerInput}`, mock: { searchRecords: [recordFixture('customer', 'customer-existing-001', '苏州恒达机电有限公司')] }, expect: { status: 'waiting_selection', selectedTool: 'record.customer.preview_create' } },
+      { query: '更新已有 formInstId:customer-existing-001', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update', continuationAction: 'select_candidate' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update', continuationAction: 'confirm_writeback' } },
+    ],
+  },
+  {
+    id: '49-suzhou-3t-search-update-current',
+    title: '3轮：查客户后更新该客户',
+    turns: [
+      { query: '查客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-c1-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '把这个客户状态改成意向', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update', assert: (_response, harness) => {
+        const call = harness.calls.findLast((item) => item.tool === 'record.customer.preview_update');
+        assert.equal((call?.input as ShadowPreviewUpsertInput | undefined)?.formInstId, 'customer-c1-001');
+      } } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+    ],
+  },
+  {
+    id: '50-suzhou-4t-research-create-customer',
+    title: '4轮：研究后录入客户',
+    turns: [
+      { query: '研究这家公司 苏州恒达机电有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      { query: '录入这个客户', expect: { status: 'waiting_input', selectedTool: 'record.customer.preview_create' } },
+      { query: suzhouCustomerInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+    ],
+  },
+  {
+    id: '51-suzhou-4t-opportunity-two-supplements',
+    title: '4轮：商机分两次补字段',
+    turns: [
+      { query: '新增项目 苏州恒达ERP升级', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create' } },
+      { query: '客户编号：customer-form-inst-001 销售阶段：初步沟通', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '预计成交时间：2026-06-30 商机预算（元）：260000', expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+    ],
+  },
+  {
+    id: '52-suzhou-4t-followup-two-supplements',
+    title: '4轮：拜访记录分两次补字段',
+    turns: [
+      { query: '新增拜访记录 今天和老板聊了ERP升级', expect: { status: 'waiting_input', selectedTool: 'record.followup.preview_create' } },
+      { query: '客户编号：customer-form-inst-001 跟进方式：拜访', expect: { status: 'waiting_input', selectedTool: 'record.followup.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: `跟进负责人：${TEST_OPERATOR_OPEN_ID}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.followup.commit_create' } },
+    ],
+  },
+  {
+    id: '53-suzhou-5t-a-b-context-switch',
+    title: '5轮：A/B 客户记忆切换',
+    turns: [
+      { query: '查客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-a-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '客户状态改为意向', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+      { query: '查客户 苏州明纬自动化有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-b-001', '苏州明纬自动化有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '把这个客户状态改成成交', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update', assert: (_response, harness) => {
+        const call = harness.calls.findLast((item) => item.tool === 'record.customer.preview_update');
+        assert.equal((call?.input as ShadowPreviewUpsertInput | undefined)?.formInstId, 'customer-b-001');
+      } } },
+    ],
+  },
+  {
+    id: '54-suzhou-5t-duplicate-create-new-contact',
+    title: '5轮：查重仍新建后补联系人',
+    turns: [
+      { query: `新增客户 苏州恒达机电有限公司 ${suzhouCustomerInput}`, mock: { searchRecords: [recordFixture('customer', 'customer-existing-001', '苏州恒达机电有限公司')] }, expect: { status: 'waiting_selection', selectedTool: 'record.customer.preview_create' } },
+      { query: '仍要新建一条', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create', continuationAction: 'select_candidate' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+      { query: '查询这个客户的联系人', expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '新增联系人 赵强 手机：13612952013 启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create' } },
+    ],
+  },
+  {
+    id: '55-suzhou-5t-research-to-opportunity',
+    title: '5轮：研究转商机',
+    turns: [
+      { query: '研究这家公司 苏州恒达机电有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      { query: '这个客户有什么风险', expect: { status: 'completed', selectedTool: 'artifact.search' } },
+      { query: '新增这个客户的商机 苏州恒达ERP升级', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create' } },
+      { query: suzhouOpportunityInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+    ],
+  },
+  {
+    id: '56-suzhou-6t-customer-contact-loop',
+    title: '6轮：客户到联系人闭环',
+    turns: [
+      { query: `新增客户 苏州恒达机电有限公司 ${suzhouCustomerInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+      { query: '新增联系人 王工 手机：13612952014', expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_create' } },
+      { query: '启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create' } },
+      { query: '查询联系人 王工', expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+    ],
+  },
+  {
+    id: '57-suzhou-6t-customer-opportunity-loop',
+    title: '6轮：客户到商机闭环',
+    turns: [
+      { query: '查客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-c1-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '新增这个客户的商机 苏州MES升级项目', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create' } },
+      { query: suzhouOpportunityInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+      { query: '查询商机 苏州MES升级项目', mock: { searchRecords: [recordFixture('opportunity', 'opportunity-c1-001', '苏州MES升级项目')] }, expect: { status: 'completed', selectedTool: 'record.opportunity.search' } },
+      { query: '销售阶段改为方案报价', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_update' } },
+    ],
+  },
+  {
+    id: '58-suzhou-6t-followup-interrupted-search',
+    title: '6轮：拜访中途查客户',
+    turns: [
+      { query: '新增拜访记录 今天上午回访，客户要报价', expect: { status: 'waiting_input', selectedTool: 'record.followup.preview_create' } },
+      { query: '先查客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-c1-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search', continuationAction: 'start_new_task' } },
+      { query: `新增拜访记录 今天上午回访，客户要报价 ${suzhouFollowupInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.followup.commit_create' } },
+      { query: '查询这个客户的跟进记录', expect: { status: 'completed', selectedTool: 'record.followup.search' } },
+      { query: '基于这个客户旅程，给出下一步推进建议', expect: { status: 'completed', selectedTool: 'meta.context_summary' } },
+    ],
+  },
+  {
+    id: '59-suzhou-7t-new-customer-chain',
+    title: '7轮：新客完整销售链',
+    turns: [
+      { query: `新增客户 苏州恒达机电有限公司 ${suzhouCustomerInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+      { query: '新增联系人 刘总 手机：13612952015 启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create' } },
+      { query: `新增商机 苏州恒达ERP升级 ${suzhouOpportunityInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+      { query: `新增拜访记录 初次拜访确认预算窗口 ${suzhouFollowupInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create' } },
+    ],
+  },
+  {
+    id: '60-suzhou-7t-duplicate-then-contact-update',
+    title: '7轮：重复客户后补联系人',
+    turns: [
+      { query: `新增客户 苏州恒达机电有限公司 ${suzhouCustomerInput}`, mock: { searchRecords: [recordFixture('customer', 'customer-existing-001', '苏州恒达机电有限公司')] }, expect: { status: 'waiting_selection', selectedTool: 'record.customer.preview_create' } },
+      { query: '更新已有 formInstId:customer-existing-001', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+      { query: '新增联系人 赵强 手机：13612952016 启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create' } },
+      { query: '查询联系人 赵强', mock: { searchRecords: [recordFixture('contact', 'contact-zq-001', '赵强')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '更新联系人 formInstId:contact-zq-001 办公电话：051266688888', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update' } },
+    ],
+  },
+  {
+    id: '61-suzhou-7t-research-next-step',
+    title: '7轮：研究到下一步建议',
+    turns: [
+      { query: '研究这家公司 苏州恒达机电有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      { query: '这个客户有什么风险', expect: { status: 'completed', selectedTool: 'artifact.search' } },
+      { query: `新增商机 苏州恒达ERP升级 ${suzhouOpportunityInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+      { query: `新增拜访记录 已沟通风险和预算 ${suzhouFollowupInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.followup.commit_create' } },
+      { query: '基于这个客户旅程，给出下一步推进建议', expect: { status: 'completed', selectedTool: 'meta.context_summary' } },
+    ],
+  },
+  {
+    id: '62-suzhou-8t-multi-customer-context',
+    title: '8轮：多客户上下文回切',
+    turns: [
+      { query: '查客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-a-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '客户状态改为意向', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+      { query: '查客户 苏州明纬自动化有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-b-001', '苏州明纬自动化有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '客户状态改为成交', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+      { query: '查客户 苏州恒达机电有限公司的联系人', mock: { searchRecords: [recordFixture('contact', 'contact-a-001', '周敏')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '查客户 苏州明纬自动化有限公司的商机', mock: { searchRecords: [recordFixture('opportunity', 'opportunity-b-001', '明纬WMS项目')] }, expect: { status: 'completed', selectedTool: 'record.opportunity.search' } },
+    ],
+  },
+  {
+    id: '63-suzhou-8t-mobile-fragmented-input',
+    title: '8轮：移动端碎片录入',
+    turns: [
+      { query: '新增客户 苏州路上先记一下智能装备有限公司', expect: { status: 'waiting_input', selectedTool: 'record.customer.preview_create' } },
+      { query: '联系人姓名：陆敏', expect: { status: 'waiting_input', selectedTool: 'record.customer.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '联系人手机：13612952017', expect: { status: 'waiting_input', selectedTool: 'record.customer.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '启用状态：启用 客户类型：直客 客户状态：意向 客户是否分配：是', expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+      { query: '新增商机 苏州智能装备ERP升级', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create' } },
+      { query: suzhouOpportunityInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+    ],
+  },
+  {
+    id: '64-suzhou-8t-duplicate-new-full-chain',
+    title: '8轮：查重后新建全链路',
+    turns: [
+      { query: `新增客户 苏州恒达机电有限公司 ${suzhouCustomerInput}`, mock: { searchRecords: [recordFixture('customer', 'customer-existing-001', '苏州恒达机电有限公司')] }, expect: { status: 'waiting_selection', selectedTool: 'record.customer.preview_create' } },
+      { query: '仍要新建一条', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+      { query: '新增联系人 钱经理 手机：13612952018 启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create' } },
+      { query: '新增拜访记录 下午回访确认报价口径', expect: { status: 'waiting_input', selectedTool: 'record.followup.preview_create' } },
+      { query: suzhouFollowupInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.followup.commit_create' } },
+    ],
+  },
+  {
+    id: '65-suzhou-9t-morning-push',
+    title: '9轮：早会客户推进',
+    turns: [
+      { query: '研究这家公司 苏州恒达机电有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      { query: '查客户 苏州恒达机电有限公司', expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: `新增客户 苏州恒达机电有限公司 ${suzhouCustomerInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+      { query: '新增联系人 周总 手机：13612952019 启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create' } },
+      { query: `新增商机 苏州恒达ERP升级 ${suzhouOpportunityInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+      { query: '列出这个客户的客户旅程', expect: { status: 'completed', selectedTool: 'meta.context_summary' } },
+    ],
+  },
+  {
+    id: '66-suzhou-9t-opportunity-insert-customer-update',
+    title: '9轮：商机录入中插入客户更新',
+    turns: [
+      { query: '新增商机 苏州恒达WMS项目', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create' } },
+      { query: '先查客户 苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-c1-001', '苏州恒达机电有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search', continuationAction: 'start_new_task' } },
+      { query: '客户状态改为意向', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+      { query: `新增商机 苏州恒达WMS项目 ${suzhouOpportunityInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+      { query: '新增拜访记录 和客户确认WMS预算', expect: { status: 'waiting_input', selectedTool: 'record.followup.preview_create' } },
+      { query: suzhouFollowupInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create' } },
+      { query: '查询这个客户的跟进记录', expect: { status: 'completed', selectedTool: 'record.followup.search' } },
+    ],
+  },
+  {
+    id: '67-suzhou-9t-contact-link-customer',
+    title: '9轮：联系人关联客户',
+    turns: [
+      { query: '新增联系人 李玲玲 手机：13612952020', expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_create' } },
+      { query: '启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create' } },
+      { query: '查联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '将这个联系人的客户信息更新为苏州恒达机电有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-c1-001', '苏州恒达机电有限公司')] }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', assert: (response) => {
+        const params = response.message.extraInfo.agentTrace.selectedTool?.input?.params as Record<string, unknown>;
+        assert.equal(params.linked_customer_form_inst_id, '苏州恒达机电有限公司');
+        assert.equal(params.province, undefined);
+      } } },
+      { query: '关联客户：customer-c1-001', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+      { query: '查联系人 李玲玲', expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '查询苏州恒达机电有限公司客户', expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+    ],
+  },
+  {
+    id: '68-suzhou-10t-day-work-loop',
+    title: '10轮：一天工作闭环',
+    turns: [
+      { query: '研究这家公司 苏州恒达机电有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      { query: `新增客户 苏州恒达机电有限公司 ${suzhouCustomerInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+      { query: '新增联系人 刘总 手机：13612952021 启用状态：启用', expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_create' } },
+      { query: `新增商机 苏州恒达数字化经营项目 ${suzhouOpportunityInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+      { query: `新增拜访记录 完成首次拜访并约下周演示 ${suzhouFollowupInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.followup.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.followup.commit_create' } },
+      { query: '查这个客户的客户旅程', expect: { status: 'completed', selectedTool: 'meta.context_summary' } },
+    ],
+  },
+  {
+    id: '69-suzhou-10t-multi-switch-isolation',
+    title: '10轮：录入中多次切任务',
+    turns: [
+      { query: '新增客户 苏州待补信息科技有限公司', expect: { status: 'waiting_input', selectedTool: 'record.customer.preview_create' } },
+      { query: '查客户 苏州明纬自动化有限公司', mock: { searchRecords: [recordFixture('customer', 'customer-b-001', '苏州明纬自动化有限公司')] }, expect: { status: 'completed', selectedTool: 'record.customer.search', continuationAction: 'start_new_task' } },
+      { query: '客户状态改为意向', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+      { query: `新增客户 苏州待补信息科技有限公司 ${suzhouCustomerInput}`, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_create' } },
+      { query: '新增商机 苏州待补ERP项目', expect: { status: 'waiting_input', selectedTool: 'record.opportunity.preview_create' } },
+      { query: suzhouOpportunityInput, expect: { status: 'waiting_confirmation', selectedTool: 'record.opportunity.preview_create' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.opportunity.commit_create' } },
+      { query: '查询商机 苏州待补ERP项目', expect: { status: 'completed', selectedTool: 'record.opportunity.search' } },
+    ],
+  },
+  {
+    id: '70-suzhou-10t-anhui-link-regression',
+    title: '10轮：安徽关联回归',
+    turns: [
+      { query: '查联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-lilingling-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
+      { query: '关联安徽的客户', mock: { searchRecords: [] }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', pendingInteractionKind: 'input_required', assert: (response) => {
+        const params = response.message.extraInfo.agentTrace.selectedTool?.input?.params as Record<string, unknown>;
+        assert.equal(params.linked_customer_form_inst_id, '安徽');
+        assert.equal(params.province, undefined);
+      } } },
+      { query: '将这个联系人的客户信息更新为安徽艳阳电气', mock: { searchRecords: [recordFixture('customer', 'customer-ah-001', '安徽艳阳电气')] }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', pendingInteractionKind: 'input_required', assert: (response) => {
+        const params = response.message.extraInfo.agentTrace.selectedTool?.input?.params as Record<string, unknown>;
+        assert.equal(params.linked_customer_form_inst_id, '安徽艳阳电气');
+        assert.equal(params.province, undefined);
+      } } },
+      { query: '关联客户：customer-ah-001', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update', continuationAction: 'resume_pending_interaction' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
+      { query: '更新关联客户', expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', pendingInteractionKind: 'input_required', contentExcludes: ['写入预览被守卫阻断'] } },
+      { query: '查询安徽的客户', expect: { status: 'completed', selectedTool: 'record.customer.search', continuationAction: 'start_new_task' } },
+      { query: '查客户 安徽艳阳电气', mock: { searchRecords: [recordFixture('customer', 'customer-ah-001', '安徽艳阳电气')] }, expect: { status: 'completed', selectedTool: 'record.customer.search' } },
+      { query: '更新客户 formInstId:customer-ah-001 客户状态：意向', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.customer.preview_update' } },
+      { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.customer.commit_update' } },
+    ],
+  },
+];
+
+test('Agent scenario harness runs 30 Suzhou sales habit scenarios', async () => {
+  await runAgentScenarios(suzhouSalesHabitScenarios);
+});
+
 function inferIntentFrame(query: string, focusedName?: string | null): IntentFrame {
   const objectKey = inferObjectKey(query);
-  const actionType: IntentFrame['actionType'] = /(录入|创建|新增|新建|补录|写入|修改|更新)/.test(query)
+  const actionType: IntentFrame['actionType'] = /(录入|创建|新增|新建|补录|写入|修改|更新|关联|绑定|选择)/.test(query)
     ? 'write'
     : /(研究|分析|最近|关注|风险|有什么)/.test(query)
       ? 'analyze'
@@ -978,14 +1501,14 @@ function inferObjectKey(query: string): ShadowObjectKey | null {
   if (/(新增|新建|录入|创建|写入)\s*(客户|公司)|这个客户/.test(query) && !/(研究|分析)/.test(query)) {
     return 'customer';
   }
+  if (/拜访记录|回访记录|跟进记录|跟进|回访/.test(query)) {
+    return 'followup';
+  }
   if (/联系人/.test(query)) {
     return 'contact';
   }
-  if (/商机|机会/.test(query)) {
+  if (/商机|机会|项目|单子/.test(query)) {
     return 'opportunity';
-  }
-  if (/跟进/.test(query)) {
-    return 'followup';
   }
   if (/客户|公司/.test(query) && !/(研究|分析)/.test(query)) {
     return 'customer';
@@ -1008,9 +1531,9 @@ function extractRecordName(query: string, objectKey: ShadowObjectKey): string {
   const labels = objectKey === 'contact'
     ? '联系人'
     : objectKey === 'opportunity'
-      ? '商机|机会'
+      ? '商机|机会|项目|单子'
       : objectKey === 'followup'
-        ? '跟进记录|跟进'
+        ? '跟进记录|拜访记录|回访记录|跟进|回访|拜访'
         : '客户|公司';
   const matched = query.match(new RegExp(`(?:新增|新建|录入|创建|查询|查一下|先查)?(?:${labels})?\\s*([^，。\\n]+)`));
   return (matched?.[1] ?? '').trim().split(/\s+/)[0] ?? '';

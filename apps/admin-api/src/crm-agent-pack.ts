@@ -542,7 +542,7 @@ function resolveRecordObject(query: string, intentFrame: IntentFrame, contextFra
   if (explicitObject === '商机' || explicitObject === '机会') {
     return 'opportunity';
   }
-  if (explicitObject === '跟进记录' || explicitObject === '跟进') {
+  if (explicitObject === '跟进记录' || explicitObject === '拜访记录' || explicitObject === '回访记录' || explicitObject === '跟进' || explicitObject === '拜访' || explicitObject === '回访') {
     return 'followup';
   }
 
@@ -608,7 +608,7 @@ function inferExplicitRecordObject(query: string): string | null {
     return '跟进记录';
   }
 
-  return query.match(/(?:录入|创建|新增|新建|补录|写入|查询|查一下|搜索|找一下|更新|修改|打开)\s*(?:一个|这?个)?\s*(客户|公司|联系人|商机|机会|跟进记录|跟进)/)?.[1] ?? null;
+  return query.match(/(?:录入|创建|新增|新建|补录|写入|查询|查一下|搜索|找一下|更新|修改|打开)\s*(?:一个|这?个)?\s*(客户|公司|联系人|商机|机会|跟进记录|拜访记录|回访记录|跟进|拜访|回访)/)?.[1] ?? null;
 }
 
 interface CrmToolSelectionResult {
@@ -705,6 +705,18 @@ function selectTool(
     });
   }
 
+  const contextualFieldWrite = resolveContextualFieldWriteSelection({
+    query,
+    intentFrame: input.intentFrame,
+    operatorOpenId: input.request.tenantContext?.operatorOpenId,
+    contextFrame: input.contextFrame ?? null,
+    resolvedContext: input.resolvedContext ?? null,
+    shadowMetadataService,
+  });
+  if (contextualFieldWrite) {
+    return wrapSelectedTool(contextualFieldWrite);
+  }
+
   if (target.kind === 'record' && target.objectType) {
     const objectKey = target.objectType as ShadowObjectKey;
     const hasRecordContext = Boolean(resolveContextRecordFormInstId({
@@ -747,6 +759,82 @@ function selectTool(
 
 function wrapSelectedTool(selectedTool: AgentToolSelection): CrmToolSelectionResult {
   return { selectedTool, toolArbitration: null };
+}
+
+function resolveContextualFieldWriteSelection(input: {
+  query: string;
+  intentFrame: AgentPlannerInput['intentFrame'];
+  operatorOpenId?: string;
+  contextFrame?: ContextFrame | null;
+  resolvedContext?: AgentPlannerInput['resolvedContext'] | null;
+  shadowMetadataService: ShadowMetadataService;
+}): AgentToolSelection | null {
+  if (isReadOnlyRecordQuery(input.query) || /(公司研究|客户分析|研究|分析)/.test(input.query)) {
+    return null;
+  }
+  if (/(?:录入|创建|新增|新建|补录|写入)\s*(?:一个|这?个)?\s*(?:客户|公司|联系人|商机|机会|跟进记录|跟进|拜访记录)/.test(input.query)) {
+    return null;
+  }
+  const subject = input.resolvedContext?.subject ?? input.contextFrame?.subject;
+  const objectKey = subject?.kind === 'record' && subject.type && CRM_RECORD_OBJECTS.includes(subject.type as ShadowObjectKey)
+    ? subject.type as ShadowObjectKey
+    : null;
+  if (!objectKey || !subject?.id) {
+    return null;
+  }
+  const explicitObject = mapExplicitRecordObjectToKey(inferExplicitRecordObject(input.query));
+  if (explicitObject && explicitObject !== objectKey) {
+    return null;
+  }
+  const capability = CRM_RECORD_CAPABILITIES[objectKey];
+  const fields = readRecordFields({ shadowMetadataService: input.shadowMetadataService }, objectKey);
+  const fieldIntent = findExplicitWriteFieldIntent({
+    query: input.query,
+    capability,
+    fields,
+    allowValueless: true,
+  });
+  const hasWriteSignal = input.intentFrame.actionType === 'write'
+    || /修改|更新|改成|改为|变更|调整|设置|设为|关联|绑定|选择/.test(input.query)
+    || Boolean(fieldIntent?.hasValue);
+  if (!fieldIntent || !hasWriteSignal) {
+    return null;
+  }
+  return {
+    toolCode: `record.${objectKey}.preview_update`,
+    reason: `用户表达命中当前记录 ${objectKey} 的可写字段“${fieldIntent.alias}”，按当前上下文执行更新预览。`,
+    input: buildRecordToolInput({
+      query: input.query,
+      objectKey,
+      operation: 'preview_update',
+      operatorOpenId: input.operatorOpenId,
+      targetName: subject.name,
+      fields,
+      contextFrame: input.contextFrame ?? null,
+      resolvedContext: input.resolvedContext ?? null,
+    }),
+    confidence: 0.82,
+  };
+}
+
+function isReadOnlyRecordQuery(query: string): boolean {
+  return /^(?:查询|查一下|查看|搜索|找一下|打开|看看|看下|先查|帮我查|帮我搜)/.test(query.trim());
+}
+
+function mapExplicitRecordObjectToKey(value: string | null): ShadowObjectKey | null {
+  if (value === '客户' || value === '公司') {
+    return 'customer';
+  }
+  if (value === '联系人') {
+    return 'contact';
+  }
+  if (value === '商机' || value === '机会') {
+    return 'opportunity';
+  }
+  if (value === '跟进记录' || value === '拜访记录' || value === '回访记录' || value === '跟进' || value === '拜访' || value === '回访') {
+    return 'followup';
+  }
+  return null;
 }
 
 function readRecordOpenClientAction(action: AgentPlannerInput['request']['clientAction']): {
@@ -857,10 +945,13 @@ function resolveRecordOperation(query: string, intentFrame: IntentFrame, hasReco
   if (/详情|详细|具体|打开/.test(query)) {
     return 'get';
   }
+  if (/录入|创建|新增|新建|补录|写入/.test(query)) {
+    return 'preview_create';
+  }
   if (hasRecordContext && isRecordFieldAssignmentQuery(query)) {
     return 'preview_update';
   }
-  if (/录入|创建|新增|新建|补录|写入/.test(query) || intentFrame.actionType === 'write') {
+  if (intentFrame.actionType === 'write') {
     return 'preview_create';
   }
   return 'search';
@@ -1783,6 +1874,23 @@ function extractRecordWriteParamsFromQuery(input: {
   return params;
 }
 
+interface FieldSemanticEntry {
+  paramKey: string;
+  field?: ShadowStandardizedField;
+  aliases: string[];
+  isReference: boolean;
+  targetModelName?: string;
+}
+
+interface ExplicitWriteFieldIntent {
+  paramKey: string;
+  field?: ShadowStandardizedField;
+  alias: string;
+  value?: string;
+  hasValue: boolean;
+  isReference: boolean;
+}
+
 function extractExplicitWriteValue(
   query: string,
   input: {
@@ -1791,22 +1899,12 @@ function extractExplicitWriteValue(
     capability: RecordToolCapability;
   },
 ): string | undefined {
-  const labels = buildWriteFieldLabels(input);
-  for (const label of labels) {
-    const escaped = escapeRegExp(label);
-    const patterns = [
-      new RegExp(`${escaped}\\s*(?:改成|改为|更新为|调整为|设置为|设为|变更为|变为|为|是|=|：|:)\\s*([^，。；;\\n]+)`),
-      new RegExp(`(?:更新|修改|变更|调整|设置|改)\\s*${escaped}\\s*(?:到|至|成|为)?\\s*([^，。；;\\n]+)`),
-    ];
-    for (const pattern of patterns) {
-      const matched = query.match(pattern);
-      const value = matched?.[1]?.trim();
-      if (value) {
-        return trimValueBeforeKnownLabels(value, input.capability, input.paramKey);
-      }
-    }
-  }
-  return undefined;
+  const entry = buildFieldSemanticEntry({
+    paramKey: input.paramKey,
+    field: input.field,
+    capability: input.capability,
+  });
+  return matchExplicitWriteFieldValue(query, entry, input.capability);
 }
 
 function buildWriteFieldLabels(input: {
@@ -1814,14 +1912,50 @@ function buildWriteFieldLabels(input: {
   field?: ShadowStandardizedField;
   capability: RecordToolCapability;
 }): string[] {
+  return buildFieldSemanticEntry(input).aliases;
+}
+
+function buildFieldSemanticCatalog(input: {
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+}): FieldSemanticEntry[] {
+  return (input.capability.previewInputPolicy?.writableParams ?? []).map((paramKey) =>
+    buildFieldSemanticEntry({
+      paramKey,
+      field: findFieldByParamKey(paramKey, input.fields),
+      capability: input.capability,
+    }),
+  );
+}
+
+function buildFieldSemanticEntry(input: {
+  paramKey: string;
+  field?: ShadowStandardizedField;
+  capability: RecordToolCapability;
+}): FieldSemanticEntry {
+  const targetModelName = input.field?.relationBinding?.modelName?.trim();
+  const relationAliases = input.field?.widgetType === 'basicDataWidget' && targetModelName
+    ? [
+        targetModelName,
+        `关联${targetModelName}`,
+        `绑定${targetModelName}`,
+        `选择${targetModelName}`,
+        `所属${targetModelName}`,
+        `${targetModelName}信息`,
+        `${targetModelName}名称`,
+        `${targetModelName}编号`,
+      ]
+    : [];
   const candidates = [
     input.capability.fieldLabels?.[input.paramKey],
     input.field?.label,
     input.field?.writeParameterKey,
+    input.field?.searchParameterKey,
     input.field?.semanticSlot,
     input.paramKey,
+    ...relationAliases,
   ].filter((item): item is string => Boolean(item?.trim()));
-  return Array.from(
+  const aliases = Array.from(
     new Set(
       candidates
         .flatMap((label) => [label, ...buildShortLabelVariants(label)])
@@ -1829,6 +1963,109 @@ function buildWriteFieldLabels(input: {
         .filter((label) => label.length >= 2),
     ),
   ).sort((left, right) => right.length - left.length);
+  return {
+    paramKey: input.paramKey,
+    ...(input.field ? { field: input.field } : {}),
+    aliases,
+    isReference: input.field?.widgetType === 'basicDataWidget',
+    ...(targetModelName ? { targetModelName } : {}),
+  };
+}
+
+function findExplicitWriteFieldIntent(input: {
+  query: string;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  referenceOnly?: boolean;
+  allowValueless?: boolean;
+}): ExplicitWriteFieldIntent | null {
+  const entries = buildFieldSemanticCatalog({
+    capability: input.capability,
+    fields: input.fields,
+  }).filter((entry) => !input.referenceOnly || entry.isReference);
+  for (const entry of entries) {
+    const value = matchExplicitWriteFieldValue(input.query, entry, input.capability);
+    if (value !== undefined) {
+      return {
+        paramKey: entry.paramKey,
+        alias: findMatchedFieldAlias(input.query, entry) ?? entry.aliases[0] ?? entry.paramKey,
+        value,
+        hasValue: true,
+        isReference: entry.isReference,
+        ...(entry.field ? { field: entry.field } : {}),
+      };
+    }
+  }
+  if (!input.allowValueless) {
+    return null;
+  }
+  for (const entry of entries) {
+    const alias = findValuelessFieldIntentAlias(input.query, entry);
+    if (alias) {
+      return {
+        paramKey: entry.paramKey,
+        alias,
+        hasValue: false,
+        isReference: entry.isReference,
+        ...(entry.field ? { field: entry.field } : {}),
+      };
+    }
+  }
+  return null;
+}
+
+function matchExplicitWriteFieldValue(
+  query: string,
+  entry: FieldSemanticEntry,
+  capability: RecordToolCapability,
+): string | undefined {
+  for (const alias of entry.aliases) {
+    if (!entry.isReference) {
+      continue;
+    }
+    const escaped = escapeRegExp(alias);
+    const matched = query.match(new RegExp(`(?:关联|绑定|选择)\\s*([^，。；;\\n]+?)\\s*的?\\s*${escaped}(?:$|[，。；;\\n])`));
+    const value = matched?.[1]?.trim();
+    if (value) {
+      return trimValueBeforeKnownLabels(value, capability, entry.paramKey);
+    }
+  }
+
+  for (const alias of entry.aliases) {
+    if (entry.targetModelName && alias === entry.targetModelName) {
+      continue;
+    }
+    const escaped = escapeRegExp(alias);
+    const patterns = [
+      new RegExp(`${escaped}\\s*(?:改成|改为|更新为|调整为|设置为|设为|变更为|变为|为|是|=|：|:)\\s*([^，。；;\\n]+)`),
+      new RegExp(`(?:更新|修改|变更|调整|设置|改|关联|绑定|选择)\\s*(?:这个|该|当前)?[^，。；;\\n]{0,12}?${escaped}\\s*(?:到|至|成|为)?\\s*([^，。；;\\n]+)`),
+    ];
+    for (const pattern of patterns) {
+      const matched = query.match(pattern);
+      const value = matched?.[1]?.trim();
+      if (value) {
+        return trimValueBeforeKnownLabels(value, capability, entry.paramKey);
+      }
+    }
+  }
+  return undefined;
+}
+
+function findMatchedFieldAlias(query: string, entry: FieldSemanticEntry): string | undefined {
+  return entry.aliases.find((alias) => query.includes(alias));
+}
+
+function findValuelessFieldIntentAlias(query: string, entry: FieldSemanticEntry): string {
+  for (const alias of entry.aliases) {
+    if (entry.targetModelName && alias === entry.targetModelName) {
+      continue;
+    }
+    const escaped = escapeRegExp(alias);
+    if (new RegExp(`(?:更新|修改|变更|调整|设置|改|关联|绑定|选择)\\s*(?:这个|该|当前)?[^，。；;\\n]{0,12}?${escaped}(?:$|[，。；;\\n])`).test(query)) {
+      return alias;
+    }
+  }
+  return '';
 }
 
 function normalizeExplicitWriteValue(rawValue: string, field?: ShadowStandardizedField): unknown {
@@ -1993,7 +2230,8 @@ function isArtifactFollowupQuestion(query: string): boolean {
   const normalized = query.trim();
   const asksForExistingEvidence = ['最近', '关注', '值得关注', '有什么', '卡在哪里', '风险'].some((token) => normalized.includes(token));
   const startsNewResearch = /^(?:研究|分析一下|分析|公司分析|客户分析|\/客户分析)/.test(normalized);
-  return asksForExistingEvidence && !startsNewResearch;
+  const startsRecordWrite = /^(?:新增|新建|创建|录入|写入|补录|更新|修改)/.test(normalized);
+  return asksForExistingEvidence && !startsNewResearch && !startsRecordWrite;
 }
 
 function resolveArtifactAnchorName(input: AgentPlannerInput): string | undefined {
@@ -3257,6 +3495,13 @@ function enrichRecordParamsFromQuery(input: {
   fields: ShadowStandardizedField[];
 }): Record<string, unknown> {
   const params = { ...input.params };
+  const explicitReferenceIntent = findExplicitWriteFieldIntent({
+    query: input.query,
+    capability: input.capability,
+    fields: input.fields,
+    referenceOnly: true,
+    allowValueless: true,
+  });
   const metadataParams = extractRecordWriteParamsFromQuery({
     query: input.query,
     capability: input.capability,
@@ -3267,6 +3512,9 @@ function enrichRecordParamsFromQuery(input: {
     if (!hasMeaningfulValue(params[paramKey])) {
       params[paramKey] = value;
     }
+  }
+  if (explicitReferenceIntent) {
+    return params;
   }
   for (const paramKey of input.capability.previewInputPolicy?.writableParams ?? []) {
     if (hasMeaningfulValue(params[paramKey])) {
@@ -3577,6 +3825,36 @@ async function resolveReferenceSelectParams(input: {
   };
 }
 
+function resolveMissingReferenceFieldIntent(input: {
+  query: string;
+  requestInput: ShadowPreviewUpsertInput;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  shadowMetadataService: ShadowMetadataService;
+}): ReferenceResolutionIssue | null {
+  const intent = findExplicitWriteFieldIntent({
+    query: input.query,
+    capability: input.capability,
+    fields: input.fields,
+    referenceOnly: true,
+    allowValueless: true,
+  });
+  if (!intent || intent.hasValue || hasMeaningfulValue(readRequestParams(input.requestInput)[intent.paramKey])) {
+    return null;
+  }
+  const field = intent.field ?? findFieldByParamKey(intent.paramKey, input.fields);
+  if (!field || field.widgetType !== 'basicDataWidget') {
+    return null;
+  }
+  return {
+    paramKey: intent.paramKey,
+    label: getFieldLabel(input.capability, intent.paramKey),
+    rawValue: '',
+    targetObjectKey: resolveRelationTargetObjectKey(input.shadowMetadataService, field),
+    options: [],
+  };
+}
+
 async function resolveReferenceParamValue(input: {
   options: CrmAgentPackOptions;
   context: AgentToolExecuteContext;
@@ -3653,7 +3931,9 @@ function buildReferenceResolutionWaitingResult(input: {
 }): AgentToolExecutionResult {
   const firstIssue = input.issues[0]!;
   const title = `需要选择${firstIssue.label}`;
-  const summary = `${firstIssue.label}“${firstIssue.rawValue}”需要从候选记录中选择，不能直接手动录入文本。`;
+  const summary = firstIssue.rawValue
+    ? `${firstIssue.label}“${firstIssue.rawValue}”需要从候选记录中选择，不能直接手动录入文本。`
+    : `请从候选记录中选择${firstIssue.label}，不能直接空预览写入。`;
   finishToolCall(input.toolCall, 'skipped', summary);
   return {
     status: 'waiting_input',
@@ -3661,7 +3941,7 @@ function buildReferenceResolutionWaitingResult(input: {
     content: [
       `## ${title}`,
       `- 字段：${firstIssue.label}`,
-      `- 输入：${firstIssue.rawValue}`,
+      `- 输入：${firstIssue.rawValue || '待选择'}`,
       '- 处理：请在下方搜索并选择一条系统记录后继续预览。',
     ].join('\n'),
     headline: title,
@@ -4724,6 +5004,30 @@ async function executeRecordPreviewTool(
     };
   }
 
+  const missingReferenceIntent = resolveMissingReferenceFieldIntent({
+    query: input.request.query,
+    requestInput: initialRequestInput,
+    capability,
+    fields,
+    shadowMetadataService: options.shadowMetadataService,
+  });
+  if (missingReferenceIntent) {
+    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(initialRequestInput));
+    return buildReferenceResolutionWaitingResult({
+      runId: context.runId,
+      toolCode: input.selectedTool.toolCode,
+      partialInput: {
+        ...(initialRequestInput as unknown as Record<string, unknown>),
+        ...(agentControl.duplicateCheck || agentControl.searchExtraction || agentControl.subjectName
+          ? { agentControl }
+          : {}),
+      },
+      toolCall,
+      issues: [missingReferenceIntent],
+      context,
+    });
+  }
+
   const personResolution = resolvePersonSelectParams({
     options,
     context,
@@ -4961,6 +5265,7 @@ async function executeRecordCommitTool(
   const recommendedRows = userPreview.recommendedRows ?? [];
   const committedContextFrame = buildCommittedRecordContextFrame({
     objectKey,
+    mode,
     formInstId: result.formInstIds[0],
     requestInput,
     capability: CRM_RECORD_CAPABILITIES[objectKey],
@@ -5003,6 +5308,7 @@ async function executeRecordCommitTool(
 
 function buildCommittedRecordContextFrame(input: {
   objectKey: ShadowObjectKey;
+  mode: 'create' | 'update';
   formInstId?: string;
   requestInput: ShadowPreviewUpsertInput;
   capability: RecordToolCapability;
@@ -5018,25 +5324,34 @@ function buildCommittedRecordContextFrame(input: {
   const binding = input.capability.subjectBinding;
   const boundSubjectType = binding?.acceptedSubjectTypes?.[0];
   const boundSubjectId = binding?.searchFilterField ? toContextScalar(params[binding.searchFilterField]) : '';
-  if (input.objectKey !== 'customer' && boundSubjectType && boundSubjectId) {
-    const previousSubject = findMatchingSubject({
-      subjectType: boundSubjectType,
-      subjectId: boundSubjectId,
-      contextFrame: input.contextFrame ?? null,
-      resolvedContext: input.resolvedContext ?? null,
-    });
-    return {
-      subject: {
-        kind: 'record',
-        type: boundSubjectType,
-        id: boundSubjectId,
-        name: previousSubject?.name || boundSubjectId,
-      },
-      sourceRunId: input.runId,
-      evidenceRefs: [],
-      confidence: previousSubject ? 0.95 : 0.86,
-      resolvedBy: 'record.commit.subject_binding',
-    };
+  if (input.mode === 'create' && input.objectKey !== 'customer' && boundSubjectType) {
+    const previousSubject = boundSubjectId
+      ? findMatchingSubject({
+          subjectType: boundSubjectType,
+          subjectId: boundSubjectId,
+          contextFrame: input.contextFrame ?? null,
+          resolvedContext: input.resolvedContext ?? null,
+        })
+      : findSubjectByType({
+          subjectType: boundSubjectType,
+          contextFrame: input.contextFrame ?? null,
+          resolvedContext: input.resolvedContext ?? null,
+        });
+    if (boundSubjectId || previousSubject?.id) {
+      const subjectId = boundSubjectId || previousSubject?.id || '';
+      return {
+        subject: {
+          kind: 'record',
+          type: boundSubjectType,
+          id: subjectId,
+          name: previousSubject?.name || subjectId,
+        },
+        sourceRunId: input.runId,
+        evidenceRefs: [],
+        confidence: previousSubject ? 0.95 : 0.86,
+        resolvedBy: 'record.commit.subject_binding',
+      };
+    }
   }
 
   const identityField = input.capability.identityFields?.[0] ?? inferRecordNameParam(input.objectKey);
@@ -5064,15 +5379,35 @@ function findMatchingSubject(input: {
   contextFrame?: ContextFrame | null;
   resolvedContext?: AgentToolExecuteInput['resolvedContext'];
 }): ContextFrame['subject'] | null {
-  const subjects = [
-    input.resolvedContext?.subject,
-    input.contextFrame?.subject,
-  ].filter((item): item is NonNullable<ContextFrame['subject']> => Boolean(item?.type));
-  return subjects.find((subject) => (
+  return readContextSubjects({
+    contextFrame: input.contextFrame ?? null,
+    resolvedContext: input.resolvedContext ?? null,
+  }).find((subject) => (
     subject.type === input.subjectType
     && (!subject.id || subject.id === input.subjectId)
     && Boolean(subject.name)
   )) ?? null;
+}
+
+function findSubjectByType(input: {
+  subjectType: string;
+  contextFrame?: ContextFrame | null;
+  resolvedContext?: AgentToolExecuteInput['resolvedContext'];
+}): ContextFrame['subject'] | null {
+  return readContextSubjects({
+    contextFrame: input.contextFrame ?? null,
+    resolvedContext: input.resolvedContext ?? null,
+  }).find((subject) => subject.type === input.subjectType && Boolean(subject.id)) ?? null;
+}
+
+function readContextSubjects(input: {
+  contextFrame?: ContextFrame | null;
+  resolvedContext?: AgentToolExecuteInput['resolvedContext'];
+}): Array<NonNullable<ContextFrame['subject']>> {
+  return [
+    input.resolvedContext?.subject,
+    input.contextFrame?.subject,
+  ].filter((item): item is NonNullable<ContextFrame['subject']> => Boolean(item?.type));
 }
 
 function toContextScalar(value: unknown): string {
