@@ -81,6 +81,64 @@ function renderCompactValue(value: string | null | undefined, width = 420) {
   );
 }
 
+function renderTechnicalValue(value: string | null | undefined, width = 220) {
+  if (!value) {
+    return '-';
+  }
+
+  return (
+    <Text
+      code
+      style={{
+        display: 'inline-block',
+        maxWidth: width,
+        whiteSpace: 'nowrap',
+      }}
+      ellipsis={{ tooltip: value }}
+      copyable={{ text: value }}
+    >
+      {value}
+    </Text>
+  );
+}
+
+const widgetTypeLabels: Record<string, string> = {
+  textWidget: '文本',
+  textAreaWidget: '多行文本',
+  numberWidget: '数字',
+  moneyWidget: '金额',
+  radioWidget: '单选',
+  checkboxWidget: '多选',
+  switchWidget: '开关',
+  dateWidget: '日期',
+  dateTimeWidget: '日期时间',
+  personSelectWidget: '人员选择',
+  basicDataWidget: '基础资料',
+  serialNumWidget: '流水号',
+  publicOptBoxWidget: '公共选项',
+  attachmentWidget: '附件',
+};
+
+function renderWidgetType(widgetType: string) {
+  return (
+    <Space size={6} wrap>
+      <Tag>{widgetTypeLabels[widgetType] ?? widgetType}</Tag>
+      {widgetTypeLabels[widgetType] ? <Text type="secondary">{widgetType}</Text> : null}
+    </Space>
+  );
+}
+
+const dictionaryStatusLabels: Record<string, { label: string; color: string }> = {
+  resolved: { label: '已解析', color: 'success' },
+  pending: { label: '待处理', color: 'warning' },
+  failed: { label: '失败', color: 'error' },
+};
+
+function renderDictionaryStatus(status: string) {
+  const meta = dictionaryStatusLabels[status] ?? { label: status, color: 'default' };
+  return <Tag color={meta.color}>{meta.label}</Tag>;
+}
+
 function getExecutionPhaseColor(phase: ShadowSkillView['executionBinding']['phase']) {
   if (phase === 'live_write_enabled') {
     return 'error';
@@ -121,9 +179,19 @@ function renderWritePolicy(record: ShadowStandardizedFieldView) {
 }
 
 const fieldColumns: ProColumns<ShadowStandardizedFieldView>[] = [
-  { title: 'fieldCode', dataIndex: 'fieldCode', width: 180, copyable: true },
-  { title: '字段名', dataIndex: 'label', width: 180 },
-  { title: '控件类型', dataIndex: 'widgetType', width: 180 },
+  {
+    title: '字段编码',
+    dataIndex: 'fieldCode',
+    width: 150,
+    render: (_, record) => renderTechnicalValue(record.fieldCode, 140),
+  },
+  { title: '字段名', dataIndex: 'label', width: 140 },
+  {
+    title: '控件类型',
+    dataIndex: 'widgetType',
+    width: 170,
+    render: (_, record) => renderWidgetType(record.widgetType),
+  },
   {
     title: '必填',
     dataIndex: 'required',
@@ -143,16 +211,16 @@ const fieldColumns: ProColumns<ShadowStandardizedFieldView>[] = [
     render: (_, record) => renderWritePolicy(record),
   },
   {
-    title: 'writeParam',
+    title: '写入参数',
     dataIndex: 'writeParameterKey',
-    width: 160,
-    render: (_, record) => record.writeParameterKey ?? '-',
+    width: 190,
+    render: (_, record) => renderTechnicalValue(record.writeParameterKey, 180),
   },
   {
-    title: 'searchParam',
+    title: '查询参数',
     dataIndex: 'searchParameterKey',
-    width: 160,
-    render: (_, record) => record.searchParameterKey ?? '-',
+    width: 190,
+    render: (_, record) => renderTechnicalValue(record.searchParameterKey, 180),
   },
   {
     title: '模板编辑',
@@ -179,10 +247,10 @@ const fieldColumns: ProColumns<ShadowStandardizedFieldView>[] = [
     render: (_, record) => (record.isSystemField ? <Tag color="purple">是</Tag> : '否'),
   },
   {
-    title: 'referId',
+    title: '字典引用ID',
     dataIndex: 'referId',
-    width: 160,
-    render: (_, record) => record.referId ?? '-',
+    width: 150,
+    render: (_, record) => renderTechnicalValue(record.referId, 140),
   },
   {
     title: '关联绑定',
@@ -201,19 +269,25 @@ const fieldColumns: ProColumns<ShadowStandardizedFieldView>[] = [
 ];
 
 const dictionaryColumns: ProColumns<ShadowDictionaryBindingView>[] = [
-  { title: 'fieldCode', dataIndex: 'fieldCode', width: 180, copyable: true },
+  {
+    title: '字段编码',
+    dataIndex: 'fieldCode',
+    width: 150,
+    render: (_, record) => renderTechnicalValue(record.fieldCode, 140),
+  },
   { title: '字段名', dataIndex: 'label', width: 180 },
-  { title: 'referId', dataIndex: 'referId', width: 160, render: (_, record) => record.referId ?? '-' },
+  {
+    title: '字典引用ID',
+    dataIndex: 'referId',
+    width: 160,
+    render: (_, record) => renderTechnicalValue(record.referId, 150),
+  },
   { title: '来源', dataIndex: 'source', width: 120 },
   {
     title: '解析状态',
     dataIndex: 'resolutionStatus',
     width: 120,
-    render: (_, record) => (
-      <Tag color={record.resolutionStatus === 'resolved' ? 'success' : record.resolutionStatus === 'failed' ? 'error' : 'warning'}>
-        {record.resolutionStatus}
-      </Tag>
-    ),
+    render: (_, record) => renderDictionaryStatus(record.resolutionStatus),
   },
   { title: '输入形态', dataIndex: 'acceptedValueShape', width: 180 },
   {
@@ -227,28 +301,32 @@ const dictionaryColumns: ProColumns<ShadowDictionaryBindingView>[] = [
 
 const referenceColumns: ProColumns<ShadowSkillView>[] = [
   { title: '技能', dataIndex: 'skillName', width: 220 },
-  { title: 'skillPath', dataIndex: 'skillPath', copyable: true },
   {
-    title: 'agentMetadataPath',
-    dataIndex: 'agentMetadataPath',
-    render: (_, record) => record.agentMetadataPath ?? '-',
+    title: '技能路径',
+    dataIndex: 'skillPath',
+    render: (_, record) => renderCompactValue(record.skillPath, 360),
   },
   {
-    title: 'references',
+    title: '元数据路径',
+    dataIndex: 'agentMetadataPath',
+    render: (_, record) => renderCompactValue(record.agentMetadataPath, 360),
+  },
+  {
+    title: '引用资源',
     dataIndex: 'referencePaths',
     render: (_, record) => (
       <Space direction="vertical" size={4}>
         <Text copyable={{ text: record.referencePaths.skillBundle }}>
-          bundle: {record.referencePaths.skillBundle}
+          技能包：{record.referencePaths.skillBundle}
         </Text>
         <Text copyable={{ text: record.referencePaths.templateSummary }}>
-          template-summary: {record.referencePaths.templateSummary}
+          模板摘要：{record.referencePaths.templateSummary}
         </Text>
         <Text copyable={{ text: record.referencePaths.dictionaries }}>
-          dictionaries: {record.referencePaths.dictionaries}
+          字典资源：{record.referencePaths.dictionaries}
         </Text>
         <Text copyable={{ text: record.referencePaths.execution }}>
-          execution: {record.referencePaths.execution}
+          执行配置：{record.referencePaths.execution}
         </Text>
       </Space>
     ),
@@ -479,7 +557,7 @@ const RecordSkillDetailPage = () => {
                           <Tag>{skill.confirmationPolicy}</Tag>
                         </Space>
                         <div>
-                          <Text type="secondary">whenToUse</Text>
+                          <Text type="secondary">适用时机</Text>
                           <Paragraph ellipsis={{ rows: 2, tooltip: skill.whenToUse }} style={{ marginBottom: 0, marginTop: 4 }}>
                             {skill.whenToUse}
                           </Paragraph>
@@ -514,6 +592,9 @@ const RecordSkillDetailPage = () => {
                 columns={fieldColumns}
                 dataSource={objectDetail?.fields ?? []}
                 loading={loading}
+                options={false}
+                tableLayout="fixed"
+                scroll={{ x: 1840 }}
               />
             ),
           },
@@ -529,6 +610,9 @@ const RecordSkillDetailPage = () => {
                 columns={dictionaryColumns}
                 dataSource={dictionaries}
                 loading={loading}
+                options={false}
+                tableLayout="fixed"
+                scroll={{ x: 980 }}
               />
             ),
           },
@@ -551,6 +635,9 @@ const RecordSkillDetailPage = () => {
                   columns={referenceColumns}
                   dataSource={skills}
                   loading={loading}
+                  options={false}
+                  tableLayout="fixed"
+                  scroll={{ x: 1200 }}
                 />
               </Space>
             ),
@@ -582,28 +669,28 @@ const RecordSkillDetailPage = () => {
               size="small"
               dataSource={selectedSkill}
             >
-              <ProDescriptions.Item label="whenToUse">
+              <ProDescriptions.Item label="适用时机">
                 {selectedSkill.whenToUse}
               </ProDescriptions.Item>
-              <ProDescriptions.Item label="notWhenToUse">
+              <ProDescriptions.Item label="不适用时机">
                 {selectedSkill.notWhenToUse}
               </ProDescriptions.Item>
-              <ProDescriptions.Item label="requiredParams">
+              <ProDescriptions.Item label="必填参数">
                 {renderTagList(selectedSkill.requiredParams, 'error')}
               </ProDescriptions.Item>
-              <ProDescriptions.Item label="optionalParams">
+              <ProDescriptions.Item label="可选参数">
                 {renderTagList(selectedSkill.optionalParams, 'blue')}
               </ProDescriptions.Item>
-              <ProDescriptions.Item label="derivedParams">
+              <ProDescriptions.Item label="自动派生参数">
                 {renderTagList(selectedSkill.derivedParams, 'gold')}
               </ProDescriptions.Item>
-              <ProDescriptions.Item label="previewApi">
+              <ProDescriptions.Item label="预览接口">
                 <Space direction="vertical" size={4}>
                   <Text>{selectedSkill.executionBinding.previewApi.method}</Text>
                   {renderCompactValue(selectedSkill.executionBinding.previewApi.path, 620)}
                 </Space>
               </ProDescriptions.Item>
-              <ProDescriptions.Item label="liveApi">
+              <ProDescriptions.Item label="写回接口">
                 {selectedSkill.executionBinding.liveApi ? (
                   <Space direction="vertical" size={4}>
                     <Text>{selectedSkill.executionBinding.liveApi.method}</Text>
@@ -613,13 +700,13 @@ const RecordSkillDetailPage = () => {
                   '未启用'
                 )}
               </ProDescriptions.Item>
-              <ProDescriptions.Item label="LightCloud Preview">
+              <ProDescriptions.Item label="轻云预览接口">
                 <Space direction="vertical" size={4}>
                   <Text>{selectedSkill.executionBinding.lightCloudPreview.method}</Text>
                   {renderCompactValue(selectedSkill.executionBinding.lightCloudPreview.url, 620)}
                 </Space>
               </ProDescriptions.Item>
-              <ProDescriptions.Item label="LightCloud Live">
+              <ProDescriptions.Item label="轻云写回接口">
                 {selectedSkill.executionBinding.lightCloudLive ? (
                   <Space direction="vertical" size={4}>
                     <Text>{selectedSkill.executionBinding.lightCloudLive.method}</Text>
@@ -642,7 +729,7 @@ const RecordSkillDetailPage = () => {
             </ProDescriptions>
 
             <div>
-              <Text strong>Preview Payload Example</Text>
+              <Text strong>预览载荷示例</Text>
               <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>
                 {formatJson(selectedSkill.executionBinding.previewApi.payloadExample)}
               </pre>
@@ -650,7 +737,7 @@ const RecordSkillDetailPage = () => {
 
             {selectedSkill.executionBinding.liveApi ? (
               <div>
-                <Text strong>Live Payload Example</Text>
+                <Text strong>写回载荷示例</Text>
                 <pre style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>
                   {formatJson(selectedSkill.executionBinding.liveApi.payloadExample)}
                 </pre>

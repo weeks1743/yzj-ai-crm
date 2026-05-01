@@ -120,6 +120,320 @@ function renderJson(value: unknown) {
   );
 }
 
+interface AdminAgentTrace {
+  traceId?: string;
+  intentFrame?: Record<string, any>;
+  taskPlan?: Record<string, any>;
+  executionState?: Record<string, any>;
+  toolCalls?: Array<Record<string, any>>;
+  selectedTool?: {
+    toolCode?: string;
+    reason?: string;
+    input?: Record<string, unknown>;
+  } | null;
+  pendingConfirmation?: Record<string, any> | null;
+  pendingInteraction?: Record<string, any> | null;
+  continuationResolution?: Record<string, any> | null;
+  resolvedContext?: Record<string, any> | null;
+  semanticResolution?: Record<string, any> | null;
+  toolArbitration?: Record<string, any> | null;
+  policyDecisions?: Array<Record<string, any>>;
+}
+
+interface RunFlowNode {
+  key: string;
+  title: string;
+  status: 'success' | 'warning' | 'error' | 'processing' | 'default';
+  summary: string;
+  details?: string;
+}
+
+const runFlowStatusText = {
+  success: '通过',
+  warning: '待处理',
+  error: '阻断',
+  processing: '运行',
+  default: '记录',
+};
+
+const runFlowStatusColor = {
+  success: 'success',
+  warning: 'warning',
+  error: 'error',
+  processing: 'processing',
+  default: 'default',
+};
+
+function readRecord(value: unknown): Record<string, any> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : null;
+}
+
+function extractAgentTrace(detail: AgentRunDetailResponse | null): AdminAgentTrace | null {
+  if (!detail) {
+    return null;
+  }
+  const messageTrace = [...detail.messages]
+    .reverse()
+    .map((message) => readRecord(readRecord(message.extraInfo)?.agentTrace))
+    .find(Boolean);
+  return {
+    ...(messageTrace ?? {}),
+    traceId: String(messageTrace?.traceId ?? detail.run.traceId ?? ''),
+    intentFrame: readRecord(messageTrace?.intentFrame) ?? readRecord(detail.intentFrame) ?? undefined,
+    taskPlan: readRecord(messageTrace?.taskPlan) ?? readRecord(detail.taskPlan) ?? undefined,
+    executionState: readRecord(messageTrace?.executionState) ?? readRecord(detail.executionState) ?? undefined,
+    toolCalls: Array.isArray(messageTrace?.toolCalls) ? messageTrace.toolCalls : detail.toolCalls,
+  };
+}
+
+function readSelectedToolParams(input?: Record<string, unknown>): Record<string, unknown> {
+  const params = input?.params;
+  return params && typeof params === 'object' && !Array.isArray(params)
+    ? params as Record<string, unknown>
+    : {};
+}
+
+function formatSearchFilter(filter: unknown): string {
+  if (!filter || typeof filter !== 'object') {
+    return String(filter);
+  }
+  const record = filter as { field?: unknown; operator?: unknown; value?: unknown };
+  return `${String(record.field ?? '-')}${String(record.operator ?? '=')}${String(record.value ?? '')}`;
+}
+
+function summarizeSearchFilterSources(input: Record<string, unknown>): string {
+  const control = input.agentControl && typeof input.agentControl === 'object'
+    ? input.agentControl as { searchExtraction?: { filterSources?: unknown[]; fallbackName?: unknown; conditions?: unknown[] } }
+    : {};
+  const filterSources = Array.isArray(control.searchExtraction?.filterSources)
+    ? control.searchExtraction.filterSources
+    : [];
+  const labels = filterSources
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return '';
+      }
+      const source = String((item as { source?: unknown }).source ?? '');
+      if (source === 'relation_context') {
+        return '关系上下文绑定';
+      }
+      if (source === 'name_fallback') {
+        return '名称 fallback';
+      }
+      if (source === 'explicit_condition') {
+        return '用户显式条件';
+      }
+      if (source === 'implicit_condition') {
+        return '隐式条件抽取';
+      }
+      return source;
+    })
+    .filter(Boolean);
+  if (!labels.length && typeof control.searchExtraction?.fallbackName === 'string') {
+    labels.push('名称 fallback');
+  }
+  if (!labels.length && Array.isArray(control.searchExtraction?.conditions) && control.searchExtraction.conditions.length) {
+    labels.push('用户显式条件');
+  }
+  return labels.length ? `过滤来源：${Array.from(new Set(labels)).join('、')}` : '过滤来源：无';
+}
+
+function summarizeTargetSanitization(input: Record<string, unknown>): string {
+  const control = input.agentControl && typeof input.agentControl === 'object'
+    ? input.agentControl as { targetSanitization?: { reasonCode?: unknown; ignoredTargetName?: unknown } }
+    : {};
+  const target = control.targetSanitization;
+  if (target?.reasonCode !== 'ignored_ungrounded_target') {
+    return '';
+  }
+  return `已忽略未落在用户输入中的 LLM target：${String(target.ignoredTargetName ?? '-')}`;
+}
+
+function summarizeSelectedToolInput(input?: Record<string, unknown>): string {
+  if (!input) {
+    return '暂无工具输入';
+  }
+  const filters = Array.isArray(input.filters) ? input.filters : null;
+  if (filters) {
+    const filterText = filters.length
+      ? `查询过滤：${filters.map(formatSearchFilter).join('、')}`
+      : '查询过滤：无';
+    return [filterText, summarizeSearchFilterSources(input), summarizeTargetSanitization(input)].filter(Boolean).join('；');
+  }
+  const formInstId = typeof input.formInstId === 'string' && input.formInstId ? '已绑定记录' : '';
+  const params = readSelectedToolParams(input);
+  const paramKeys = Object.keys(params);
+  const paramsText = paramKeys.length ? `写入字段：${paramKeys.join('、')}` : '写入字段：无';
+  return [formInstId, paramsText].filter(Boolean).join('；') || JSON.stringify(input);
+}
+
+function formatContextSubject(subject: { kind?: string; type?: string; id?: string; name?: string }): string {
+  return `${subject.type ?? subject.kind ?? 'subject'}：${subject.name ?? subject.id ?? '-'}`;
+}
+
+function formatCandidateOnlyDetails(agentTrace: AdminAgentTrace): string | undefined {
+  const reason = agentTrace.resolvedContext?.reason || agentTrace.semanticResolution?.reason;
+  const candidate = agentTrace.semanticResolution?.selectedCandidate?.subject;
+  const candidateText = candidate ? `候选未承接：${formatContextSubject(candidate)}` : '';
+  return [reason, candidateText].filter(Boolean).join('；') || undefined;
+}
+
+function summarizeContextFlow(agentTrace: AdminAgentTrace): Pick<RunFlowNode, 'status' | 'summary' | 'details'> {
+  const resolvedContext = agentTrace.resolvedContext;
+  const semanticResolution = agentTrace.semanticResolution;
+  const usedSubject = resolvedContext?.usedContext ? resolvedContext.subject : null;
+  if (usedSubject) {
+    return {
+      status: 'success',
+      summary: `已使用上下文：${formatContextSubject(usedSubject)}`,
+      details: resolvedContext?.reason,
+    };
+  }
+
+  if (resolvedContext?.usageMode === 'skipped_collection_query'
+    || semanticResolution?.usageMode === 'skipped_collection_query'
+    || resolvedContext?.skipReasonCode === 'record.collection_query') {
+    return {
+      status: 'default',
+      summary: '未使用上下文：本轮是集合查询',
+      details: formatCandidateOnlyDetails(agentTrace),
+    };
+  }
+
+  const candidate = semanticResolution?.selectedCandidate;
+  if (candidate) {
+    return {
+      status: 'default',
+      summary: `仅记录候选：${formatContextSubject(candidate.subject)}`,
+      details: resolvedContext?.reason || semanticResolution?.reason,
+    };
+  }
+
+  const pendingSubject = agentTrace.pendingInteraction?.contextSubject;
+  if (pendingSubject) {
+    return {
+      status: 'warning',
+      summary: `等待态上下文：${formatContextSubject(pendingSubject)}`,
+      details: agentTrace.pendingInteraction?.summary,
+    };
+  }
+
+  return {
+    status: 'default',
+    summary: '本轮未绑定明确上下文主体',
+    details: resolvedContext?.reason || semanticResolution?.reason,
+  };
+}
+
+function buildRunFlowNodes(agentTrace: AdminAgentTrace): RunFlowNode[] {
+  const selectedTool = agentTrace.selectedTool;
+  const toolCalls = agentTrace.toolCalls ?? [];
+  const policyDecisions = agentTrace.policyDecisions ?? [];
+  const lastToolCall = toolCalls[toolCalls.length - 1];
+  const blockingPolicy = [...policyDecisions].reverse().find((item) => item.action && item.action !== 'audit');
+  const params = readSelectedToolParams(selectedTool?.input);
+  const paramsEmpty = selectedTool?.toolCode?.includes('.preview_') && Object.keys(params).length === 0;
+  const emptyGuard = policyDecisions.some((item) => item.policyCode === 'record.preview_empty_payload_guard');
+  const contextFlow = summarizeContextFlow(agentTrace);
+
+  return [
+    {
+      key: 'intent',
+      title: '1. 意图识别',
+      status: 'success',
+      summary: agentTrace.intentFrame?.goal || '已生成意图帧',
+      details: [
+        agentTrace.intentFrame?.actionType ? `动作：${agentTrace.intentFrame.actionType}` : '',
+        agentTrace.intentFrame?.targetType ? `对象：${agentTrace.intentFrame.targetType}` : '',
+      ].filter(Boolean).join('；'),
+    },
+    {
+      key: 'context',
+      title: '2. 上下文绑定',
+      status: contextFlow.status,
+      summary: contextFlow.summary,
+      details: contextFlow.details,
+    },
+    {
+      key: 'tool',
+      title: '3. 工具选择',
+      status: selectedTool ? 'success' : 'warning',
+      summary: selectedTool?.toolCode || '未选择工具',
+      details: selectedTool?.reason,
+    },
+    {
+      key: 'input',
+      title: '4. 工具输入',
+      status: paramsEmpty ? 'warning' : 'success',
+      summary: selectedTool ? summarizeSelectedToolInput(selectedTool.input) : '暂无工具输入',
+      details: paramsEmpty ? '写入参数 params 为空，后续预览无法生成真实写入字段。' : undefined,
+    },
+    {
+      key: 'tool-result',
+      title: '5. 工具结果',
+      status: lastToolCall?.status === 'succeeded'
+        ? 'success'
+        : lastToolCall?.status === 'failed'
+          ? 'error'
+          : lastToolCall?.status === 'skipped'
+            ? 'warning'
+            : 'default',
+      summary: lastToolCall?.outputSummary || '暂无工具执行结果',
+      details: lastToolCall?.errorMessage ?? undefined,
+    },
+    {
+      key: 'policy',
+      title: '6. 策略 / 守卫',
+      status: emptyGuard ? 'error' : blockingPolicy ? 'warning' : 'success',
+      summary: emptyGuard
+        ? '字段抽取为空 -> params={} -> 空写入守卫阻断'
+        : blockingPolicy?.reason || '未触发阻断策略',
+      details: blockingPolicy?.policyCode,
+    },
+    {
+      key: 'state',
+      title: '7. 最终状态',
+      status: agentTrace.executionState?.status === 'completed'
+        ? 'success'
+        : String(agentTrace.executionState?.status ?? '').startsWith('waiting_')
+          ? 'warning'
+          : agentTrace.executionState?.status === 'failed'
+            ? 'error'
+            : 'default',
+      summary: agentTrace.executionState?.message || agentTrace.executionState?.status || '暂无状态',
+      details: agentTrace.pendingConfirmation
+        ? '已进入写回确认'
+        : agentTrace.pendingInteraction?.summary,
+    },
+  ];
+}
+
+function RunFlowChart({ agentTrace }: { agentTrace: AdminAgentTrace | null }) {
+  if (!agentTrace) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前运行没有可展示的追踪流程" />;
+  }
+  const nodes = buildRunFlowNodes(agentTrace);
+  return (
+    <div className="yzj-run-flow">
+      {nodes.map((node, index) => (
+        <div key={node.key} className="yzj-run-flow-item">
+          <div className="yzj-run-flow-node">
+            <div className="yzj-run-flow-node-header">
+              <Text strong>{node.title}</Text>
+              <Tag color={runFlowStatusColor[node.status]}>{runFlowStatusText[node.status]}</Tag>
+            </div>
+            <Text>{node.summary}</Text>
+            {node.details ? <div className="yzj-run-flow-node-details">{node.details}</div> : null}
+          </div>
+          {index < nodes.length - 1 ? <div className="yzj-run-flow-connector" /> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function getPageKey(pathname: string): GovernancePageKey | null {
   const key = pathname.split('/').filter(Boolean).pop();
   return key && key in pageMeta ? (key as GovernancePageKey) : null;
@@ -527,6 +841,7 @@ function RuntimeObservabilityView() {
   const planSteps = Array.isArray((current?.taskPlan as any)?.steps)
     ? (current?.taskPlan as any).steps as Array<Record<string, any>>
     : [];
+  const agentTrace = useMemo(() => extractAgentTrace(current), [current]);
   const detailToolColumns: ProColumns<AgentRunDetailResponse['toolCalls'][number]>[] = [
     { title: '工具', dataIndex: 'toolCode', ellipsis: true },
     {
@@ -629,6 +944,11 @@ function RuntimeObservabilityView() {
               bordered
               tabs={{
                 items: [
+                  {
+                    key: 'flow',
+                    label: '运行流程',
+                    children: <RunFlowChart agentTrace={agentTrace} />,
+                  },
                   {
                     key: 'plan',
                     label: '计划',
