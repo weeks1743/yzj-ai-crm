@@ -6,8 +6,24 @@ import {
 } from '@ant-design/x-sdk';
 import type { AgentClientAction, AgentUiSurface } from '@shared/types';
 
-const TEST_OPERATOR_OPEN_ID =
-  import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || '69e75eb5e4b0e65b61c014da';
+const ASSISTANT_TEST_OPERATOR_OPEN_ID = '69e75eb5e4b0e65b61c014da';
+
+// Test identity until YZJ auth provides the operator open id dynamically.
+export const ASSISTANT_OPERATOR_OPEN_ID =
+  import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || ASSISTANT_TEST_OPERATOR_OPEN_ID;
+
+function toConversationKeyPart(value: string) {
+  return value.trim().replace(/[^a-zA-Z0-9_-]/g, '-') || 'unknown';
+}
+
+export function buildAssistantConversationKey(scope: string) {
+  return [
+    'conv',
+    'openid',
+    toConversationKeyPart(ASSISTANT_OPERATOR_OPEN_ID),
+    toConversationKeyPart(scope),
+  ].join('-');
+}
 
 export interface AssistantAttachment {
   name: string;
@@ -387,7 +403,7 @@ async function agentApiFetch(
       attachments: params.attachments ?? [],
       ...(params.clientAction ? { clientAction: params.clientAction } : {}),
       tenantContext: {
-        operatorOpenId: TEST_OPERATOR_OPEN_ID,
+        operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
       },
       ...(params.resume ? { resume: params.resume } : {}),
     }),

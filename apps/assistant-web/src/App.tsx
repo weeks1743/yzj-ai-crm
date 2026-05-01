@@ -74,6 +74,8 @@ import type {
   AgentRecordSearchPageQuery,
   AgentRecordSearchPageResponse,
   AgentMetaQuestionOptionsResponse,
+  AgentRunDetailResponse,
+  AgentRunListResponse,
   AgentUiSurface,
   ConversationSession,
   ShadowObjectKey,
@@ -86,6 +88,8 @@ import {
   type AssistantFieldOptionHint,
   type AssistantMetaQuestion,
   type AssistantMetaQuestionCard,
+  ASSISTANT_OPERATOR_OPEN_ID,
+  buildAssistantConversationKey,
   providerFactory,
 } from './agent-api-provider';
 import { assistantScenes, buildPromptGroups, getSceneByPath, sceneOrder } from './scene-meta';
@@ -95,15 +99,17 @@ import brandLogo from '@shared/assets/logo.png';
 
 const { Paragraph, Text } = Typography;
 
-const HOME_CONVERSATION_KEY = 'conv-home';
-const CHAT_MESSAGES_STORAGE_KEY = 'yzj-ai-crm.assistant.messages.v3';
-const ACTIVE_CONVERSATION_STORAGE_KEY = 'yzj-ai-crm.assistant.activeConversation.v3';
-const CHAT_CONVERSATIONS_STORAGE_KEY = 'yzj-ai-crm.assistant.conversations.v3';
-const CHAT_STORAGE_VERSION = 3;
 const ADMIN_BASE_URL = import.meta.env.VITE_ADMIN_BASE_URL?.trim() || 'http://127.0.0.1:8000';
-const DEFAULT_OPERATOR_OPEN_ID =
-  import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || '69e75eb5e4b0e65b61c014da';
+const HOME_CONVERSATION_KEY = buildAssistantConversationKey('home');
+const CHAT_STORAGE_VERSION = 4;
+const CHAT_STORAGE_SCOPE = buildAssistantConversationKey('storage');
+const CHAT_MESSAGES_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.messages.v4`;
+const ACTIVE_CONVERSATION_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.activeConversation.v4`;
+const CHAT_CONVERSATIONS_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.conversations.v4`;
 const LEGACY_CHAT_STORAGE_KEYS = [
+  'yzj-ai-crm.assistant.messages.v3',
+  'yzj-ai-crm.assistant.activeConversation.v3',
+  'yzj-ai-crm.assistant.conversations.v3',
   'yzj-ai-crm.assistant.messages.v2',
   'yzj-ai-crm.assistant.activeConversation.v2',
   'yzj-ai-crm.assistant.conversations.v2',
@@ -111,11 +117,12 @@ const LEGACY_CHAT_STORAGE_KEYS = [
   'yzj-ai-crm.assistant.activeConversation.v1',
   'yzj-ai-crm.assistant.conversations.v1',
 ];
-const USER_CONVERSATION_KEY_PREFIX = 'conv-user-';
+const USER_CONVERSATION_KEY_PREFIX = `${buildAssistantConversationKey('user')}-`;
 const NEW_CONVERSATION_LABEL = '新会话';
 const NEW_CONVERSATION_LAST_MESSAGE = '可以描述目标、选择场景或输入 slash 命令。';
 const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1';
 const RECORD_RESULT_TABLE_PAGE_SIZE = 5;
+const REMOTE_CONVERSATION_RUN_PAGE_SIZE = 50;
 
 const recordResultCatalog: Catalog = {
   $id: RECORD_RESULT_A2UI_CATALOG_ID,
@@ -1131,6 +1138,119 @@ function loadPersistedMessages(
   return sanitized.length > 0 ? sanitized : null;
 }
 
+function toRemoteMessageInfo(
+  message: AgentRunDetailResponse['messages'][number],
+): MessageInfo<AssistantChatMessage> | null {
+  if (message.role !== 'user' && message.role !== 'assistant') {
+    return null;
+  }
+  const extraInfo = message.extraInfo && typeof message.extraInfo === 'object'
+    ? message.extraInfo as AssistantChatMessage['extraInfo']
+    : undefined;
+  return {
+    id: message.messageId,
+    status: 'success',
+    message: {
+      role: message.role,
+      content: message.content,
+      attachments: message.attachments,
+      ...(extraInfo ? { extraInfo } : {}),
+    },
+    ...(extraInfo ? { extraInfo } : {}),
+  };
+}
+
+function orderRemoteRunMessages(messages: AgentRunDetailResponse['messages']) {
+  const roleOrder: Record<string, number> = {
+    user: 0,
+    assistant: 1,
+  };
+  return [...messages].sort((left, right) => {
+    const timeOrder = left.createdAt.localeCompare(right.createdAt);
+    if (timeOrder !== 0) {
+      return timeOrder;
+    }
+    const leftRoleOrder = roleOrder[left.role] ?? 9;
+    const rightRoleOrder = roleOrder[right.role] ?? 9;
+    if (leftRoleOrder !== rightRoleOrder) {
+      return leftRoleOrder - rightRoleOrder;
+    }
+    return left.messageId.localeCompare(right.messageId);
+  });
+}
+
+async function fetchRemoteConversationMessages(
+  conversationKey: string,
+): Promise<DefaultMessageInfo<AssistantChatMessage>[] | null> {
+  try {
+    const query = new URLSearchParams({
+      conversationKey,
+      page: '1',
+      pageSize: String(REMOTE_CONVERSATION_RUN_PAGE_SIZE),
+    });
+    const runsResponse = await fetch(`/api/agent/runs?${query.toString()}`, {
+      cache: 'no-store',
+    });
+    if (!runsResponse.ok) {
+      return null;
+    }
+    const runsPayload = await runsResponse.json() as AgentRunListResponse;
+    if (!runsPayload.items.length) {
+      return null;
+    }
+
+    const details = await Promise.all(
+      [...runsPayload.items]
+        .reverse()
+        .map(async (run) => {
+          try {
+            const detailResponse = await fetch(
+              `/api/agent/runs/${encodeURIComponent(run.runId)}`,
+              { cache: 'no-store' },
+            );
+            if (!detailResponse.ok) {
+              return null;
+            }
+            return await detailResponse.json() as AgentRunDetailResponse;
+          } catch {
+            return null;
+          }
+        }),
+    );
+
+    const visited = new Set<string>();
+    const messages = details.flatMap((detail) => {
+      if (!detail) {
+        return [];
+      }
+      return orderRemoteRunMessages(detail.messages)
+        .map(toRemoteMessageInfo)
+        .filter((item): item is MessageInfo<AssistantChatMessage> => {
+          if (!item || visited.has(String(item.id))) {
+            return false;
+          }
+          visited.add(String(item.id));
+          return true;
+        });
+    });
+
+    return messages.length > 0 ? messages : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadDefaultConversationMessages(
+  conversationKey?: string,
+): Promise<DefaultMessageInfo<AssistantChatMessage>[]> {
+  if (!conversationKey) {
+    return [];
+  }
+  const localMessages = loadPersistedMessages(conversationKey);
+  const remoteMessages = await fetchRemoteConversationMessages(conversationKey);
+  return remoteMessages ?? localMessages ?? [];
+}
+
 function persistMessages(conversationKey: string, messages: MessageInfo<AssistantChatMessage>[]) {
   const sanitized = messages
     .map(toPersistableMessageInfo)
@@ -1658,7 +1778,7 @@ async function fetchMetaQuestionOptions(input: {
       keyword: input.keyword,
       pageSize: input.pageSize,
       tenantContext: {
-        operatorOpenId: DEFAULT_OPERATOR_OPEN_ID,
+        operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
       },
     }),
     signal: input.signal,
@@ -2533,7 +2653,7 @@ function buildFixedSceneConversations(): ConversationSession[] {
   return sceneOrder
     .filter((item) => item.key !== 'chat')
     .map((item) => ({
-      key: `scene-${item.key}`,
+      key: buildAssistantConversationKey(`scene-${item.key}`),
       label: item.title,
       route: item.route,
       group: '场景入口',
@@ -2990,7 +3110,7 @@ function AssistantConversationRuntime({
     useXChat<AssistantChatMessage>({
       provider: providerFactory(activeConversationKey) as any,
       conversationKey: activeConversationKey,
-      defaultMessages: (info?: { conversationKey?: string }) => {
+      defaultMessages: async (info?: { conversationKey?: string }) => {
         const key = String(info?.conversationKey ?? activeConversationKey);
         defaultMessagesConversationKeyRef.current = key;
         const conversation = conversations.find((item) => item.key === key) as
@@ -2999,7 +3119,7 @@ function AssistantConversationRuntime({
         if (isBlankUserConversation(conversation)) {
           return [];
         }
-        return loadPersistedMessages(key) ?? [];
+        return loadDefaultConversationMessages(key);
       },
       requestPlaceholder: (requestParams) => {
         const sceneKey = requestParams.sceneKey || scene.key;
@@ -3812,7 +3932,7 @@ function AssistantWorkspace() {
 
   const onCreateConversation = () => {
     const now = new Date();
-    const conversationKey = `conv-user-${now.getTime()}`;
+    const conversationKey = `${USER_CONVERSATION_KEY_PREFIX}${now.getTime()}`;
     const newConversation: ConversationSession = {
       key: conversationKey,
       label: NEW_CONVERSATION_LABEL,
