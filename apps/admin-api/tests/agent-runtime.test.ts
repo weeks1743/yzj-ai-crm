@@ -1036,6 +1036,100 @@ test('Agent runtime returns A2UI surfaces for empty, single, and multi record se
   }
 });
 
+test('Record A2UI view model promotes relation fields for associated CRM objects', async () => {
+  const cases: Array<{
+    objectKey: ShadowObjectKey;
+    fields: Array<{ title: string; value: unknown }>;
+    expectedFields: Array<{ label: string; value: string }>;
+    expectedSubtitlePart: string;
+  }> = [
+    {
+      objectKey: 'contact',
+      fields: [
+        { title: '联系人姓名', value: '李玲玲' },
+        { title: '关联客户', value: { showName: '安徽艳阳电气', formInstId: 'customer-ah-001' } },
+        { title: '手机', value: '13612952011' },
+      ],
+      expectedFields: [{ label: '关联客户', value: '安徽艳阳电气' }],
+      expectedSubtitlePart: '安徽艳阳电气',
+    },
+    {
+      objectKey: 'opportunity',
+      fields: [
+        { title: '机会名称', value: '苏州ERP升级项目' },
+        { title: '客户编号', value: { showName: '苏州恒达机电有限公司', formInstId: 'customer-sz-001' } },
+        { title: '联系人', value: { _S_NAME: '陈燕', formInstId: 'contact-sz-001' } },
+      ],
+      expectedFields: [
+        { label: '客户编号', value: '苏州恒达机电有限公司' },
+        { label: '联系人', value: '陈燕' },
+      ],
+      expectedSubtitlePart: '苏州恒达机电有限公司',
+    },
+    {
+      objectKey: 'followup',
+      fields: [
+        { title: '跟进记录', value: '电话沟通ERP升级预算' },
+        { title: '客户编号', value: { showName: '苏州恒达机电有限公司', formInstId: 'customer-sz-001' } },
+        { title: '商机', value: { _S_TITLE: '苏州ERP升级项目', formInstId: 'opportunity-sz-001' } },
+      ],
+      expectedFields: [
+        { label: '客户编号', value: '苏州恒达机电有限公司' },
+        { label: '商机', value: '苏州ERP升级项目' },
+      ],
+      expectedSubtitlePart: '苏州恒达机电有限公司',
+    },
+  ];
+
+  for (const item of cases) {
+    const response = await buildRecordSearchPageResponse({
+      shadowMetadataService: {
+        executeSearch: async () => ({
+          objectKey: item.objectKey,
+          operation: 'search',
+          mode: 'live',
+          requestBody: {},
+          pageNumber: 1,
+          pageSize: 5,
+          totalPages: 1,
+          totalElements: 1,
+          records: [
+            {
+              formInstId: `${item.objectKey}-form-001`,
+              fields: item.fields,
+              rawRecord: {},
+            },
+          ],
+        }),
+      } as any,
+      request: {
+        objectKey: item.objectKey,
+        toolCode: `record.${item.objectKey}.search`,
+        searchInput: {
+          filters: [],
+          operatorOpenId: 'operator-001',
+          pageNumber: 1,
+          pageSize: 5,
+        },
+      },
+    });
+
+    const record = response.result.records[0];
+    assert.ok(record);
+    for (const expected of item.expectedFields) {
+      assert.ok(
+        record.primaryFields.some((field) => field.label === expected.label && field.value === expected.value),
+        `${item.objectKey} should expose ${expected.label}=${expected.value}`,
+      );
+      assert.ok(
+        record.relationFields.some((field) => field.label === expected.label && field.value === expected.value),
+        `${item.objectKey} should expose relation field ${expected.label}=${expected.value}`,
+      );
+    }
+    assert.match(record.subtitle ?? '', new RegExp(item.expectedSubtitlePart));
+  }
+});
+
 test('Record A2UI pagination endpoint returns one live page with the same view model shape', async () => {
   let capturedInput: any = null;
   const response = await buildRecordSearchPageResponse({

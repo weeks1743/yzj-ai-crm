@@ -3180,6 +3180,7 @@ function buildRecordResultRecordView(input: {
   const record = input.record;
   const title = readLiveRecordDisplayName(record, input.capability) || record.formInstId || '未命名记录';
   const primaryFields = buildRecordResultFields(record, getPrimaryRecordFieldTitles(input.objectKey));
+  const relationFields = buildRecordResultFields(record, getRelationRecordFieldTitles(input.objectKey));
   const usedLabels = new Set(primaryFields.map((field) => field.label));
   const secondaryFields = (record.fields ?? [])
     .map((field) => ({
@@ -3196,6 +3197,7 @@ function buildRecordResultRecordView(input: {
     title,
     ...(subtitle ? { subtitle } : {}),
     tags,
+    relationFields,
     primaryFields,
     secondaryFields,
   };
@@ -3239,15 +3241,20 @@ function buildRecordResultTags(record: ShadowLiveRecord, objectKey: ShadowObject
 }
 
 function buildRecordResultSubtitle(record: ShadowLiveRecord, objectKey: ShadowObjectKey): string {
-  if (objectKey === 'customer' || objectKey === 'contact') {
-    return [readFieldByTitles(record, ['省']), readFieldByTitles(record, ['市']), readFieldByTitles(record, ['区'])]
-      .filter(Boolean)
-      .join(' / ');
+  const region = [readFieldByTitles(record, ['省']), readFieldByTitles(record, ['市']), readFieldByTitles(record, ['区'])]
+    .filter(Boolean)
+    .join(' / ');
+  const relation = readFieldByTitles(record, getRelationRecordFieldTitles(objectKey));
+  if (objectKey === 'customer') {
+    return region;
+  }
+  if (objectKey === 'contact') {
+    return [relation, region].filter(Boolean).join(' / ');
   }
   if (objectKey === 'opportunity') {
-    return readFieldByTitles(record, ['关联客户', '客户编号']) || readFieldByTitles(record, ['预计成交时间']);
+    return relation || readFieldByTitles(record, ['预计成交时间']);
   }
-  return readFieldByTitles(record, ['跟进时间', '拜访时间']) || readFieldByTitles(record, ['关联客户']);
+  return readFieldByTitles(record, ['跟进时间', '拜访时间']) || relation;
 }
 
 function getPrimaryRecordFieldTitles(objectKey: ShadowObjectKey): string[] {
@@ -3255,12 +3262,42 @@ function getPrimaryRecordFieldTitles(objectKey: ShadowObjectKey): string[] {
     return ['客户状态', '客户类型', '启用状态', '行业', '省', '市', '区', '联系人姓名', '联系人手机', '公司电话', '办公电话', '负责人', '售后服务代表'];
   }
   if (objectKey === 'contact') {
-    return ['联系人姓名', '手机', '启用状态', '关联客户', '省', '市', '区', '办公电话'];
+    return ['联系人姓名', '手机', '启用状态', ...getRelationRecordFieldTitles(objectKey), '省', '市', '区', '办公电话'];
   }
   if (objectKey === 'opportunity') {
-    return ['机会名称', '商机名称', '关联客户', '联系人', '销售阶段', '预计成交时间', '商机预算（元）', '负责人'];
+    return ['机会名称', '商机名称', ...getRelationRecordFieldTitles(objectKey), '销售阶段', '预计成交时间', '商机预算（元）', '负责人'];
   }
-  return ['跟进记录', '关联客户', '关联商机', '跟进方式', '跟进时间', '下次回访日期', '负责人'];
+  return ['跟进记录', ...getRelationRecordFieldTitles(objectKey), '跟进方式', '跟进时间', '下次回访日期', '负责人', '跟进负责人'];
+}
+
+function getRelationRecordFieldTitles(objectKey: ShadowObjectKey): string[] {
+  const customerRelationTitles = ['关联客户', '客户编号', '客户名称', '所属客户', '绑定客户', '选择客户', '客户'];
+  if (objectKey === 'contact') {
+    return customerRelationTitles;
+  }
+  if (objectKey === 'opportunity') {
+    return [
+      ...customerRelationTitles,
+      '关联联系人',
+      '联系人',
+      '联系人姓名',
+      '联系人编号',
+    ];
+  }
+  if (objectKey === 'followup') {
+    return [
+      ...customerRelationTitles,
+      '关联商机',
+      '商机',
+      '商机名称',
+      '商机编号',
+      '关联联系人',
+      '联系人',
+      '联系人姓名',
+      '联系人编号',
+    ];
+  }
+  return [];
 }
 
 function buildRecordReadContent(view: RecordResultViewModel): string {
@@ -3664,20 +3701,29 @@ function stringifyPreviewValue(value: unknown): string {
   }
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    if (typeof record.title === 'string') {
-      return record.title;
-    }
-    if (typeof record.name === 'string') {
-      return record.name;
-    }
-    if (typeof record.open_id === 'string') {
-      return record.open_id;
-    }
-    if (typeof record.formInstId === 'string') {
-      return record.formInstId;
-    }
-    if (typeof record.id === 'string') {
-      return record.id;
+    const preferredKeys = [
+      'showName',
+      'displayName',
+      'label',
+      'title',
+      'name',
+      '_S_TITLE',
+      '_S_NAME',
+      'text',
+      'value',
+      'open_id',
+      'openId',
+      'formInstId',
+      'id',
+    ];
+    for (const key of preferredKeys) {
+      const candidate = record[key];
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+      if (typeof candidate === 'number' || typeof candidate === 'boolean') {
+        return String(candidate);
+      }
     }
     return JSON.stringify(value);
   }
@@ -6271,8 +6317,15 @@ function readFieldByTitles(
   },
   titles: string[],
 ): string {
-  const field = (record.fields ?? []).find((item) => item.title && titles.includes(item.title));
-  return field ? stringifyPreviewValue(field.value ?? field.rawValue) : '';
+  const fields = record.fields ?? [];
+  for (const title of titles) {
+    const field = fields.find((item) => item.title === title);
+    const value = field ? stringifyPreviewValue(field.value ?? field.rawValue) : '';
+    if (value) {
+      return value;
+    }
+  }
+  return '';
 }
 
 async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Promise<SkillJobWaitResult> {

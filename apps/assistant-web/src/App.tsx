@@ -266,6 +266,7 @@ interface RecordResultRecordView {
   title: string;
   subtitle?: string;
   tags?: string[];
+  relationFields?: RecordResultFieldView[];
   primaryFields?: RecordResultFieldView[];
   secondaryFields?: RecordResultFieldView[];
 }
@@ -1822,6 +1823,10 @@ function RecordResultList({
   const shouldShowPagination = supportsDynamicPagination
     ? total > displayPageSize
     : records.length > RECORD_RESULT_TABLE_PAGE_SIZE;
+  const shouldShowAssociationColumn = records
+    .some((record) => (record.relationFields ?? []).some((field) => field.label && field.value))
+    || getRecordAssociationFieldGroups(activeResult?.objectKey).length > 0;
+  const tableScrollX = shouldShowAssociationColumn ? 1280 : 1060;
   const summaryText = shouldShowPagination
     ? supportsDynamicPagination
       ? `共 ${total} 条，当前第 ${displayPage}/${displayTotalPages} 页，每页 ${displayPageSize} 条，翻页实时查询。`
@@ -1871,12 +1876,25 @@ function RecordResultList({
       width: 190,
       render: (_value, record) => <RecordTags tags={record.tags} compact />,
     },
+    ...(shouldShowAssociationColumn
+      ? [
+          {
+            title: '关联对象',
+            width: 220,
+            render: (_value, record) => (
+              <div className={styles.recordResultCellText}>
+                {readRecordAssociationSummary(record, activeResult?.objectKey) || '-'}
+              </div>
+            ),
+          } satisfies ColumnsType<RecordResultRecordView>[number],
+        ]
+      : []),
     {
       title: '地区',
       width: 160,
       render: (_value, record) => (
         <div className={styles.recordResultCellText}>
-          {joinRecordFieldValues(record, ['省', '市', '区']) || record.subtitle || '-'}
+          {joinRecordFieldValues(record, ['省', '市', '区']) || '-'}
         </div>
       ),
     },
@@ -1935,7 +1953,7 @@ function RecordResultList({
           rowKey={(record) => record.formInstId || record.title}
           columns={columns}
           dataSource={displayRecords}
-          scroll={{ x: 1060 }}
+          scroll={{ x: tableScrollX }}
           tableLayout="fixed"
         />
         {pageError ? (
@@ -2087,11 +2105,56 @@ function getRecordFields(record: RecordResultRecordView): RecordResultFieldView[
   return [...(record.primaryFields ?? []), ...(record.secondaryFields ?? [])];
 }
 
-function readRecordFieldValue(record: RecordResultRecordView, labels: string[]): string {
+function findRecordField(record: RecordResultRecordView, labels: string[]): RecordResultFieldView | undefined {
   const fields = getRecordFields(record);
   const normalizedLabels = labels.map((label) => label.trim()).filter(Boolean);
-  const matched = fields.find((field) => normalizedLabels.includes(field.label));
+  return fields.find((field) => normalizedLabels.includes(field.label));
+}
+
+function readRecordFieldValue(record: RecordResultRecordView, labels: string[]): string {
+  const matched = findRecordField(record, labels);
   return matched?.value ?? '';
+}
+
+function readRecordAssociationSummary(record: RecordResultRecordView, objectKey?: ShadowObjectKey): string {
+  const seen = new Set<string>();
+  const serverRelationFields = (record.relationFields ?? []).filter((field) => field.label && field.value);
+  const fallbackRelationFields = getRecordAssociationFieldGroups(objectKey)
+    .map((labels) => findRecordField(record, labels))
+    .filter((field): field is RecordResultFieldView => Boolean(field?.label && field.value));
+  const entries = (serverRelationFields.length ? serverRelationFields : fallbackRelationFields)
+    .filter((field) => {
+      const key = `${field.label}:${field.value}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .map((field) => `${field.label}：${field.value}`);
+
+  return entries.join(' / ');
+}
+
+function getRecordAssociationFieldGroups(objectKey?: ShadowObjectKey): string[][] {
+  const customerRelationLabels = ['关联客户', '客户编号', '客户名称', '所属客户', '绑定客户', '选择客户', '客户'];
+  if (objectKey === 'contact') {
+    return [customerRelationLabels];
+  }
+  if (objectKey === 'opportunity') {
+    return [
+      customerRelationLabels,
+      ['关联联系人', '联系人', '联系人姓名', '联系人编号'],
+    ];
+  }
+  if (objectKey === 'followup') {
+    return [
+      customerRelationLabels,
+      ['关联商机', '商机', '商机名称', '商机编号'],
+      ['关联联系人', '联系人', '联系人姓名', '联系人编号'],
+    ];
+  }
+  return [];
 }
 
 function joinRecordFieldValues(record: RecordResultRecordView, labels: string[]): string {

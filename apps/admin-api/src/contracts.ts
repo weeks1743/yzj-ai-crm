@@ -675,6 +675,7 @@ export interface AgentRecordResultRecordView {
   title: string;
   subtitle?: string;
   tags: string[];
+  relationFields: AgentRecordResultFieldView[];
   primaryFields: AgentRecordResultFieldView[];
   secondaryFields: AgentRecordResultFieldView[];
 }
