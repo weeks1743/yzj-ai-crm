@@ -249,6 +249,19 @@ export async function initializeDatabaseSchema(
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS ${table('agent_conversations')} (
+        conversation_key TEXT PRIMARY KEY,
+        operator_open_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        route TEXT NOT NULL,
+        group_name TEXT NOT NULL,
+        last_message TEXT NOT NULL,
+        updated_label TEXT NOT NULL,
+        scene_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS ${table('agent_tool_calls')} (
         tool_call_id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
@@ -276,6 +289,9 @@ export async function initializeDatabaseSchema(
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_runs_conversation_recent`)}
       ON ${table('agent_runs')}(conversation_key, created_at DESC, run_id DESC);
+
+      CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_conversations_operator_recent`)}
+      ON ${table('agent_conversations')}(operator_open_id, updated_at DESC, conversation_key DESC);
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_tool_calls_run`)}
       ON ${table('agent_tool_calls')}(run_id, started_at ASC, tool_call_id ASC);

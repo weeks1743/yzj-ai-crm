@@ -4,6 +4,7 @@ import type {
   ApiErrorResponse,
   AppConfig,
   AgentChatRequest,
+  AgentConversationUpsertRequest,
   AgentMetaQuestionOptionsRequest,
   AgentRecordSearchPageRequest,
   ArtifactSearchRequest,
@@ -22,6 +23,7 @@ import type {
   ShadowPreviewUpsertInput,
 } from './contracts.js';
 import { ApprovalFileService } from './approval-file-service.js';
+import type { AgentConversationService } from './agent-conversation-service.js';
 import type { AgentObservabilityService } from './agent-observability-service.js';
 import { AgentService } from './agent-service.js';
 import { AppError, BadRequestError, ServiceUnavailableError } from './errors.js';
@@ -46,6 +48,7 @@ interface CreateAdminApiServerOptions {
   artifactService?: ArtifactService;
   artifactPresentationService?: ArtifactPresentationService;
   agentService?: AgentService;
+  agentConversationService?: AgentConversationService;
   agentObservabilityService?: AgentObservabilityService;
 }
 
@@ -307,6 +310,29 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
 
       if (method === 'GET' && url.pathname === '/api/external-skills') {
         writeJson(response, 200, await options.externalSkillService.listSkills());
+        return;
+      }
+
+      if (method === 'GET' && url.pathname === '/api/agent/conversations') {
+        if (!options.agentConversationService) {
+          throw new ServiceUnavailableError('Agent 会话服务未启用');
+        }
+        writeJson(
+          response,
+          200,
+          await options.agentConversationService.listConversations(
+            url.searchParams.get('operatorOpenId') ?? undefined,
+          ),
+        );
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/agent/conversations') {
+        if (!options.agentConversationService) {
+          throw new ServiceUnavailableError('Agent 会话服务未启用');
+        }
+        const payload = await readJsonBody<AgentConversationUpsertRequest>(request);
+        writeJson(response, 200, await options.agentConversationService.upsertConversation(payload));
         return;
       }
 

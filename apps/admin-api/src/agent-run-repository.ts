@@ -15,6 +15,7 @@ import type {
   AgentRunDetailResponse,
   AgentRunListResponse,
   AgentRunSummary,
+  ConversationSession,
   TaskPlan,
 } from './contracts.js';
 import type {
@@ -101,6 +102,19 @@ interface AgentMessageRow extends QueryResultRow {
   created_at: string;
 }
 
+interface AgentConversationRow extends QueryResultRow {
+  conversation_key: string;
+  operator_open_id: string;
+  label: string;
+  route: string;
+  group_name: string;
+  last_message: string;
+  updated_label: string;
+  scene_key: string;
+  created_at: string;
+  updated_at: string;
+}
+
 interface AgentToolCallRow extends QueryResultRow {
   tool_call_id: string;
   run_id: string;
@@ -123,6 +137,61 @@ interface ConfirmationAuditRow extends ConfirmationRow {
 
 export class AgentRunRepository {
   constructor(private readonly database: DatabaseConnection) {}
+
+  async listConversations(operatorOpenId: string): Promise<ConversationSession[]> {
+    const rows = await this.database.query<AgentConversationRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('agent_conversations')}
+        WHERE operator_open_id = $1
+        ORDER BY updated_at DESC, conversation_key DESC
+      `,
+      [operatorOpenId],
+    );
+
+    return rows.map(mapConversationRow);
+  }
+
+  async upsertConversation(input: {
+    operatorOpenId: string;
+    conversation: ConversationSession;
+  }): Promise<ConversationSession> {
+    const now = new Date().toISOString();
+    const conversation = input.conversation;
+    const row = await this.database.queryOne<AgentConversationRow>(
+      `
+        INSERT INTO ${this.database.table('agent_conversations')} (
+          conversation_key, operator_open_id, label, route, group_name, last_message,
+          updated_label, scene_key, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (conversation_key) DO UPDATE SET
+          operator_open_id = EXCLUDED.operator_open_id,
+          label = EXCLUDED.label,
+          route = EXCLUDED.route,
+          group_name = EXCLUDED.group_name,
+          last_message = EXCLUDED.last_message,
+          updated_label = EXCLUDED.updated_label,
+          scene_key = EXCLUDED.scene_key,
+          updated_at = EXCLUDED.updated_at
+        RETURNING *
+      `,
+      [
+        conversation.key,
+        input.operatorOpenId,
+        conversation.label,
+        conversation.route,
+        conversation.group,
+        conversation.lastMessage,
+        conversation.updatedAt,
+        conversation.scene,
+        now,
+        now,
+      ],
+    );
+
+    return mapConversationRow(row);
+  }
 
   async listRuns(query: AgentRunListQuery = {}): Promise<AgentRunListResponse> {
     const { page, pageSize, offset } = normalizePagination(query.page, query.pageSize);
@@ -513,6 +582,8 @@ export class AgentRunRepository {
       ],
     );
 
+    await this.touchConversationFromRun(input.request, now);
+
     for (const toolCall of input.toolCalls) {
       await this.database.query(
         `
@@ -544,6 +615,46 @@ export class AgentRunRepository {
         ],
       );
     }
+  }
+
+  private async touchConversationFromRun(request: AgentChatRequest, now: string): Promise<void> {
+    const operatorOpenId = request.tenantContext?.operatorOpenId?.trim();
+    if (!operatorOpenId) {
+      return;
+    }
+
+    const label = buildConversationTitleFromQuery(request.query);
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('agent_conversations')} (
+          conversation_key, operator_open_id, label, route, group_name, last_message,
+          updated_label, scene_key, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, '最近会话', $5, '刚刚', $6, $7, $7)
+        ON CONFLICT (conversation_key) DO UPDATE SET
+          operator_open_id = EXCLUDED.operator_open_id,
+          label = CASE
+            WHEN ${this.database.table('agent_conversations')}.label = '新会话'
+            THEN EXCLUDED.label
+            ELSE ${this.database.table('agent_conversations')}.label
+          END,
+          route = EXCLUDED.route,
+          group_name = EXCLUDED.group_name,
+          last_message = EXCLUDED.last_message,
+          updated_label = EXCLUDED.updated_label,
+          scene_key = EXCLUDED.scene_key,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
+        request.conversationKey,
+        operatorOpenId,
+        label,
+        routeFromSceneKey(request.sceneKey),
+        request.query,
+        request.sceneKey,
+        now,
+      ],
+    );
   }
 
   async saveConfirmation(confirmation: ConfirmationRequest): Promise<void> {
@@ -742,6 +853,18 @@ function mapObservedMessage(row: AgentMessageRow): AgentObservedMessage {
   };
 }
 
+function mapConversationRow(row: AgentConversationRow): ConversationSession {
+  return {
+    key: row.conversation_key,
+    label: row.label,
+    route: row.route,
+    group: row.group_name,
+    lastMessage: row.last_message,
+    updatedAt: row.updated_label,
+    scene: row.scene_key,
+  };
+}
+
 function mapToolCallRow(row: AgentToolCallRow): AgentToolCall {
   return {
     id: row.tool_call_id,
@@ -754,6 +877,18 @@ function mapToolCallRow(row: AgentToolCallRow): AgentToolCall {
     finishedAt: row.finished_at,
     errorMessage: row.error_message,
   };
+}
+
+function buildConversationTitleFromQuery(query: string) {
+  const normalized = query.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '新会话';
+  }
+  return normalized.length > 24 ? `${normalized.slice(0, 24)}…` : normalized;
+}
+
+function routeFromSceneKey(sceneKey: string) {
+  return sceneKey === 'chat' ? '/chat' : `/chat/${sceneKey}`;
 }
 
 function mapConfirmationAuditRow(row: ConfirmationAuditRow): AgentConfirmationAuditRow {

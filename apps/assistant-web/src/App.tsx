@@ -73,6 +73,8 @@ import type {
   AgentRecordResultViewModel,
   AgentRecordSearchPageQuery,
   AgentRecordSearchPageResponse,
+  AgentConversationListResponse,
+  AgentConversationUpsertRequest,
   AgentMetaQuestionOptionsResponse,
   AgentRunDetailResponse,
   AgentRunListResponse,
@@ -1385,6 +1387,62 @@ function persistCustomConversations(
       .filter(isPersistableConversation)
       .map(normalizeConversationSession),
   });
+}
+
+function mergeRemoteConversations(
+  baseConversations: ConversationSession[],
+  remoteConversations: ConversationSession[],
+  localConversations: ConversationSession[] = [],
+) {
+  const fixedKeys = new Set(baseConversations.map((item) => item.key));
+  const customConversations = remoteConversations
+    .filter(isPersistableConversation)
+    .map(normalizeConversationSession)
+    .filter((item) => !fixedKeys.has(item.key));
+  const remoteKeys = new Set(customConversations.map((item) => item.key));
+  const pendingLocalConversations = localConversations
+    .filter(isPersistableConversation)
+    .map(normalizeConversationSession)
+    .filter((item) =>
+      !fixedKeys.has(item.key)
+      && !remoteKeys.has(item.key)
+      && isBlankUserConversation(item),
+    );
+
+  return [...pendingLocalConversations, ...customConversations, ...baseConversations];
+}
+
+async function fetchRemoteConversations(): Promise<ConversationSession[] | null> {
+  try {
+    const query = new URLSearchParams({
+      operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+    });
+    const response = await fetch(`/api/agent/conversations?${query.toString()}`, {
+      cache: 'no-store',
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = await response.json() as AgentConversationListResponse;
+    return Array.isArray(payload.items) ? payload.items : [];
+  } catch {
+    return null;
+  }
+}
+
+async function persistRemoteConversation(conversation: ConversationSession): Promise<void> {
+  const payload: AgentConversationUpsertRequest = {
+    operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+    conversation: normalizeConversationSession(conversation),
+  };
+  const response = await fetch('/api/agent/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await readApiErrorMessage(response));
+  }
 }
 
 function getStoredActiveConversationKey(allowedKeys: string[]) {
@@ -3498,7 +3556,7 @@ function AssistantConversationRuntime({
     }
 
     if (activeConversation && isUserCreatedConversationKey(activeConversation.key)) {
-      setConversation(activeConversation.key, {
+      const nextConversation = {
         ...activeConversation,
         label: isBlankUserConversation(activeConversation)
           ? buildConversationTitleFromQuery(queryText)
@@ -3507,6 +3565,10 @@ function AssistantConversationRuntime({
         updatedAt: '刚刚',
         scene: scene.key,
         route: locationPathname,
+      };
+      setConversation(activeConversation.key, nextConversation);
+      void persistRemoteConversation(nextConversation).catch(() => {
+        // Local state remains usable when admin-api is unavailable.
       });
     }
 
@@ -3885,15 +3947,53 @@ function AssistantWorkspace() {
     setActiveConversationKey,
     addConversation,
     setConversation,
+    setConversations,
   } = useXConversations({
     defaultConversations,
     defaultActiveConversationKey:
       getStoredActiveConversationKey(defaultConversations.map((item) => item.key))
       ?? getConversationKeyByRoute(location.pathname),
   });
+  const conversationsRef = useRef<ConversationSession[]>(defaultConversations);
   const activeConversation = conversations.find(
     (item) => item.key === activeConversationKey,
   ) as ConversationSession | undefined;
+
+  useEffect(() => {
+    conversationsRef.current = conversations as ConversationSession[];
+  }, [conversations]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void fetchRemoteConversations().then((remoteConversations) => {
+      if (cancelled || !remoteConversations) {
+        return;
+      }
+
+      const nextConversations = mergeRemoteConversations(
+        baseConversations,
+        remoteConversations,
+        conversationsRef.current,
+      );
+      setConversations(nextConversations);
+      persistCustomConversations(nextConversations, baseConversations);
+
+      if (!nextConversations.some((item) => item.key === activeConversationKey)) {
+        setActiveConversationKey(getConversationKeyByRoute(location.pathname));
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    baseConversations,
+    getConversationKeyByRoute,
+    location.pathname,
+    setActiveConversationKey,
+    setConversations,
+  ]);
 
   useEffect(() => {
     if (activeConversation?.route === location.pathname) {
@@ -3947,6 +4047,9 @@ function AssistantWorkspace() {
     setBlankConversationKeys((current) => new Set(current).add(conversationKey));
     persistMessages(conversationKey, []);
     addConversation(newConversation, 'prepend');
+    void persistRemoteConversation(newConversation).catch(() => {
+      // Local state remains usable when admin-api is unavailable.
+    });
     setActiveConversationKey(conversationKey);
     navigate('/chat');
   };

@@ -41,6 +41,7 @@ test('openDatabase creates admin-api PostgreSQL tables for fresh schema', async 
       rows.map((row) => row.table_name),
       [
         'agent_confirmations',
+        'agent_conversations',
         'agent_messages',
         'agent_runs',
         'agent_tool_calls',
@@ -71,7 +72,7 @@ test('openDatabase initialization is idempotent', async () => {
       `,
       [schema],
     );
-    assert.equal(Number(row.total), 11);
+    assert.equal(Number(row.total), 12);
   } finally {
     await second.dropSchema();
     await second.close();

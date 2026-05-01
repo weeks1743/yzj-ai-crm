@@ -1074,6 +1074,15 @@ export interface ConversationSession {
   scene: string;
 }
 
+export interface AgentConversationListResponse {
+  items: ConversationSession[];
+}
+
+export interface AgentConversationUpsertRequest {
+  operatorOpenId?: string;
+  conversation: ConversationSession;
+}
+
 export interface SceneTask {
   id: string;
   title: string;

@@ -844,6 +844,26 @@ export interface AgentConfirmationListResponse {
   items: AgentConfirmationAuditRow[];
 }
 
+export interface ConversationSession {
+  key: string;
+  label: string;
+  route: string;
+  group: string;
+  lastMessage: string;
+  updatedAt: string;
+  badgeCount?: number;
+  scene: string;
+}
+
+export interface AgentConversationListResponse {
+  items: ConversationSession[];
+}
+
+export interface AgentConversationUpsertRequest {
+  operatorOpenId?: string;
+  conversation: ConversationSession;
+}
+
 export interface TenantAppSettingsResponse {
   eid: string;
   appId: string;
