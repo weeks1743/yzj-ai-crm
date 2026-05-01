@@ -29,6 +29,18 @@ import type {
 } from './contracts.js';
 import { ConfigError } from './errors.js';
 
+function describePostgresConnection(connectionString: string, schema: string): string {
+  try {
+    const url = new URL(connectionString);
+    const host = url.hostname || 'localhost';
+    const port = url.port ? `:${url.port}` : '';
+    const database = url.pathname.replace(/^\/+/, '') || 'postgres';
+    return `${host}${port}/${database}#${schema}`;
+  } catch {
+    return `postgres#${schema}`;
+  }
+}
+
 class DisabledChatClient implements ChatCompletionClient {
   async createChatCompletion(_input: ChatCompletionRequest): Promise<ChatCompletionResult> {
     throw new ConfigError('DEEPSEEK_API_KEY 未配置，无法执行 skill job');
@@ -95,7 +107,7 @@ class DisabledDocmeeClient extends DocmeeClient {
 }
 
 const config = loadAppConfig();
-const database = openDatabase(config.storage.sqlitePath);
+const database = await openDatabase(config.storage.postgresUrl, config.storage.postgresSchema);
 const repository = new JobRepository(database);
 const artifactStore = new ArtifactStore(config.storage.artifactDir, repository);
 const dependencySnapshot = probeDependencies(config);
@@ -148,6 +160,6 @@ const server = createSkillRuntimeServer({
 
 server.listen(config.server.port, () => {
   console.log(
-    `[skill-runtime] listening on http://127.0.0.1:${config.server.port} (sqlite: ${config.storage.sqlitePath})`,
+    `[skill-runtime] listening on http://127.0.0.1:${config.server.port} (postgres: ${describePostgresConnection(config.storage.postgresUrl, config.storage.postgresSchema)})`,
   );
 });

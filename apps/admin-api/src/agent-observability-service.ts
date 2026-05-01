@@ -25,19 +25,19 @@ export interface AgentConfirmationListQuery {
 export class AgentObservabilityService {
   constructor(private readonly repository: AgentRunRepository) {}
 
-  listRuns(query: AgentRunListQuery): AgentRunListResponse {
+  async listRuns(query: AgentRunListQuery): Promise<AgentRunListResponse> {
     return this.repository.listRuns(query);
   }
 
-  getRunDetail(runId: string): AgentRunDetailResponse {
-    const detail = this.repository.getRunDetail(runId);
+  async getRunDetail(runId: string): Promise<AgentRunDetailResponse> {
+    const detail = await this.repository.getRunDetail(runId);
     if (!detail) {
       throw new NotFoundError(`未找到 Agent 运行记录：${runId}`);
     }
     return detail;
   }
 
-  listConfirmations(query: AgentConfirmationListQuery): AgentConfirmationListResponse {
+  async listConfirmations(query: AgentConfirmationListQuery): Promise<AgentConfirmationListResponse> {
     return this.repository.listConfirmations(query);
   }
 }

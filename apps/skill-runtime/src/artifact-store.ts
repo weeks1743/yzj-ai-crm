@@ -38,7 +38,7 @@ export class ArtifactStore {
     fileName: string,
     content: string,
     mimeType = 'text/markdown',
-  ): JobArtifact {
+  ): Promise<JobArtifact> {
     const safeName = sanitizeFileName(fileName);
     const jobArtifactDir = join(this.artifactDir, jobId);
     mkdirSync(jobArtifactDir, { recursive: true });
@@ -59,7 +59,7 @@ export class ArtifactStore {
     sourcePath: string,
     fileName?: string,
     mimeType?: string,
-  ): JobArtifact {
+  ): Promise<JobArtifact> {
     const stat = statSync(sourcePath, { throwIfNoEntry: false });
     if (!stat?.isFile()) {
       throw new BadRequestError(`Artifact 源文件不存在: ${sourcePath}`);
@@ -80,11 +80,11 @@ export class ArtifactStore {
     });
   }
 
-  readArtifact(jobId: string, artifactId: string): {
+  async readArtifact(jobId: string, artifactId: string): Promise<{
     artifact: JobArtifact;
     content: Buffer;
-  } {
-    const { filePath, ...artifact } = this.repository.getArtifact(jobId, artifactId);
+  }> {
+    const { filePath, ...artifact } = await this.repository.getArtifact(jobId, artifactId);
     return {
       artifact,
       content: readFileSync(filePath),

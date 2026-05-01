@@ -108,7 +108,7 @@ export function createSkillRuntimeServer(options: {
         }
 
         if (method === 'GET' && parts.length === 3) {
-          writeJson(response, 200, options.service.getJob(jobId));
+          writeJson(response, 200, await options.service.getJob(jobId));
           return;
         }
 
@@ -153,7 +153,7 @@ export function createSkillRuntimeServer(options: {
             throw new BadRequestError('缺少 artifactId');
           }
 
-          const { artifact, content } = options.service.getArtifact(jobId, artifactId);
+          const { artifact, content } = await options.service.getArtifact(jobId, artifactId);
           response.writeHead(200, {
             'Content-Type': artifact.mimeType,
             'Content-Length': String(content.byteLength),

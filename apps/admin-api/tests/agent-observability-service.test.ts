@@ -4,13 +4,13 @@ import { AgentObservabilityService } from '../src/agent-observability-service.js
 import { AgentRunRepository } from '../src/agent-run-repository.js';
 import { createInMemoryDatabase } from './test-helpers.js';
 
-test('AgentObservabilityService lists run details and confirmation audit rows', () => {
+test('AgentObservabilityService lists run details and confirmation audit rows', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const service = new AgentObservabilityService(repository);
   const startedAt = '2026-04-29T08:00:00.000Z';
   const finishedAt = '2026-04-29T08:00:01.000Z';
 
-  repository.saveRun({
+  await repository.saveRun({
     request: {
       conversationKey: 'conv-observe-001',
       sceneKey: 'chat',
@@ -117,7 +117,7 @@ test('AgentObservabilityService lists run details and confirmation audit rows', 
     } as any,
   });
 
-  repository.saveConfirmation({
+  await repository.saveConfirmation({
     confirmationId: 'confirm-observe-001',
     runId: 'run-observe-001',
     toolCode: 'record.customer.preview_create',
@@ -131,22 +131,22 @@ test('AgentObservabilityService lists run details and confirmation audit rows', 
     decidedAt: null,
   });
 
-  const list = service.listRuns({ page: 1, pageSize: 10 });
+  const list = await service.listRuns({ page: 1, pageSize: 10 });
   assert.equal(list.total, 1);
   assert.equal(list.items[0]?.traceId, 'trace-observe-001');
   assert.equal(list.items[0]?.evidenceCount, 1);
   assert.equal(list.items[0]?.pendingConfirmationCount, 1);
 
-  const filtered = service.listRuns({ traceId: 'trace-observe-001' });
+  const filtered = await service.listRuns({ traceId: 'trace-observe-001' });
   assert.equal(filtered.items[0]?.runId, 'run-observe-001');
 
-  const detail = service.getRunDetail('run-observe-001');
+  const detail = await service.getRunDetail('run-observe-001');
   assert.equal(detail.messages.length, 2);
   assert.equal(detail.toolCalls[0]?.toolCode, 'external.company_research');
   assert.equal(detail.contextSubject?.name, '上海松井机械有限公司');
   assert.equal(detail.confirmations[0]?.confirmationId, 'confirm-observe-001');
 
-  const confirmations = service.listConfirmations({ status: 'pending' });
+  const confirmations = await service.listConfirmations({ status: 'pending' });
   assert.equal(confirmations.total, 1);
   assert.equal(confirmations.items[0]?.traceId, 'trace-observe-001');
 });

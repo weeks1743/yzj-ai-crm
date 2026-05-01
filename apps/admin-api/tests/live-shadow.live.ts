@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
@@ -73,7 +74,10 @@ function loadFixture(): ShadowLiveFixtureFile {
 
 async function createLiveRuntime() {
   const config = loadAppConfig();
-  const database = openDatabase(':memory:');
+  const database = await openDatabase(
+    config.storage.postgresUrl,
+    `admin_api_live_${process.pid}_${randomUUID().replace(/-/g, '')}`,
+  );
   const approvalClient = new ApprovalClient({
     baseUrl: config.yzj.baseUrl,
   });
@@ -101,10 +105,15 @@ async function createLiveRuntime() {
       ),
     }),
   });
+  await service.initialize();
 
   return {
     service,
     approvalFileService,
+    close: async () => {
+      await database.dropSchema();
+      await database.close();
+    },
   };
 }
 
@@ -221,7 +230,7 @@ test('live shadow create-first CRUD for opportunity and followup', { timeout: 60
   assert.ok(followupFixture, 'fixture.followup 必须配置');
   assert.ok(opportunityFixture?.linkedCustomerFormInstId, 'fixture.opportunity.linkedCustomerFormInstId 必须配置');
 
-  const { service, approvalFileService } = await createLiveRuntime();
+  const { service, approvalFileService, close } = await createLiveRuntime();
   const visibilityGaps: string[] = [];
   const blockingIssues: string[] = [];
   const cleanupQueue: Array<{ objectKey: ShadowObjectKey; operatorOpenId: string; formInstId: string }> = [];
@@ -441,6 +450,7 @@ test('live shadow create-first CRUD for opportunity and followup', { timeout: 60
     if (visibilityGaps.length > 0) {
       console.log(`[live-shadow] search visibility gaps\n${visibilityGaps.map((item) => `- ${item}`).join('\n')}`);
     }
+    await close();
   }
 
   if (blockingIssues.length > 0) {

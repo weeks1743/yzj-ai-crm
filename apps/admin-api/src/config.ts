@@ -134,6 +134,14 @@ function parseDictionarySource(value: string | undefined): ShadowDictionarySourc
   );
 }
 
+function parsePostgresSchema(value: string | undefined, fallbackValue: string, label: string): string {
+  const schema = (value?.trim() || fallbackValue).trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+    throw new ConfigError(`${label} 必须是合法 PostgreSQL schema 名称`);
+  }
+  return schema;
+}
+
 function buildShadowObjects(env: NodeJS.ProcessEnv): Record<ShadowObjectKey, ShadowObjectConfig> {
   return Object.fromEntries(
     (Object.entries(SHADOW_OBJECT_META) as Array<
@@ -200,9 +208,14 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
       apiKey: env.DOCMEE_API_KEY?.trim() || null,
     },
     storage: {
-      sqlitePath: resolve(
-        dirname(envFilePath),
-        env.ORG_SYNC_SQLITE_PATH || '.local/admin-api.sqlite',
+      postgresUrl: (
+        env.ADMIN_API_POSTGRES_URL
+        || 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev'
+      ).trim(),
+      postgresSchema: parsePostgresSchema(
+        env.ADMIN_API_POSTGRES_SCHEMA,
+        'admin_api',
+        'ADMIN_API_POSTGRES_SCHEMA',
       ),
       mongodbUri: (env.MONGODB_URI || 'mongodb://127.0.0.1:27018').trim(),
       mongodbDb: (env.MONGODB_DB || 'yzj_ai_crm_dev').trim(),

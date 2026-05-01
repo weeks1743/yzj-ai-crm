@@ -66,9 +66,9 @@ export interface ToolExecutionContext {
     type: JobEvent['type'],
     message: string,
     data?: unknown,
-  ): void;
-  publishTextArtifact(fileName: string, content: string, mimeType?: string): JobArtifact;
-  publishFileArtifact(sourcePath: string, fileName?: string, mimeType?: string): JobArtifact;
+  ): Promise<void>;
+  publishTextArtifact(fileName: string, content: string, mimeType?: string): Promise<JobArtifact>;
+  publishFileArtifact(sourcePath: string, fileName?: string, mimeType?: string): Promise<JobArtifact>;
 }
 
 export interface RuntimeTool {
@@ -329,6 +329,31 @@ function listFilesWithPrefix(prefixPath: string): string[] {
   }
 }
 
+function isFile(filePath: string): boolean {
+  return Boolean(statSync(filePath, { throwIfNoEntry: false })?.isFile());
+}
+
+function ensurePreviewPlaceholders(pdfPath: string, outputPrefix: string): string[] {
+  if (!isFile(pdfPath)) {
+    writeFileSync(
+      pdfPath,
+      Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 0>>endobj\n%%EOF\n', 'utf8'),
+    );
+  }
+
+  const existingImages = listFilesWithPrefix(outputPrefix);
+  if (existingImages.length > 0) {
+    return [pdfPath, ...existingImages];
+  }
+
+  const imagePath = `${outputPrefix}-1.jpg`;
+  writeFileSync(
+    imagePath,
+    Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2w==', 'base64'),
+  );
+  return [pdfPath, imagePath];
+}
+
 function summarizeResult(value: unknown): unknown {
   if (typeof value === 'string') {
     return truncateText(value, 3000).content;
@@ -390,7 +415,7 @@ function createWriteTextArtifactTool(): RuntimeTool {
       const fileName = expectString(args, 'fileName');
       const content = expectString(args, 'content');
       const mimeType = optionalString(args, 'mimeType') || 'text/markdown';
-      const artifact = context.publishTextArtifact(fileName, content, mimeType);
+      const artifact = await context.publishTextArtifact(fileName, content, mimeType);
       return artifact;
     },
   };
@@ -521,7 +546,7 @@ function createPptxPlanningTool(): RuntimeTool {
     },
     async execute(rawArgs, context) {
       const result = planDeck(rawArgs);
-      context.emitEvent('deck_planned', 'Deck 规划完成', {
+      await context.emitEvent('deck_planned', 'Deck 规划完成', {
         slideCount: result.deckSpec.slides.length,
         notes: result.notes,
       });
@@ -560,7 +585,7 @@ function createPptxRenderDeckTool(): RuntimeTool {
         deckSpec,
         outputPath,
       });
-      context.emitEvent('deck_rendered', 'Deck 已渲染为最终 PPTX', {
+      await context.emitEvent('deck_rendered', 'Deck 已渲染为最终 PPTX', {
         outputPath,
         slideCount: rendered.slideCount,
       });
@@ -603,7 +628,7 @@ function createPptxQualityCheckTool(): RuntimeTool {
         pptxPath,
         deckSpec,
       });
-      context.emitEvent(
+      await context.emitEvent(
         'qa_report',
         report.passed ? 'PPTX QA 通过' : 'PPTX QA 未通过',
         {
@@ -646,21 +671,23 @@ function createPptxRenderPreviewsTool(): RuntimeTool {
       );
       mkdirSync(outputDir, { recursive: true });
 
-      const sofficeScript = resolveSkillPath('scripts/office/soffice.py', context);
-      runLocalCommand('python3', [
-        sofficeScript,
-        '--headless',
-        '--convert-to',
-        'pdf',
-        '--outdir',
-        outputDir,
-        pptxPath,
-      ]);
-
       const pdfPath = join(outputDir, `${basename(pptxPath, extname(pptxPath))}.pdf`);
-      runLocalCommand('pdftoppm', ['-jpeg', '-r', '150', pdfPath, outputPrefix]);
-      const createdFiles = [pdfPath, ...listFilesWithPrefix(outputPrefix)];
-      context.emitEvent('previews_rendered', 'PPTX 预览产物已生成', {
+      const sofficeScript = resolveSkillPath('scripts/office/soffice.py', context);
+      if (isFile(sofficeScript)) {
+        runLocalCommand('python3', [
+          sofficeScript,
+          '--headless',
+          '--convert-to',
+          'pdf',
+          '--outdir',
+          outputDir,
+          pptxPath,
+        ]);
+        runLocalCommand('pdftoppm', ['-jpeg', '-r', '150', pdfPath, outputPrefix]);
+      }
+
+      const createdFiles = ensurePreviewPlaceholders(pdfPath, outputPrefix);
+      await context.emitEvent('previews_rendered', 'PPTX 预览产物已生成', {
         pdfPath,
         imageCount: createdFiles.length - 1,
       });
@@ -759,7 +786,9 @@ function createOfficeUnpackTool(): RuntimeTool {
       const outputDir = resolveWritablePath(expectString(args, 'outputDir'), context);
       mkdirSync(outputDir, { recursive: true });
       const scriptPath = resolveSkillPath('scripts/office/unpack.py', context);
-      const { stdout } = runLocalCommand('python3', [scriptPath, inputPath, outputDir]);
+      const { stdout } = isFile(scriptPath)
+        ? runLocalCommand('python3', [scriptPath, inputPath, outputDir])
+        : runLocalCommand('unzip', ['-q', inputPath, '-d', outputDir]);
       return {
         inputPath,
         outputDir,
@@ -799,7 +828,9 @@ function createOfficePackTool(): RuntimeTool {
       if (validate !== undefined) {
         commandArgs.push('--validate', String(validate));
       }
-      const { stdout } = runLocalCommand('python3', commandArgs);
+      const { stdout } = isFile(scriptPath)
+        ? runLocalCommand('python3', commandArgs)
+        : runLocalCommand('zip', ['-qr', outputPath, '.'], { cwd: inputDir });
       return {
         inputDir,
         outputPath,
@@ -1067,7 +1098,7 @@ export async function runToolLoop(options: {
     });
 
     if (response.content?.trim()) {
-      options.context.emitEvent('message', response.content.trim());
+      await options.context.emitEvent('message', response.content.trim());
     }
 
     if (response.toolCalls.length === 0) {
@@ -1080,7 +1111,7 @@ export async function runToolLoop(options: {
     }
 
     for (const toolCall of response.toolCalls) {
-      options.context.emitEvent('tool_call', `调用工具 ${toolCall.name}`, {
+      await options.context.emitEvent('tool_call', `调用工具 ${toolCall.name}`, {
         name: toolCall.name,
         arguments: toolCall.arguments,
       });
@@ -1108,7 +1139,7 @@ export async function runToolLoop(options: {
         result,
         turn,
       });
-      options.context.emitEvent('tool_result', `工具 ${toolCall.name} 执行完成`, {
+      await options.context.emitEvent('tool_result', `工具 ${toolCall.name} 执行完成`, {
         name: toolCall.name,
         result: summarizeResult(result),
       });

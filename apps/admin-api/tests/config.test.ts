@@ -38,7 +38,8 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.equal(config.server.port, 3001);
   assert.equal(config.docmee.baseUrl, 'https://open.docmee.cn');
   assert.equal(config.docmee.apiKey, null);
-  assert.match(config.storage.sqlitePath, /\.local\/admin-api\.sqlite$/);
+  assert.equal(config.storage.postgresUrl, 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev');
+  assert.equal(config.storage.postgresSchema, 'admin_api');
   assert.match(config.shadow.dictionaryJsonPath, /\.local\/shadow-dictionaries\.json$/);
   assert.match(config.shadow.skillOutputDir, /skills\/shadow$/);
   assert.equal(config.external.image.baseUrl, 'https://api.linkapi.org');
@@ -46,6 +47,30 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.equal(config.external.image.model, 'gpt-image-2');
   assert.equal(config.external.image.timeoutMs, 60000);
   assert.equal(config.external.skillRuntime.baseUrl, 'http://127.0.0.1:3012');
+});
+
+test('loadAppConfig rejects invalid PostgreSQL schema name', () => {
+  assert.throws(
+    () =>
+      loadAppConfig({
+        env: {
+          YZJ_EID: '21024647',
+          YZJ_APP_ID: '501037729',
+          YZJ_APP_SECRET: 'secret-value',
+          YZJ_SIGN_KEY: 'sign-value',
+          YZJ_ORG_READ_SECRET: 'org-read-value',
+          YZJ_APPROVAL_APP_ID: 'approval-app-id',
+          YZJ_APPROVAL_APP_SECRET: 'approval-app-secret',
+          YZJ_APPROVAL_DEV_KEY: 'approval-dev-key',
+          YZJ_LIGHTCLOUD_APP_ID: 'lightcloud-app-id',
+          YZJ_LIGHTCLOUD_APP_SECRET: 'lightcloud-app-secret',
+          YZJ_LIGHTCLOUD_SECRET: 'lightcloud-secret',
+          YZJ_SHADOW_CUSTOMER_FORM_CODE_ID: 'customer-form-code-id',
+          ADMIN_API_POSTGRES_SCHEMA: 'bad-schema',
+        },
+      }),
+    /ADMIN_API_POSTGRES_SCHEMA/,
+  );
 });
 
 test('loadAppConfig throws when required env is missing', () => {

@@ -45,9 +45,9 @@ export class EnterprisePptTemplateService {
     },
   ) {}
 
-  listTemplates(): EnterprisePptTemplateListResponse {
-    const items = this.options.repository.list();
-    const promptState = this.getPromptState();
+  async listTemplates(): Promise<EnterprisePptTemplateListResponse> {
+    const items = await this.options.repository.list();
+    const promptState = await this.getPromptState();
     return {
       items,
       activeTemplate: items.find((item) => item.isActive) ?? null,
@@ -55,23 +55,23 @@ export class EnterprisePptTemplateService {
     };
   }
 
-  getActiveTemplate(): EnterprisePptTemplateItem | null {
+  getActiveTemplate(): Promise<EnterprisePptTemplateItem | null> {
     return this.options.repository.getActive();
   }
 
-  getDefaultPrompt(): string {
-    return this.options.repository.getDefaultPrompt() ?? DEFAULT_ENTERPRISE_PPT_PROMPT;
+  async getDefaultPrompt(): Promise<string> {
+    return await this.options.repository.getDefaultPrompt() ?? DEFAULT_ENTERPRISE_PPT_PROMPT;
   }
 
-  getEffectivePrompt(): string {
-    return this.getPromptState().effectivePrompt;
+  async getEffectivePrompt(): Promise<string> {
+    return (await this.getPromptState()).effectivePrompt;
   }
 
-  getPromptState(): EnterprisePptTemplatePromptResponse {
-    return resolvePromptState(this.options.repository.getDefaultPrompt() ?? DEFAULT_ENTERPRISE_PPT_PROMPT);
+  async getPromptState(): Promise<EnterprisePptTemplatePromptResponse> {
+    return resolvePromptState(await this.options.repository.getDefaultPrompt() ?? DEFAULT_ENTERPRISE_PPT_PROMPT);
   }
 
-  updateDefaultPrompt(prompt: string): EnterprisePptTemplatePromptResponse {
+  async updateDefaultPrompt(prompt: string): Promise<EnterprisePptTemplatePromptResponse> {
     const resolvedPrompt = prompt.trim();
     if (!resolvedPrompt) {
       throw new BadRequestError('企业 PPT 缺省提示词不能为空');
@@ -81,7 +81,7 @@ export class EnterprisePptTemplateService {
       throw new BadRequestError(`企业 PPT 缺省提示词不能超过 ${DOCMEE_PROMPT_MAX_LENGTH} 个字符`);
     }
 
-    return resolvePromptState(this.options.repository.updateDefaultPrompt(resolvedPrompt));
+    return resolvePromptState(await this.options.repository.updateDefaultPrompt(resolvedPrompt));
   }
 
   async uploadTemplate(input: {
@@ -109,7 +109,7 @@ export class EnterprisePptTemplateService {
     });
 
     return {
-      item: this.options.repository.save({
+      item: await this.options.repository.save({
         templateId: uploaded.templateId,
         name: templateName,
         sourceFileName: input.fileName,
@@ -119,7 +119,7 @@ export class EnterprisePptTemplateService {
 
   async renameTemplate(templateId: string, name: string): Promise<{ item: EnterprisePptTemplateItem }> {
     const client = this.requireClient();
-    const current = this.options.repository.getById(templateId);
+    const current = await this.options.repository.getById(templateId);
     if (!current) {
       throw new NotFoundError(`企业 PPT 模板不存在: ${templateId}`);
     }
@@ -135,13 +135,13 @@ export class EnterprisePptTemplateService {
     });
 
     return {
-      item: this.options.repository.rename(templateId, resolvedName),
+      item: await this.options.repository.rename(templateId, resolvedName),
     };
   }
 
   async activateTemplate(templateId: string): Promise<{ item: EnterprisePptTemplateItem }> {
     const client = this.requireClient();
-    const current = this.options.repository.getById(templateId);
+    const current = await this.options.repository.getById(templateId);
     if (!current) {
       throw new NotFoundError(`企业 PPT 模板不存在: ${templateId}`);
     }
@@ -152,7 +152,7 @@ export class EnterprisePptTemplateService {
     });
 
     return {
-      item: this.options.repository.activate(templateId),
+      item: await this.options.repository.activate(templateId),
     };
   }
 
@@ -161,7 +161,7 @@ export class EnterprisePptTemplateService {
     fileName: string;
     file: Buffer;
   }> {
-    const item = this.options.repository.getById(templateId);
+    const item = await this.options.repository.getById(templateId);
     if (!item) {
       throw new NotFoundError(`企业 PPT 模板不存在: ${templateId}`);
     }
@@ -181,7 +181,7 @@ export class EnterprisePptTemplateService {
   }
 
   async deleteTemplate(templateId: string): Promise<{ deletedTemplateId: string }> {
-    const item = this.options.repository.getById(templateId);
+    const item = await this.options.repository.getById(templateId);
     if (!item) {
       throw new NotFoundError(`企业 PPT 模板不存在: ${templateId}`);
     }
@@ -192,7 +192,7 @@ export class EnterprisePptTemplateService {
       token,
       templateId,
     });
-    this.options.repository.delete(templateId);
+    await this.options.repository.delete(templateId);
 
     return {
       deletedTemplateId: templateId,

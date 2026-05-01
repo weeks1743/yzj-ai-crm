@@ -30,22 +30,23 @@ import { ShadowMetadataService } from './shadow-metadata-service.js';
 import { IntentFrameService } from './intent-frame-service.js';
 import { YzjClient } from './yzj-client.js';
 
-const config = loadAppConfig();
-const database = openDatabase(config.storage.sqlitePath);
-
-const orgSyncRepository = new OrgSyncRepository(database);
-try {
-  orgSyncRepository.markRunningRunsAsFailed('admin-api 重启前有同步未完成，已自动标记为失败');
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes('database is locked')) {
-    console.warn(
-      '[admin-api] sqlite database is locked while closing stale org sync runs; startup continues. Close DB Browser or other sqlite clients before running write tests.',
-    );
-  } else {
-    throw error;
+function describePostgresConnection(connectionString: string, schema: string): string {
+  try {
+    const url = new URL(connectionString);
+    const host = url.hostname || 'localhost';
+    const port = url.port ? `:${url.port}` : '';
+    const database = url.pathname.replace(/^\/+/, '') || 'postgres';
+    return `${host}${port}/${database}#${schema}`;
+  } catch {
+    return `postgres#${schema}`;
   }
 }
+
+const config = loadAppConfig();
+const database = await openDatabase(config.storage.postgresUrl, config.storage.postgresSchema);
+
+const orgSyncRepository = new OrgSyncRepository(database);
+await orgSyncRepository.markRunningRunsAsFailed('admin-api 重启前有同步未完成，已自动标记为失败');
 
 const orgSyncService = new OrgSyncService({
   config,
@@ -81,6 +82,7 @@ const shadowMetadataService = new ShadowMetadataService({
     ),
   }),
 });
+await shadowMetadataService.initialize();
 const enterprisePptTemplateService = new EnterprisePptTemplateService({
   config,
   repository: new EnterprisePptTemplateRepository(database),
@@ -155,6 +157,6 @@ const server = createAdminApiServer({
 
 server.listen(config.server.port, () => {
   console.log(
-    `[admin-api] listening on http://127.0.0.1:${config.server.port} (sqlite: ${config.storage.sqlitePath})`,
+    `[admin-api] listening on http://127.0.0.1:${config.server.port} (postgres: ${describePostgresConnection(config.storage.postgresUrl, config.storage.postgresSchema)})`,
   );
 });

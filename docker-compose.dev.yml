@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:16
+    container_name: yzj-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: yzj_ai_crm_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.local/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d yzj_ai_crm_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   mongodb:
     image: mongo:7
     container_name: yzj-mongodb

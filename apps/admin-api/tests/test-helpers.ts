@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
+import { afterEach } from 'node:test';
 import type { AppConfig, ShadowDictionarySource } from '../src/contracts.js';
-import { openDatabase } from '../src/database.js';
+import type { DatabaseConnection, DatabaseQueryContext } from '../src/database.js';
+import { openDatabase, quoteIdentifier } from '../src/database.js';
 
 interface TestConfigOptions {
   dictionarySource?: ShadowDictionarySource;
@@ -28,6 +31,78 @@ interface TestConfigOptions {
   deepseekBaseUrl?: string;
   deepseekApiKey?: string | null;
   deepseekDefaultModel?: AppConfig['deepseek']['defaultModel'];
+  postgresUrl?: string;
+  postgresSchema?: string;
+}
+
+const DEFAULT_POSTGRES_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev';
+const activeTestDatabases = new Set<LazyTestDatabase>();
+
+afterEach(async () => {
+  const databases = [...activeTestDatabases];
+  activeTestDatabases.clear();
+  await Promise.all(databases.map((database) => database.destroy()));
+});
+
+class LazyTestDatabase implements DatabaseConnection {
+  readonly schema: string;
+
+  private readonly databasePromise: Promise<DatabaseConnection>;
+
+  private destroyed = false;
+
+  constructor(private readonly postgresUrl: string) {
+    this.schema = `admin_api_test_${process.pid}_${randomUUID().replace(/-/g, '')}`;
+    this.databasePromise = openDatabase(this.postgresUrl, this.schema);
+  }
+
+  table(tableName: string): string {
+    return `${quoteIdentifier(this.schema)}.${quoteIdentifier(tableName)}`;
+  }
+
+  async query<T>(text: string, params: readonly unknown[] = []): Promise<T[]> {
+    const database = await this.databasePromise;
+    return database.query<T>(text, params);
+  }
+
+  async queryMaybeOne<T>(text: string, params: readonly unknown[] = []): Promise<T | null> {
+    const database = await this.databasePromise;
+    return database.queryMaybeOne<T>(text, params);
+  }
+
+  async queryOne<T>(text: string, params: readonly unknown[] = []): Promise<T> {
+    const database = await this.databasePromise;
+    return database.queryOne<T>(text, params);
+  }
+
+  async transaction<T>(run: (database: DatabaseQueryContext) => Promise<T>): Promise<T> {
+    const database = await this.databasePromise;
+    return database.transaction(run);
+  }
+
+  async dropSchema(): Promise<void> {
+    const database = await this.databasePromise;
+    await database.dropSchema();
+  }
+
+  async close(): Promise<void> {
+    await this.destroy();
+  }
+
+  async destroy(): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
+
+    this.destroyed = true;
+    try {
+      const database = await this.databasePromise;
+      await database.dropSchema();
+      await database.close();
+    } catch {
+      // Cleanup should not mask test failures.
+    }
+  }
 }
 
 export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
@@ -90,7 +165,8 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
       apiKey: options.docmeeApiKey ?? 'test-docmee-key',
     },
     storage: {
-      sqlitePath: ':memory:',
+      postgresUrl: (options.postgresUrl || process.env.ADMIN_API_POSTGRES_URL || DEFAULT_POSTGRES_URL).trim(),
+      postgresSchema: options.postgresSchema ?? 'admin_api_test',
       mongodbUri: options.mongodbUri ?? 'mongodb://127.0.0.1:27018',
       mongodbDb: options.mongodbDb ?? 'yzj_ai_crm_test',
     },
@@ -129,5 +205,9 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
 }
 
 export function createInMemoryDatabase() {
-  return openDatabase(':memory:');
+  const database = new LazyTestDatabase(
+    (process.env.ADMIN_API_POSTGRES_URL || DEFAULT_POSTGRES_URL).trim(),
+  );
+  activeTestDatabases.add(database);
+  return database;
 }

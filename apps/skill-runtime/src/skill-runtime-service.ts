@@ -54,6 +54,15 @@ interface CachedPresentationSession extends PresentationMetadata {
   token: string;
 }
 
+function getPostgresDatabaseName(connectionString: string): string {
+  try {
+    const url = new URL(connectionString);
+    return url.pathname.replace(/^\/+/, '') || 'postgres';
+  } catch {
+    return 'postgres';
+  }
+}
+
 export class SkillRuntimeService {
   private readonly runningJobs = new Set<string>();
   private readonly presentationSessions = new Map<string, CachedPresentationSession>();
@@ -75,7 +84,8 @@ export class SkillRuntimeService {
       status: 'ok',
       service: '@yzj-ai-crm/skill-runtime',
       port: this.options.config.server.port,
-      sqlitePath: this.options.config.storage.sqlitePath,
+      postgresDatabase: getPostgresDatabaseName(this.options.config.storage.postgresUrl),
+      postgresSchema: this.options.config.storage.postgresSchema,
       artifactDir: this.options.config.storage.artifactDir,
       dependencySummary: {
         available: dependencyDetails.filter((detail) => detail.available).length,
@@ -159,7 +169,7 @@ export class SkillRuntimeService {
       : null;
     const model = this.requiresModel(skillName) ? this.validateModel(input.model) : null;
 
-    const job = this.options.repository.createJob({
+    const job = await this.options.repository.createJob({
       skillName,
       model,
       requestText,
@@ -169,7 +179,7 @@ export class SkillRuntimeService {
       presentationPrompt: input.presentationPrompt?.trim() || null,
     });
 
-    this.options.repository.appendEvent(job.jobId, 'status', 'Job 已入队');
+    await this.options.repository.appendEvent(job.jobId, 'status', 'Job 已入队');
     queueMicrotask(() => {
       void this.runJob(job.jobId);
     });
@@ -177,22 +187,21 @@ export class SkillRuntimeService {
     return this.options.repository.toJobResponse(job.jobId);
   }
 
-  getJob(jobId: string): JobResponse {
+  async getJob(jobId: string): Promise<JobResponse> {
     return this.options.repository.toJobResponse(jobId);
   }
 
-  getArtifact(jobId: string, artifactId: string) {
+  async getArtifact(jobId: string, artifactId: string) {
     return this.options.artifactStore.readArtifact(jobId, artifactId);
   }
 
-  private getPresentationMetadata(jobId: string): PresentationMetadata {
-    const job = this.options.repository.getJob(jobId);
+  private async getPresentationMetadata(jobId: string): Promise<PresentationMetadata> {
+    const job = await this.options.repository.getJob(jobId);
     if (job.skillName !== 'super-ppt') {
       throw new ConflictError(`当前 job 不支持 PPT 编辑会话: ${job.skillName}`);
     }
 
-    const presentationEvent = this.options.repository
-      .listEvents(jobId)
+    const presentationEvent = (await this.options.repository.listEvents(jobId))
       .filter((event) => event.type === 'presentation_ready')
       .at(-1);
 
@@ -342,7 +351,7 @@ export class SkillRuntimeService {
       forceRefreshToken?: boolean;
     },
   ): Promise<PresentationSessionResponse> {
-    const metadata = this.getPresentationMetadata(jobId);
+    const metadata = await this.getPresentationMetadata(jobId);
     const clientId = this.normalizeClientId(input.clientId);
     const clientLabel = this.normalizeClientLabel(clientId, input.clientLabel);
     const activeSession = this.getActivePresentationSession(jobId, metadata.pptId);
@@ -392,7 +401,7 @@ export class SkillRuntimeService {
     jobId: string,
     input: PresentationSessionHeartbeatRequest,
   ): Promise<PresentationSessionHeartbeatResponse> {
-    const metadata = this.getPresentationMetadata(jobId);
+    const metadata = await this.getPresentationMetadata(jobId);
     const clientId = this.normalizeClientId(input.clientId);
     const clientLabel = this.normalizeClientLabel(clientId, input.clientLabel);
     const activeSession = this.getActivePresentationSession(jobId, metadata.pptId);
@@ -439,7 +448,7 @@ export class SkillRuntimeService {
     jobId: string,
     input: PresentationSessionCloseRequest,
   ): Promise<PresentationSessionCloseResponse> {
-    this.options.repository.getJob(jobId);
+    await this.options.repository.getJob(jobId);
     const clientId = this.normalizeClientId(input.clientId);
     const activeSession = this.presentationSessions.get(jobId);
     const released = Boolean(activeSession && activeSession.clientId === clientId);
@@ -477,17 +486,17 @@ export class SkillRuntimeService {
     this.runningJobs.add(jobId);
 
     try {
-      const job = this.options.repository.getJob(jobId);
+      const job = await this.options.repository.getJob(jobId);
       const skill = this.options.catalogService.getSkill(job.skillName);
       if (!skill) {
         throw new NotFoundError(`skill 不存在: ${job.skillName}`);
       }
 
-      this.options.repository.markRunning(jobId);
-      this.options.repository.appendEvent(jobId, 'status', 'Job 运行中');
+      await this.options.repository.markRunning(jobId);
+      await this.options.repository.appendEvent(jobId, 'status', 'Job 运行中');
       const result = await this.options.executor.execute(job, skill);
-      this.options.repository.markSucceeded(jobId, result.finalText);
-      this.options.repository.appendEvent(jobId, 'status', 'Job 已完成');
+      await this.options.repository.markSucceeded(jobId, result.finalText);
+      await this.options.repository.appendEvent(jobId, 'status', 'Job 已完成');
     } catch (error) {
       const payload = error instanceof AppError
         ? {
@@ -500,8 +509,8 @@ export class SkillRuntimeService {
             message: error instanceof Error ? error.message : '服务内部错误',
           };
 
-      this.options.repository.markFailed(jobId, payload);
-      this.options.repository.appendEvent(jobId, 'error', payload.message, payload);
+      await this.options.repository.markFailed(jobId, payload);
+      await this.options.repository.appendEvent(jobId, 'error', payload.message, payload);
     } finally {
       this.runningJobs.delete(jobId);
     }

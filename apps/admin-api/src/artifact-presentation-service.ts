@@ -32,7 +32,7 @@ export class ArtifactPresentationService {
 
   async getPresentation(artifactId: string): Promise<ArtifactPresentationResponse> {
     const detail = await this.options.artifactService.getArtifact(artifactId);
-    const record = this.options.repository.getByVersion(detail.artifact.versionId);
+    const record = await this.options.repository.getByVersion(detail.artifact.versionId);
     if (!record) {
       return this.toResponse(detail, null, 'not_started');
     }
@@ -45,7 +45,7 @@ export class ArtifactPresentationService {
 
   async ensurePresentation(artifactId: string): Promise<ArtifactPresentationResponse> {
     const detail = await this.options.artifactService.getArtifact(artifactId);
-    const existing = this.options.repository.getByVersion(detail.artifact.versionId);
+    const existing = await this.options.repository.getByVersion(detail.artifact.versionId);
     if (existing && existing.status !== 'failed') {
       return this.toResponse(
         detail,
@@ -53,7 +53,7 @@ export class ArtifactPresentationService {
       );
     }
 
-    const reserved = this.options.repository.reserve({
+    const reserved = await this.options.repository.reserve({
       artifactId: detail.artifact.artifactId,
       versionId: detail.artifact.versionId,
       title: detail.artifact.title,
@@ -65,7 +65,7 @@ export class ArtifactPresentationService {
         requestText: `请基于「${detail.artifact.title}」生成一份适合销售或管理层汇报的企业研究 PPT。`,
         attachments: [markdownPath],
       });
-      const attached = this.options.repository.attachJob({
+      const attached = await this.options.repository.attachJob({
         versionId: detail.artifact.versionId,
         jobId: job.jobId,
         status: this.mapJobStatus(job.status),
@@ -76,7 +76,7 @@ export class ArtifactPresentationService {
         await this.refreshIfNeeded(attached),
       );
     } catch (error) {
-      const failed = this.options.repository.updateStatus({
+      const failed = await this.options.repository.updateStatus({
         versionId: detail.artifact.versionId,
         status: 'failed',
         errorMessage: getErrorMessage(error),
@@ -107,7 +107,7 @@ export class ArtifactPresentationService {
   private syncJobStatus(
     record: ArtifactPptGenerationRecord,
     job: ExternalSkillJobResponse,
-  ): ArtifactPptGenerationRecord {
+  ): Promise<ArtifactPptGenerationRecord> {
     if (job.status === 'failed') {
       return this.options.repository.updateStatus({
         versionId: record.versionId,

@@ -76,7 +76,7 @@ function companyWriteIntent(goal = '更新销售负责人为陈伟堂'): IntentF
   };
 }
 
-function seedCompanyContext(repository: AgentRunRepository, conversationKey: string, companyName: string): void {
+async function seedCompanyContext(repository: AgentRunRepository, conversationKey: string, companyName: string): Promise<void> {
   const taskPlan: TaskPlan = {
     planId: 'plan-context-seed',
     kind: 'tool_execution',
@@ -126,7 +126,7 @@ function seedCompanyContext(repository: AgentRunRepository, conversationKey: str
       },
     },
   };
-  repository.saveRun({
+  await repository.saveRun({
     request: {
       conversationKey,
       sceneKey: 'chat',
@@ -157,7 +157,7 @@ function seedCompanyContext(repository: AgentRunRepository, conversationKey: str
   });
 }
 
-function seedRecordContext(
+async function seedRecordContext(
   repository: AgentRunRepository,
   input: {
     conversationKey: string;
@@ -165,7 +165,7 @@ function seedRecordContext(
     formInstId: string;
     name: string;
   },
-): void {
+): Promise<void> {
   const taskPlan: TaskPlan = {
     planId: 'plan-record-context-seed',
     kind: 'tool_execution',
@@ -183,7 +183,7 @@ function seedRecordContext(
     startedAt: new Date().toISOString(),
     finishedAt: new Date().toISOString(),
   };
-  repository.saveRun({
+  await repository.saveRun({
     request: {
       conversationKey: input.conversationKey,
       sceneKey: 'chat',
@@ -234,7 +234,7 @@ function seedRecordContext(
   });
 }
 
-function saveRunWithoutContext(
+async function saveRunWithoutContext(
   repository: AgentRunRepository,
   input: {
     conversationKey: string;
@@ -242,7 +242,7 @@ function saveRunWithoutContext(
     query: string;
     intentFrame: IntentFrame;
   },
-): void {
+): Promise<void> {
   const taskPlan: TaskPlan = {
     planId: `${input.runId}-plan`,
     kind: 'tool_execution',
@@ -261,7 +261,7 @@ function saveRunWithoutContext(
     finishedAt: new Date().toISOString(),
   };
 
-  repository.saveRun({
+  await repository.saveRun({
     request: {
       conversationKey: input.conversationKey,
       sceneKey: 'chat',
@@ -1331,7 +1331,7 @@ test('Agent runtime does not use previous customer context for scoped collection
   for (const query of cases) {
     const repository = new AgentRunRepository(createInMemoryDatabase());
     const conversationKey = `conv-scoped-collection-${query}`;
-    seedRecordContext(repository, {
+    await seedRecordContext(repository, {
       conversationKey,
       objectKey: 'customer',
       formInstId: 'customer-ah-001',
@@ -1368,7 +1368,7 @@ test('Agent runtime does not use previous customer context for scoped collection
     assert.deepEqual(searchInput?.filters, [], query);
     assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false, query);
     assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usageMode, 'skipped_collection_query', query);
-    assert.equal(repository.getRunDetail(response.executionState.runId)?.contextSubject, null, query);
+    assert.equal((await repository.getRunDetail(response.executionState.runId))?.contextSubject, null, query);
   }
 });
 
@@ -1383,7 +1383,7 @@ test('Agent runtime ignores ungrounded LLM targets for bare collection search pa
   for (const item of cases) {
     const repository = new AgentRunRepository(createInMemoryDatabase());
     const conversationKey = `conv-polluted-collection-${item.objectKey}`;
-    seedRecordContext(repository, {
+    await seedRecordContext(repository, {
       conversationKey,
       objectKey: item.objectKey,
       formInstId: item.pollutedTarget,
@@ -1424,9 +1424,9 @@ test('Agent runtime ignores ungrounded LLM targets for bare collection search pa
     assert.equal(selectedInput?.agentControl?.targetSanitization?.ignoredTargetName, item.pollutedTarget, item.query);
     assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false, item.query);
     assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usageMode, 'skipped_collection_query', item.query);
-    assert.equal(repository.getRunDetail(response.executionState.runId)?.contextSubject, null, item.query);
+    assert.equal((await repository.getRunDetail(response.executionState.runId))?.contextSubject, null, item.query);
     assert.equal(
-      repository.findContextCandidates(conversationKey).some((candidate) => candidate.sourceRunId === response.executionState.runId),
+      (await repository.findContextCandidates(conversationKey)).some((candidate) => candidate.sourceRunId === response.executionState.runId),
       false,
       item.query,
     );
@@ -1479,7 +1479,7 @@ test('Agent runtime lets explicit user query text win over stale LLM target fall
 test('Agent runtime persists record context only for unique search results', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const conversationKey = 'conv-search-context-persistence';
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey,
     objectKey: 'customer',
     formInstId: 'customer-old-001',
@@ -1509,7 +1509,7 @@ test('Agent runtime persists record context only for unique search results', asy
     tenantContext: { operatorOpenId: 'operator-001' },
   });
   assert.equal(emptySearch.executionState.status, 'completed');
-  assert.equal(repository.getRunDetail(emptySearch.executionState.runId)?.contextSubject, null);
+  assert.equal((await repository.getRunDetail(emptySearch.executionState.runId))?.contextSubject, null);
 
   searchRecords = [
     { formInstId: 'customer-a-001', fields: [{ title: '客户名称', value: '客户 A' }], rawRecord: {} },
@@ -1522,7 +1522,7 @@ test('Agent runtime persists record context only for unique search results', asy
     tenantContext: { operatorOpenId: 'operator-001' },
   });
   assert.equal(multiSearch.executionState.status, 'completed');
-  assert.equal(repository.getRunDetail(multiSearch.executionState.runId)?.contextSubject, null);
+  assert.equal((await repository.getRunDetail(multiSearch.executionState.runId))?.contextSubject, null);
 
   searchRecords = [
     { formInstId: 'customer-ah-001', fields: [{ title: '客户名称', value: '安徽艳阳电气' }], rawRecord: {} },
@@ -1534,7 +1534,7 @@ test('Agent runtime persists record context only for unique search results', asy
     tenantContext: { operatorOpenId: 'operator-001' },
   });
   assert.equal(uniqueSearch.executionState.status, 'completed');
-  const uniqueContext = repository.getRunDetail(uniqueSearch.executionState.runId)?.contextSubject;
+  const uniqueContext = (await repository.getRunDetail(uniqueSearch.executionState.runId))?.contextSubject;
   assert.equal(uniqueContext?.type, 'customer');
   assert.equal(uniqueContext?.id, 'customer-ah-001');
   assert.equal(uniqueContext?.name, '安徽艳阳电气');
@@ -2370,7 +2370,7 @@ test('Agent runtime does not tight-retry rate-limited duplicate check and surfac
 test('Agent runtime resolves contextual record create and builds metadata-driven preview input', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const companyName = '绍兴贝斯美化工股份有限公司';
-  seedCompanyContext(repository, 'conv-context-create', companyName);
+  await seedCompanyContext(repository, 'conv-context-create', companyName);
   let searchFilterValue = '';
   let previewParams: Record<string, unknown> | null = null;
   const { service } = createAgentTestService({
@@ -2718,7 +2718,7 @@ test('Agent runtime blocks ready record preview when write payload is empty', as
 test('Agent runtime stops contextual record create when duplicate candidates exist', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const companyName = '绍兴贝斯美化工股份有限公司';
-  seedCompanyContext(repository, 'conv-context-duplicate', companyName);
+  await seedCompanyContext(repository, 'conv-context-duplicate', companyName);
   let previewCalled = false;
   const { service } = createAgentTestService({
     repository,
@@ -2854,7 +2854,7 @@ test('Agent runtime cancels record writeback on reject decision', async () => {
 
 test('Agent runtime binds contextual record id for update preview without asking user for formInstId', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey: 'conv-contextual-customer-update',
     objectKey: 'customer',
     formInstId: 'customer-live-001',
@@ -3017,7 +3017,7 @@ test('Agent runtime extracts metadata-driven opportunity update fields from curr
     const repository = new AgentRunRepository(createInMemoryDatabase());
     const conversationKey = `conv-opportunity-update-${Math.random().toString(16).slice(2)}`;
     let previewInput: any = null;
-    seedRecordContext(repository, {
+    await seedRecordContext(repository, {
       conversationKey,
       objectKey: 'opportunity',
       formInstId: 'opportunity-live-001',
@@ -3088,7 +3088,7 @@ test('Agent runtime keeps context-bound opportunity update when LLM mislabels wr
     email: 'chenweitang@example.com',
   });
   let previewInput: any = null;
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey,
     objectKey: 'opportunity',
     formInstId: 'opportunity-live-001',
@@ -3166,7 +3166,7 @@ test('Agent runtime asks for clarification when personSelectWidget value matches
   ];
   let previewInput: any = null;
   let previewCallCount = 0;
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey,
     objectKey: 'opportunity',
     formInstId: 'opportunity-live-001',
@@ -3259,7 +3259,7 @@ test('Agent runtime blocks personSelectWidget preview when employee lookup has n
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const conversationKey = 'conv-opportunity-owner-not-found';
   let previewCalled = false;
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey,
     objectKey: 'opportunity',
     formInstId: 'opportunity-live-001',
@@ -3772,59 +3772,59 @@ test('Agent runtime rejects stale meta question submissions instead of replannin
   assert.doesNotMatch(staleSubmit.message.content, /已识别到字段「客户状态」/);
 });
 
-test('Agent run repository prefers persisted context subject over legacy intent fallback', () => {
+test('Agent run repository prefers persisted context subject over legacy intent fallback', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey: 'conv-persisted-context',
     objectKey: 'customer',
     formInstId: 'customer-live-001',
     name: '上海松井机械有限公司',
   });
 
-  const context = repository.findContextFrame('conv-persisted-context');
+  const context = await repository.findContextFrame('conv-persisted-context');
 
   assert.equal(context?.subject?.type, 'customer');
   assert.equal(context?.subject?.id, 'customer-live-001');
   assert.equal(context?.subject?.name, '上海松井机械有限公司');
 });
 
-test('Agent run repository skips opaque external id context and keeps recent record subject', () => {
+test('Agent run repository skips opaque external id context and keeps recent record subject', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const conversationKey = 'conv-skip-opaque-external-context';
   const formInstId = '69f16bc40f31d40001b288bd';
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey,
     objectKey: 'opportunity',
     formInstId,
     name: '数字化经营项目',
   });
-  seedCompanyContext(repository, conversationKey, formInstId);
+  await seedCompanyContext(repository, conversationKey, formInstId);
 
-  const context = repository.findContextFrame(conversationKey);
+  const context = await repository.findContextFrame(conversationKey);
 
   assert.equal(context?.subject?.kind, 'record');
   assert.equal(context?.subject?.type, 'opportunity');
   assert.equal(context?.subject?.id, formInstId);
 });
 
-test('Agent run repository skips collection query intent targets as context candidates', () => {
+test('Agent run repository skips collection query intent targets as context candidates', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const conversationKey = 'conv-collection-intent-targets';
-  saveRunWithoutContext(repository, {
+  await saveRunWithoutContext(repository, {
     conversationKey,
     runId: 'run-collection-contact-label',
     query: '查询联系人',
     intentFrame: pollutedRecordQueryIntent('contact', '联系人', 'contact'),
   });
-  saveRunWithoutContext(repository, {
+  await saveRunWithoutContext(repository, {
     conversationKey,
     runId: 'run-collection-customer-stale-name',
     query: '查询客户',
     intentFrame: pollutedRecordQueryIntent('customer', '苏州恒达机电有限公司'),
   });
 
-  const candidates = repository.findContextCandidates(conversationKey);
-  const context = repository.findContextFrame(conversationKey);
+  const candidates = await repository.findContextCandidates(conversationKey);
+  const context = await repository.findContextFrame(conversationKey);
 
   assert.equal(candidates.some((candidate) => candidate.sourceRunId === 'run-collection-contact-label'), false);
   assert.equal(candidates.some((candidate) => candidate.sourceRunId === 'run-collection-customer-stale-name'), false);
@@ -3833,7 +3833,7 @@ test('Agent run repository skips collection query intent targets as context cand
 
 test('Agent runtime uses subject-bound relation filter for contextual contact search', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey: 'conv-contextual-contact-search',
     objectKey: 'customer',
     formInstId: 'customer-live-001',
@@ -3878,7 +3878,7 @@ test('Agent runtime uses subject-bound relation filter for contextual contact se
 
 test('Agent runtime keeps subject-bound parent context after child record write', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey: 'conv-child-write-parent-context',
     objectKey: 'customer',
     formInstId: 'customer-live-001',
@@ -3935,7 +3935,7 @@ test('Agent runtime keeps subject-bound parent context after child record write'
   });
 
   assert.equal(approved.executionState.status, 'completed');
-  const context = repository.findContextFrame('conv-child-write-parent-context');
+  const context = await repository.findContextFrame('conv-child-write-parent-context');
   assert.equal(context?.subject?.type, 'customer');
   assert.equal(context?.subject?.id, 'customer-live-001');
   assert.equal(context?.subject?.name, '上海松井机械有限公司');
@@ -3943,7 +3943,7 @@ test('Agent runtime keeps subject-bound parent context after child record write'
 
 test('Agent runtime summarizes customer journey from current context', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
-  seedRecordContext(repository, {
+  await seedRecordContext(repository, {
     conversationKey: 'conv-context-summary',
     objectKey: 'customer',
     formInstId: 'customer-live-001',

@@ -1271,6 +1271,8 @@ export class ShadowMetadataService {
   private readonly internalTemplateProvider: ShadowInternalTemplateProvider;
   private readonly now: () => Date;
   private hasWarnedLockedRegistrySync = false;
+  private readonly registryCache = new Map<ShadowObjectKey, ShadowObjectSummaryResponse>();
+  private readonly snapshotCache = new Map<ShadowObjectKey, ShadowObjectSnapshotRecord | null>();
 
   constructor(options: ShadowMetadataServiceOptions) {
     this.config = options.config;
@@ -1288,15 +1290,29 @@ export class ShadowMetadataService {
       directory: resolve(dirname(this.config.meta.envFilePath), 'yzj-api/getFormByCodeId'),
     });
     this.now = options.now ?? (() => new Date());
+    for (const objectConfig of Object.values(this.config.shadow.objects)) {
+      this.registryCache.set(objectConfig.key, this.buildObjectSummaryFromConfig(objectConfig));
+      this.snapshotCache.set(objectConfig.key, null);
+    }
+  }
+
+  async initialize(): Promise<void> {
+    await this.syncRegistryConfig();
+    const registryItems = await this.repository.listObjectRegistry();
+    for (const item of registryItems) {
+      this.registryCache.set(item.objectKey, item);
+    }
+    await Promise.all(
+      Object.keys(this.config.shadow.objects).map(async (key) => {
+        const objectKey = key as ShadowObjectKey;
+        this.snapshotCache.set(objectKey, await this.repository.getLatestSnapshot(objectKey));
+      }),
+    );
   }
 
   listObjects(): ShadowObjectSummaryResponse[] {
-    const objectsByKey = new Map(
-      this.repository.listObjectRegistry().map((objectItem) => [objectItem.objectKey, objectItem]),
-    );
-
     return Object.values(this.config.shadow.objects).map(
-      (objectConfig) => objectsByKey.get(objectConfig.key) ?? this.buildObjectSummaryFromConfig(objectConfig),
+      (objectConfig) => this.registryCache.get(objectConfig.key) ?? this.buildObjectSummaryFromConfig(objectConfig),
     );
   }
 
@@ -1335,7 +1351,8 @@ export class ShadowMetadataService {
   }
 
   async refreshObject(objectKey: ShadowObjectKey): Promise<ShadowObjectDetailResponse> {
-    const context = this.getObjectContext(objectKey, { syncRegistry: true });
+    await this.syncRegistryConfig();
+    const context = this.getObjectContext(objectKey);
     if (context.registry.activationStatus !== 'active') {
       throw new BadRequestError(`${mapShadowObjectLabel(objectKey)}对象当前未激活，不能执行刷新`);
     }
@@ -1371,7 +1388,7 @@ export class ShadowMetadataService {
         mergedTemplate,
       });
       const schemaHash = buildSchemaHash(normalized.fields);
-      const latestSnapshot = this.repository.getLatestSnapshot(objectKey);
+      const latestSnapshot = await this.repository.getLatestSnapshot(objectKey);
 
       if (latestSnapshot?.schemaHash === schemaHash) {
         this.materializeSkillBundles({
@@ -1386,13 +1403,24 @@ export class ShadowMetadataService {
           dictionaryBindings: latestSnapshot.dictionaryBindings,
         });
 
-        this.repository.markRefreshReady({
+        const refreshedAt = this.now().toISOString();
+        await this.repository.markRefreshReady({
           objectKey,
           formCodeId: context.registry.formCodeId,
           formDefId,
           snapshotVersion: latestSnapshot.snapshotVersion,
           schemaHash,
-          now: this.now().toISOString(),
+          now: refreshedAt,
+        });
+        this.snapshotCache.set(objectKey, latestSnapshot);
+        this.registryCache.set(objectKey, {
+          ...context.registry,
+          formDefId,
+          refreshStatus: 'ready',
+          latestSnapshotVersion: latestSnapshot.snapshotVersion,
+          latestSchemaHash: schemaHash,
+          lastRefreshAt: refreshedAt,
+          lastError: null,
         });
 
         return this.getObject(objectKey);
@@ -1415,7 +1443,7 @@ export class ShadowMetadataService {
         })),
       }));
 
-      this.repository.saveSnapshot({
+      await this.repository.saveSnapshot({
         id: snapshotId,
         objectKey,
         snapshotVersion,
@@ -1440,7 +1468,7 @@ export class ShadowMetadataService {
         dictionaryBindings,
       });
 
-      this.repository.markRefreshReady({
+      await this.repository.markRefreshReady({
         objectKey,
         formCodeId: context.registry.formCodeId,
         formDefId,
@@ -1448,15 +1476,43 @@ export class ShadowMetadataService {
         schemaHash,
         now: snapshotVersion,
       });
+      this.snapshotCache.set(objectKey, {
+        id: snapshotId,
+        objectKey,
+        snapshotVersion,
+        schemaHash,
+        formCodeId: context.registry.formCodeId,
+        formDefId,
+        normalizedFields: normalized.fields,
+        dictionaryBindings,
+        rawTemplate: mergedTemplate.rawTemplate,
+        createdAt: snapshotVersion,
+      });
+      this.registryCache.set(objectKey, {
+        ...context.registry,
+        formDefId,
+        refreshStatus: 'ready',
+        latestSnapshotVersion: snapshotVersion,
+        latestSchemaHash: schemaHash,
+        lastRefreshAt: snapshotVersion,
+        lastError: null,
+      });
 
       return this.getObject(objectKey);
     } catch (error) {
-      this.repository.markRefreshFailed({
+      const failedAt = this.now().toISOString();
+      await this.repository.markRefreshFailed({
         objectKey,
         formCodeId: context.registry.formCodeId,
         formDefId: null,
         message: error instanceof Error ? error.message : '刷新失败',
-        now: this.now().toISOString(),
+        now: failedAt,
+      });
+      this.registryCache.set(objectKey, {
+        ...context.registry,
+        refreshStatus: 'failed',
+        lastError: error instanceof Error ? error.message : '刷新失败',
+        lastRefreshAt: failedAt,
       });
       throw error;
     }
@@ -1813,10 +1869,20 @@ export class ShadowMetadataService {
     };
   }
 
-  private syncRegistryConfig(): void {
+  private async syncRegistryConfig(): Promise<void> {
     const now = this.now().toISOString();
     for (const objectConfig of Object.values(this.config.shadow.objects)) {
-      this.repository.upsertObjectRegistryConfig({
+      const cached = this.registryCache.get(objectConfig.key);
+      this.registryCache.set(objectConfig.key, {
+        ...this.buildObjectSummaryFromConfig(objectConfig),
+        latestSnapshotVersion: cached?.latestSnapshotVersion ?? null,
+        latestSchemaHash: cached?.latestSchemaHash ?? null,
+        lastRefreshAt: cached?.lastRefreshAt ?? null,
+        lastError: cached?.lastError ?? null,
+        formDefId: cached?.formDefId ?? null,
+        refreshStatus: cached?.refreshStatus ?? 'not_started',
+      });
+      await this.repository.upsertObjectRegistryConfig({
         objectKey: objectConfig.key,
         label: objectConfig.label,
         enabled: objectConfig.enabled,
@@ -1832,12 +1898,12 @@ export class ShadowMetadataService {
     options?: { syncRegistry?: boolean },
   ): {
     registry: ShadowObjectSummaryResponse;
-    snapshot: ReturnType<ShadowMetadataRepository['getLatestSnapshot']>;
+    snapshot: ShadowObjectSnapshotRecord | null;
   } {
     if (options?.syncRegistry) {
       this.trySyncRegistryConfig();
     }
-    const registry = this.repository.getObjectRegistry(objectKey)
+    const registry = this.registryCache.get(objectKey)
       ?? (this.config.shadow.objects[objectKey]
         ? this.buildObjectSummaryFromConfig(this.config.shadow.objects[objectKey])
         : null);
@@ -1847,24 +1913,19 @@ export class ShadowMetadataService {
 
     return {
       registry,
-      snapshot: this.repository.getLatestSnapshot(objectKey),
+      snapshot: this.snapshotCache.get(objectKey) ?? null,
     };
   }
 
   private trySyncRegistryConfig(): void {
-    try {
-      this.syncRegistryConfig();
-    } catch (error) {
-      if (!isSqliteLockedError(error)) {
-        throw error;
-      }
+    void this.syncRegistryConfig().catch((error) => {
       if (!this.hasWarnedLockedRegistrySync) {
         console.warn(
-          '[admin-api] sqlite database is locked while syncing shadow registry config; read API falls back to persisted registry/config snapshot.',
+          `[admin-api] failed to sync shadow registry config in background: ${error instanceof Error ? error.message : String(error)}`,
         );
         this.hasWarnedLockedRegistrySync = true;
       }
-    }
+    });
   }
 
   private buildObjectSummaryFromConfig(objectConfig: ShadowObjectConfig): ShadowObjectSummaryResponse {

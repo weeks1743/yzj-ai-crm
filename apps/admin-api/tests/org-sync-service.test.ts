@@ -37,7 +37,7 @@ class StubYzjClient extends YzjClient {
 async function waitForCompletion(service: OrgSyncService, timeoutMs = 3000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const state = service.getSettings();
+    const state = await service.getSettings();
     if (!state.isSyncing) {
       return;
     }
@@ -72,10 +72,10 @@ test('OrgSyncService completes single-page sync and skips non-active employees',
     now: () => new Date('2026-04-23T09:00:00.000Z'),
   });
 
-  service.startManualSync();
+  await service.startManualSync();
   await waitForCompletion(service);
 
-  const settings = service.getSettings();
+  const settings = await service.getSettings();
   assert.equal(settings.employeeCount, 1);
   assert.equal(settings.lastRun?.status, 'completed');
   assert.equal(settings.lastRun?.fetchedCount, 2);
@@ -107,10 +107,10 @@ test('OrgSyncService paginates and upserts existing employees without duplicatio
     now: () => new Date('2026-04-23T09:00:00.000Z'),
   });
 
-  service.startManualSync();
+  await service.startManualSync();
   await waitForCompletion(service);
 
-  const settings = service.getSettings();
+  const settings = await service.getSettings();
   assert.equal(settings.employeeCount, 1000);
   assert.equal(settings.lastRun?.pageCount, 2);
   assert.equal(settings.lastRun?.fetchedCount, 1001);
@@ -133,18 +133,18 @@ test('OrgSyncService rejects concurrent manual sync attempts', async () => {
     now: () => new Date('2026-04-23T09:00:00.000Z'),
   });
 
-  service.startManualSync();
+  await service.startManualSync();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.throws(() => service.startManualSync(), /已有同步进行中/);
+  await assert.rejects(() => service.startManualSync(), /已有同步进行中/);
 
   release();
   await waitForCompletion(service);
 });
 
-test('OrgSyncRepository finds employee candidates within current tenant and app', () => {
+test('OrgSyncRepository finds employee candidates within current tenant and app', async () => {
   const repository = createRepository();
   const syncedAt = '2026-04-29T00:00:00.000Z';
-  repository.upsertEmployee({
+  await repository.upsertEmployee({
     eid: '21024647',
     appId: '501037729',
     openId: 'open-chen-weirong',
@@ -157,7 +157,7 @@ test('OrgSyncRepository finds employee candidates within current tenant and app'
     syncedAt,
     rawPayloadJson: '{}',
   });
-  repository.upsertEmployee({
+  await repository.upsertEmployee({
     eid: '21024647',
     appId: '501037729',
     openId: 'open-chen-weigang',
@@ -170,7 +170,7 @@ test('OrgSyncRepository finds employee candidates within current tenant and app'
     syncedAt,
     rawPayloadJson: '{}',
   });
-  repository.upsertEmployee({
+  await repository.upsertEmployee({
     eid: 'other-eid',
     appId: '501037729',
     openId: 'open-other-tenant',
@@ -183,7 +183,7 @@ test('OrgSyncRepository finds employee candidates within current tenant and app'
     syncedAt,
     rawPayloadJson: '{}',
   });
-  repository.upsertEmployee({
+  await repository.upsertEmployee({
     eid: '21024647',
     appId: 'historical-app',
     openId: 'open-chen-history',
@@ -197,7 +197,7 @@ test('OrgSyncRepository finds employee candidates within current tenant and app'
     rawPayloadJson: '{}',
   });
 
-  const fuzzy = repository.findEmployees({
+  const fuzzy = await repository.findEmployees({
     eid: '21024647',
     appId: '501037729',
     keyword: '陈伟',
@@ -207,21 +207,21 @@ test('OrgSyncRepository finds employee candidates within current tenant and app'
     ['open-chen-weigang', 'open-chen-weirong'],
   );
 
-  const byPhone = repository.findEmployees({
+  const byPhone = await repository.findEmployees({
     eid: '21024647',
     appId: '501037729',
     keyword: '13800000003',
   });
   assert.deepEqual(byPhone.map((employee) => employee.openId), ['open-chen-weigang']);
 
-  const byEmail = repository.findEmployees({
+  const byEmail = await repository.findEmployees({
     eid: '21024647',
     appId: '501037729',
     keyword: 'CHENWEIRONG@EXAMPLE.COM',
   });
   assert.deepEqual(byEmail.map((employee) => employee.openId), ['open-chen-weirong']);
 
-  const fallback = repository.findEmployees({
+  const fallback = await repository.findEmployees({
     eid: '21024647',
     appId: 'new-app-without-synced-employees',
     keyword: '陈伟',

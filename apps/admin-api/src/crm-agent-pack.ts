@@ -2946,7 +2946,7 @@ export async function buildMetaQuestionOptionsResponse(input: {
   if (context.field.widgetType === 'personSelectWidget') {
     return {
       options: buildEmployeeOptionHints(
-        input.orgSyncRepository?.findEmployees({
+        await input.orgSyncRepository?.findEmployees({
           eid: input.config.yzj.eid,
           appId: input.config.yzj.appId,
           keyword,
@@ -3835,13 +3835,13 @@ function enrichRecordParamsFromQuery(input: {
   return params;
 }
 
-function resolvePersonSelectParams(input: {
+async function resolvePersonSelectParams(input: {
   options: CrmAgentPackOptions;
   context: AgentToolExecuteContext;
   requestInput: ShadowPreviewUpsertInput;
   capability: RecordToolCapability;
   fields: ShadowStandardizedField[];
-}): PersonResolutionResult {
+}): Promise<PersonResolutionResult> {
   const params = readRequestParams(input.requestInput);
   const nextParams = { ...params };
   const issues: PersonResolutionIssue[] = [];
@@ -3857,7 +3857,7 @@ function resolvePersonSelectParams(input: {
     if (field?.widgetType !== 'personSelectWidget') {
       continue;
     }
-    const resolved = resolvePersonParamValue({
+    const resolved = await resolvePersonParamValue({
       options: input.options,
       context: input.context,
       paramKey,
@@ -3882,20 +3882,20 @@ function resolvePersonSelectParams(input: {
   };
 }
 
-function resolvePersonParamValue(input: {
+async function resolvePersonParamValue(input: {
   options: CrmAgentPackOptions;
   context: AgentToolExecuteContext;
   paramKey: string;
   label: string;
   rawValue: unknown;
-}): {
+}): Promise<{
   value?: unknown;
   issue?: PersonResolutionIssue;
-} {
+}> {
   if (Array.isArray(input.rawValue)) {
     const values: unknown[] = [];
     for (const item of input.rawValue) {
-      const resolved = resolveSinglePersonValue({ ...input, rawValue: item });
+      const resolved = await resolveSinglePersonValue({ ...input, rawValue: item });
       if (resolved.issue) {
         return resolved;
       }
@@ -3909,19 +3909,19 @@ function resolvePersonParamValue(input: {
   return resolveSinglePersonValue(input);
 }
 
-function resolveSinglePersonValue(input: {
+async function resolveSinglePersonValue(input: {
   options: CrmAgentPackOptions;
   context: AgentToolExecuteContext;
   paramKey: string;
   label: string;
   rawValue: unknown;
-}): {
+}): Promise<{
   value?: unknown;
   issue?: PersonResolutionIssue;
-} {
+}> {
   const directOpenId = readPersonOpenId(input.rawValue);
   if (directOpenId) {
-    const candidate = findExactEmployeeCandidate(input, directOpenId);
+    const candidate = await findExactEmployeeCandidate(input, directOpenId);
     return {
       value: candidate ? buildPersonParamObject(candidate) : input.rawValue,
     };
@@ -3931,7 +3931,7 @@ function resolveSinglePersonValue(input: {
   if (!keyword) {
     return { value: input.rawValue };
   }
-  const candidates = input.options.orgSyncRepository?.findEmployees({
+  const candidates = await input.options.orgSyncRepository?.findEmployees({
     eid: input.context.eid,
     appId: input.context.appId,
     keyword,
@@ -3977,14 +3977,14 @@ function readPersonOpenId(value: unknown): string {
   return '';
 }
 
-function findExactEmployeeCandidate(
+async function findExactEmployeeCandidate(
   input: {
     options: CrmAgentPackOptions;
     context: AgentToolExecuteContext;
   },
   openId: string,
-): OrgEmployeeCandidate | null {
-  const candidates = input.options.orgSyncRepository?.findEmployees({
+): Promise<OrgEmployeeCandidate | null> {
+  const candidates = await input.options.orgSyncRepository?.findEmployees({
     eid: input.context.eid,
     appId: input.context.appId,
     keyword: openId,
@@ -5337,7 +5337,7 @@ async function executeRecordPreviewTool(
     });
   }
 
-  const personResolution = resolvePersonSelectParams({
+  const personResolution = await resolvePersonSelectParams({
     options,
     context,
     requestInput: initialRequestInput,
@@ -5476,7 +5476,7 @@ async function executeRecordPreviewTool(
     createdAt: new Date().toISOString(),
     decidedAt: null,
   };
-  options.repository.saveConfirmation(confirmation);
+  await options.repository.saveConfirmation(confirmation);
   finishToolCall(toolCall, 'succeeded', `preview ready confirmation=${confirmation.confirmationId}`);
 
   return {
@@ -5513,7 +5513,7 @@ async function executeRecordCommitTool(
 ): Promise<AgentToolExecutionResult> {
   const confirmationId = String(input.selectedTool.input.confirmationId ?? '');
   const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, confirmationId);
-  const pending = options.repository.findPendingConfirmation(context.runId, confirmationId);
+  const pending = await options.repository.findPendingConfirmation(context.runId, confirmationId);
   if (!pending) {
     finishToolCall(toolCall, 'failed', '未找到待确认写回请求');
     return {
@@ -5526,7 +5526,7 @@ async function executeRecordCommitTool(
   }
 
   if (input.resumeDecision?.action !== 'confirm_writeback' || input.resumeDecision.decision !== 'approve') {
-    const rejected = options.repository.resolveConfirmation({
+    const rejected = await options.repository.resolveConfirmation({
       runId: context.runId,
       confirmationId,
       status: 'rejected',
@@ -5565,7 +5565,7 @@ async function executeRecordCommitTool(
     fields: readRecordFields(options, objectKey),
     shadowMetadataService: options.shadowMetadataService,
   });
-  const approved = options.repository.resolveConfirmation({
+  const approved = await options.repository.resolveConfirmation({
     runId: context.runId,
     confirmationId,
     status: 'approved',

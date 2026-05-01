@@ -109,7 +109,8 @@ export interface AppConfig {
     apiKey: string | null;
   };
   storage: {
-    sqlitePath: string;
+    postgresUrl: string;
+    postgresSchema: string;
     mongodbUri: string;
     mongodbDb: string;
   };

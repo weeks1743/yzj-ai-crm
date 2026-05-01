@@ -52,9 +52,9 @@ interface ExternalSkillServiceOptions {
   fetchImpl?: FetchLike;
   now?: () => Date;
   enterprisePptTemplateResolver?: {
-    getActiveTemplate(): EnterprisePptTemplateItem | null;
-    getDefaultPrompt(): string;
-    getEffectivePrompt?(): string;
+    getActiveTemplate(): Promise<EnterprisePptTemplateItem | null>;
+    getDefaultPrompt(): Promise<string>;
+    getEffectivePrompt?(): Promise<string>;
   };
 }
 
@@ -525,14 +525,22 @@ export class ExternalSkillService {
 
   async createSkillJob(skillCode: string, input: ExternalSkillJobRequest): Promise<ExternalSkillJobResponse> {
     const runtimeSkill = this.getRuntimeSkillDefinition(skillCode);
+    const activeTemplate = skillCode === 'ext.super_ppt'
+      ? await this.options.enterprisePptTemplateResolver?.getActiveTemplate()
+      : null;
+    const effectivePrompt = skillCode === 'ext.super_ppt'
+      ? (
+          this.options.enterprisePptTemplateResolver?.getEffectivePrompt
+            ? await this.options.enterprisePptTemplateResolver.getEffectivePrompt()
+            : await this.options.enterprisePptTemplateResolver?.getDefaultPrompt()
+        )
+      : null;
     const runtimeJob = await this.skillRuntimeClient.createJob(runtimeSkill.runtimeSkillName, {
       ...input,
       ...(skillCode === 'ext.super_ppt'
         ? {
-            templateId: this.options.enterprisePptTemplateResolver?.getActiveTemplate()?.templateId,
-            presentationPrompt:
-              this.options.enterprisePptTemplateResolver?.getEffectivePrompt?.()
-              ?? this.options.enterprisePptTemplateResolver?.getDefaultPrompt(),
+            templateId: activeTemplate?.templateId,
+            presentationPrompt: effectivePrompt ?? undefined,
           }
         : {}),
     });

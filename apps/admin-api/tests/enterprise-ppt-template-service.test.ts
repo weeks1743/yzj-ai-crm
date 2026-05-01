@@ -106,15 +106,15 @@ test('EnterprisePptTemplateService manages upload, rename, activate, download, a
   });
 
   assert.equal(
-    service.getDefaultPrompt(),
+    await service.getDefaultPrompt(),
     '请基于完整材料生成专业、清晰、适合管理层汇报的科技行业PPT',
   );
-  const updatedPrompt = service.updateDefaultPrompt('请基于完整材料生成专业董事会汇报PPT');
+  const updatedPrompt = await service.updateDefaultPrompt('请基于完整材料生成专业董事会汇报PPT');
   assert.equal(updatedPrompt.defaultPrompt, '请基于完整材料生成专业董事会汇报PPT');
   assert.equal(updatedPrompt.effectivePrompt, '请基于完整材料生成专业董事会汇报PPT');
   assert.equal(updatedPrompt.isFallbackApplied, false);
-  assert.equal(service.listTemplates().defaultPrompt, '请基于完整材料生成专业董事会汇报PPT');
-  assert.equal(service.getEffectivePrompt(), '请基于完整材料生成专业董事会汇报PPT');
+  assert.equal((await service.listTemplates()).defaultPrompt, '请基于完整材料生成专业董事会汇报PPT');
+  assert.equal(await service.getEffectivePrompt(), '请基于完整材料生成专业董事会汇报PPT');
 
   const uploadResult = await service.uploadTemplate({
     fileName: '金蝶ppt模板.pptx',
@@ -122,14 +122,14 @@ test('EnterprisePptTemplateService manages upload, rename, activate, download, a
   });
   assert.equal(uploadResult.item.templateId, 'tpl-001');
   assert.equal(uploadResult.item.name, '金蝶ppt模板');
-  assert.equal(service.listTemplates().activeTemplate, null);
+  assert.equal((await service.listTemplates()).activeTemplate, null);
 
   const renameResult = await service.renameTemplate('tpl-001', '金蝶企业标准模板');
   assert.equal(renameResult.item.name, '金蝶企业标准模板');
 
   const activated = await service.activateTemplate('tpl-001');
   assert.equal(activated.item.isActive, true);
-  assert.equal(service.getActiveTemplate()?.templateId, 'tpl-001');
+  assert.equal((await service.getActiveTemplate())?.templateId, 'tpl-001');
 
   const downloaded = await service.downloadTemplate('tpl-001');
   assert.equal(downloaded.file.toString('utf8'), 'pptx-template-binary');
@@ -137,8 +137,8 @@ test('EnterprisePptTemplateService manages upload, rename, activate, download, a
 
   const deleted = await service.deleteTemplate('tpl-001');
   assert.equal(deleted.deletedTemplateId, 'tpl-001');
-  assert.equal(service.listTemplates().items.length, 0);
-  assert.equal(service.getActiveTemplate(), null);
+  assert.equal((await service.listTemplates()).items.length, 0);
+  assert.equal(await service.getActiveTemplate(), null);
 
   assert.ok(
     seen.some(
@@ -156,10 +156,10 @@ test('EnterprisePptTemplateService manages upload, rename, activate, download, a
   );
 });
 
-test('EnterprisePptTemplateService exposes fallback info for historical overlong prompts and rejects new overlong values', () => {
+test('EnterprisePptTemplateService exposes fallback info for historical overlong prompts and rejects new overlong values', async () => {
   const database = createInMemoryDatabase();
   const repository = new EnterprisePptTemplateRepository(database);
-  repository.updateDefaultPrompt(
+  await repository.updateDefaultPrompt(
     '你是一位拥有10年以上科技行业经验的顶级PPT设计师和解决方案专家，擅长将复杂的技术概念转化为清晰、专业、具有说服力的演示内容。请根据我提供的主题和核心内容，生成一份高质量的科技行业PPT',
   );
 
@@ -172,14 +172,14 @@ test('EnterprisePptTemplateService exposes fallback info for historical overlong
     client: null,
   });
 
-  const state = service.getPromptState();
+  const state = await service.getPromptState();
   assert.equal(state.isFallbackApplied, true);
   assert.equal(state.effectivePrompt, '请基于完整材料生成专业、清晰、适合管理层汇报的科技行业PPT');
   assert.match(state.fallbackReason || '', /50 字限制/);
 
-  assert.throws(
-    () => {
-      service.updateDefaultPrompt(
+  await assert.rejects(
+    async () => {
+      await service.updateDefaultPrompt(
         '你是一位拥有10年以上科技行业经验的顶级PPT设计师和解决方案专家，擅长将复杂的技术概念转化为清晰、专业、具有说服力的演示内容。请根据我提供的主题和核心内容，生成一份高质量的科技行业PPT',
       );
     },
