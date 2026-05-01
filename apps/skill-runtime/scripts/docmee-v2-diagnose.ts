@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { basename, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Pool } from 'pg';
 import { loadAppConfig } from '../src/config.js';
 import { DocmeeClient, type DocmeeOptionItem } from '../src/docmee-client.js';
 import {
@@ -32,6 +32,7 @@ interface FetchLogEntry {
 }
 
 const DEFAULT_REQUEST_TEXT = '请基于附件生成适合管理层阅读的企业研究汇报 PPT';
+const DEFAULT_POSTGRES_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev';
 
 function printUsage(): never {
   throw new Error(
@@ -209,49 +210,57 @@ function createLoggedFetch(logs: FetchLogEntry[]) {
   };
 }
 
-function readEnterprisePromptState(envFilePath: string): {
+function quoteIdentifier(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function resolveAdminPostgresSchema(): string {
+  const schema = (process.env.ADMIN_API_POSTGRES_SCHEMA || 'admin_api').trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+    throw new Error('ADMIN_API_POSTGRES_SCHEMA 必须是合法 PostgreSQL schema 名称');
+  }
+  return schema;
+}
+
+async function readEnterprisePromptState(envFilePath: string): Promise<{
   templateId: string | null;
   storedPrompt: string | null;
-} {
-  const envDir = dirname(envFilePath);
-  const sqlitePath = resolve(envDir, process.env.ORG_SYNC_SQLITE_PATH || '.local/admin-api.sqlite');
-  if (!existsSync(sqlitePath)) {
+}> {
+  void envFilePath;
+  const postgresUrl = (process.env.ADMIN_API_POSTGRES_URL || DEFAULT_POSTGRES_URL).trim();
+  const schema = resolveAdminPostgresSchema();
+  const pool = new Pool({ connectionString: postgresUrl });
+
+  try {
+    const templateResult = await pool.query<{ template_id?: string }>(
+      `
+        SELECT template_id
+        FROM ${quoteIdentifier(schema)}.${quoteIdentifier('enterprise_ppt_templates')}
+        WHERE is_active = true
+        LIMIT 1
+      `,
+    );
+    const promptResult = await pool.query<{ default_prompt?: string }>(
+      `
+        SELECT default_prompt
+        FROM ${quoteIdentifier(schema)}.${quoteIdentifier('enterprise_ppt_template_settings')}
+        WHERE singleton_id = 1
+        LIMIT 1
+      `,
+    );
+
+    return {
+      templateId: templateResult.rows[0]?.template_id?.trim() || null,
+      storedPrompt: promptResult.rows[0]?.default_prompt?.trim() || null,
+    };
+  } catch (error) {
+    console.warn(`[docmee-v2-diagnose] 无法读取 PostgreSQL 企业 PPT 配置，使用默认提示词: ${(error as Error).message}`);
     return {
       templateId: null,
       storedPrompt: null,
     };
-  }
-
-  const database = new DatabaseSync(sqlitePath);
-
-  try {
-    const templateRow = database
-      .prepare(
-        `
-          SELECT template_id
-          FROM enterprise_ppt_templates
-          WHERE is_active = 1
-          LIMIT 1
-        `,
-      )
-      .get() as { template_id?: string } | undefined;
-    const promptRow = database
-      .prepare(
-        `
-          SELECT default_prompt
-          FROM enterprise_ppt_template_settings
-          WHERE singleton_id = 1
-          LIMIT 1
-        `,
-      )
-      .get() as { default_prompt?: string } | undefined;
-
-    return {
-      templateId: templateRow?.template_id?.trim() || null,
-      storedPrompt: promptRow?.default_prompt?.trim() || null,
-    };
   } finally {
-    database.close();
+    await pool.end();
   }
 }
 
@@ -464,7 +473,7 @@ async function main() {
     throw new Error(`当前仅支持 .md 输入: ${args.input}`);
   }
 
-  const enterpriseState = readEnterprisePromptState(config.meta.envFilePath);
+  const enterpriseState = await readEnterprisePromptState(config.meta.envFilePath);
   const resolvedPrompt = resolveSuperPptPrompt(args.prompt || enterpriseState.storedPrompt || DEFAULT_SUPER_PPT_PROMPT);
   const templateId = args.templateId || enterpriseState.templateId || undefined;
 

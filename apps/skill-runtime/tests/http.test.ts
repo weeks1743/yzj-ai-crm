@@ -243,7 +243,7 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
     assert.equal(response.status, 202);
     const createdJob = await response.json();
     const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
-    assert.equal(job.status, 'succeeded');
+    assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
     assert.equal(job.finalText, 'Problem statement generated.');
     assert.equal(job.artifacts.length, 1);
 
@@ -469,7 +469,7 @@ test('POST /api/jobs runs super-ppt without model and creates presentation sessi
     assert.equal(response.status, 202);
     const createdJob = await response.json();
     const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
-    assert.equal(job.status, 'succeeded');
+    assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
     assert.equal(job.model, null);
     assert.equal(job.artifacts.length, 6);
     assert.ok(job.artifacts.some((artifact: { fileName: string }) => artifact.fileName.endsWith('.pptx')));
@@ -1082,7 +1082,7 @@ test('POST /api/jobs runs pptx fresh_deck flow with plan/render/qa/previews arti
     assert.equal(response.status, 202);
     const createdJob = await response.json();
     const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId, 90_000);
-    assert.equal(job.status, 'succeeded');
+    assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
     assert.equal(job.finalText, 'Deck generated, quality-checked, and preview artifacts rendered.');
     assert.ok(job.events.some((event: any) => event.type === 'deck_planned'));
     assert.ok(job.events.some((event: any) => event.type === 'deck_rendered'));
@@ -1233,7 +1233,7 @@ test('POST /api/jobs runs pptx template_following flow and still finishes with q
     assert.equal(response.status, 202);
     const createdJob = await response.json();
     const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId, 90_000);
-    assert.equal(job.status, 'succeeded');
+    assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
     assert.equal(job.finalText, 'Template-following deck updated, quality-checked, and preview artifacts rendered.');
     assert.ok(job.events.some((event: any) => event.type === 'qa_report'));
     assert.ok(job.events.some((event: any) => event.type === 'previews_rendered'));

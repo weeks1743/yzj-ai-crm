@@ -215,7 +215,7 @@ export class SkillExecutor {
     return stagedPaths;
   }
 
-  private publishOutputArtifacts(jobId: string, outputDir: string): JobArtifact[] {
+  private async publishOutputArtifacts(jobId: string, outputDir: string): Promise<JobArtifact[]> {
     const supportedExtensions = new Set(this.options.config.runtime.outputScanExtensions);
     const artifacts: JobArtifact[] = [];
 
@@ -226,14 +226,14 @@ export class SkillExecutor {
 
       const relativePath = relative(outputDir, filePath);
       artifacts.push(
-        this.options.artifactStore.publishFile(
+        await this.options.artifactStore.publishFile(
           jobId,
           filePath,
           relativePath.replace(/[\\/]+/g, '-'),
           guessMimeType(filePath),
         ),
       );
-      this.options.repository.appendEvent(
+      await this.options.repository.appendEvent(
         jobId,
         'artifact',
         `生成产物 ${relativePath}`,
@@ -394,8 +394,8 @@ export class SkillExecutor {
     };
   }
 
-  private ensurePptxArtifacts(jobId: string): void {
-    const artifacts = this.options.repository.listArtifacts(jobId);
+  private async ensurePptxArtifacts(jobId: string): Promise<void> {
+    const artifacts = await this.options.repository.listArtifacts(jobId);
     const hasPptx = artifacts.some((artifact) => artifact.mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
     const hasPdf = artifacts.some((artifact) => artifact.mimeType === 'application/pdf');
     const hasJpg = artifacts.some((artifact) => artifact.mimeType === 'image/jpeg');
@@ -425,9 +425,9 @@ export class SkillExecutor {
     job: StoredJobRecord;
     paths: ExecutionPaths;
     stagedAttachments: string[];
-    emitEvent: (type: JobEvent['type'], message: string, data?: unknown) => void;
-    publishTextArtifact: (fileName: string, content: string, mimeType?: string) => JobArtifact;
-    publishFileArtifact: (sourcePath: string, fileName?: string, mimeType?: string) => JobArtifact;
+    emitEvent: (type: JobEvent['type'], message: string, data?: unknown) => Promise<void>;
+    publishTextArtifact: (fileName: string, content: string, mimeType?: string) => Promise<JobArtifact>;
+    publishFileArtifact: (sourcePath: string, fileName?: string, mimeType?: string) => Promise<JobArtifact>;
   }): Promise<{ finalText: string | null }> {
     const sourceAttachment = this.assertSuperPptAttachment(input.stagedAttachments);
     const sourceMarkdownRaw = readFileSync(sourceAttachment, 'utf8');
@@ -440,7 +440,7 @@ export class SkillExecutor {
     const resolvedPrompt = resolveSuperPptPrompt(input.job.presentationPrompt?.trim() || DEFAULT_SUPER_PPT_PROMPT);
     const runtimeToken = await createSuperPptRuntimeToken(this.options.docmeeClient, input.job.jobId);
 
-    input.emitEvent('message', 'Docmee createTask 已开始', {
+    await input.emitEvent('message', 'Docmee createTask 已开始', {
       subject,
       sourceAttachment,
       promptFallbackApplied: resolvedPrompt.isFallbackApplied,
@@ -461,7 +461,7 @@ export class SkillExecutor {
     const audience = resolveDocmeeOptionValue(optionPayload.audience, '大众', '大众');
     const lang = resolveDocmeeOptionValue(optionPayload.lang, 'zh', 'zh');
 
-    input.emitEvent('message', 'Docmee 大纲生成中', {
+    await input.emitEvent('message', 'Docmee 大纲生成中', {
       taskId: task.id,
       scene,
       audience,
@@ -488,7 +488,7 @@ export class SkillExecutor {
       });
     }
 
-    input.emitEvent('message', 'Docmee AI 智能布局排版中', {
+    await input.emitEvent('message', 'Docmee AI 智能布局排版中', {
       taskId: task.id,
       templateId: input.job.templateId,
     });
@@ -533,7 +533,7 @@ export class SkillExecutor {
       officialLayoutState = officialFlow.layoutState;
       convertStatus = officialFlow.layoutState.status;
 
-      input.emitEvent('message', 'Docmee AI 布局已完成，开始生成最终 Markdown', {
+      await input.emitEvent('message', 'Docmee AI 布局已完成，开始生成最终 Markdown', {
         taskId: task.id,
         layoutStatus: officialFlow.layoutState.status,
         layoutSource: officialFlow.layoutState.source,
@@ -562,7 +562,7 @@ export class SkillExecutor {
       latestDataError = officialFlowError.message;
 
       if (input.job.templateId && isDocmeeTemplateLayoutFailure(error)) {
-        input.emitEvent('error', 'Docmee 模板解析失败，已停止本次带模板生成', {
+        await input.emitEvent('error', 'Docmee 模板解析失败，已停止本次带模板生成', {
           taskId: task.id,
           templateId: input.job.templateId,
           reason: error instanceof Error ? error.message : String(error),
@@ -577,7 +577,7 @@ export class SkillExecutor {
         );
       }
 
-      input.emitEvent('error', 'Docmee 官方链路未完成，已停止本次生成，未执行降级链路', {
+      await input.emitEvent('error', 'Docmee 官方链路未完成，已停止本次生成，未执行降级链路', {
         taskId: task.id,
         templateId: input.job.templateId,
         reason: officialFlowError.message,
@@ -594,7 +594,7 @@ export class SkillExecutor {
       );
     }
 
-    input.emitEvent('message', 'Docmee PPT 生成中', {
+    await input.emitEvent('message', 'Docmee PPT 生成中', {
       taskId: task.id,
       templateId: input.job.templateId,
       finalMarkdownSource,
@@ -617,32 +617,32 @@ export class SkillExecutor {
     const pptFilePath = join(input.paths.outputsDir, pptFileName);
     writeFileSync(pptFilePath, downloaded.file);
 
-    const pptArtifact = input.publishFileArtifact(
+    const pptArtifact = await input.publishFileArtifact(
       pptFilePath,
       pptFileName,
       'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     );
-    const sourceMarkdownArtifact = input.publishTextArtifact(
+    const sourceMarkdownArtifact = await input.publishTextArtifact(
       `super-ppt-${input.job.jobId}-source.md`,
       sourceMarkdownRaw,
       'text/markdown',
     );
-    const contentOutlineArtifact = input.publishTextArtifact(
+    const contentOutlineArtifact = await input.publishTextArtifact(
       `super-ppt-${input.job.jobId}-content-outline.json`,
       JSON.stringify(generated.result, null, 2),
       'application/json',
     );
-    const aiLayoutLogArtifact = input.publishTextArtifact(
+    const aiLayoutLogArtifact = await input.publishTextArtifact(
       `super-ppt-${input.job.jobId}-ai-layout.log`,
       aiLayout.streamLog,
       'text/plain',
     );
-    const finalMarkdownArtifact = input.publishTextArtifact(
+    const finalMarkdownArtifact = await input.publishTextArtifact(
       `super-ppt-${input.job.jobId}-final-markdown.md`,
       finalMarkdown,
       'text/markdown',
     );
-    input.publishTextArtifact(
+    await input.publishTextArtifact(
       `super-ppt-${input.job.jobId}.json`,
       JSON.stringify(
         {
@@ -688,7 +688,7 @@ export class SkillExecutor {
       'application/json',
     );
 
-    input.emitEvent('presentation_ready', 'PPT 已生成，可进入编辑器继续修改', {
+    await input.emitEvent('presentation_ready', 'PPT 已生成，可进入编辑器继续修改', {
       pptId,
       subject: pptInfo.subject || subject,
       templateId: pptInfo.templateId || downloaded.metadata.templateId || input.job.templateId || null,
@@ -708,19 +708,19 @@ export class SkillExecutor {
     const paths = this.createExecutionPaths(job, skill);
     const stagedAttachments = this.stageAttachments(job, paths);
 
-    const emitEvent = (type: JobEvent['type'], message: string, data?: unknown) => {
-      this.options.repository.appendEvent(job.jobId, type, message, data);
+    const emitEvent = async (type: JobEvent['type'], message: string, data?: unknown) => {
+      await this.options.repository.appendEvent(job.jobId, type, message, data);
     };
 
-    const publishTextArtifact = (fileName: string, content: string, mimeType?: string) => {
-      const artifact = this.options.artifactStore.writeTextArtifact(job.jobId, fileName, content, mimeType);
-      emitEvent('artifact', `生成产物 ${artifact.fileName}`, artifact);
+    const publishTextArtifact = async (fileName: string, content: string, mimeType?: string) => {
+      const artifact = await this.options.artifactStore.writeTextArtifact(job.jobId, fileName, content, mimeType);
+      await emitEvent('artifact', `生成产物 ${artifact.fileName}`, artifact);
       return artifact;
     };
 
-    const publishFileArtifact = (sourcePath: string, fileName?: string, mimeType?: string) => {
-      const artifact = this.options.artifactStore.publishFile(job.jobId, sourcePath, fileName, mimeType);
-      emitEvent('artifact', `生成产物 ${artifact.fileName}`, artifact);
+    const publishFileArtifact = async (sourcePath: string, fileName?: string, mimeType?: string) => {
+      const artifact = await this.options.artifactStore.publishFile(job.jobId, sourcePath, fileName, mimeType);
+      await emitEvent('artifact', `生成产物 ${artifact.fileName}`, artifact);
       return artifact;
     };
 
@@ -831,17 +831,17 @@ export class SkillExecutor {
       stopWhen,
     });
 
-    this.publishOutputArtifacts(job.jobId, paths.outputsDir);
+    await this.publishOutputArtifacts(job.jobId, paths.outputsDir);
     if (
       (skill.skillName === 'company-research' || GENERIC_TEXT_SKILLS.has(skill.skillName))
-      && this.options.repository.listArtifacts(job.jobId).length === 0
+      && (await this.options.repository.listArtifacts(job.jobId)).length === 0
       && result.finalText?.trim()
     ) {
-      publishTextArtifact(`${skill.skillName}-${job.jobId}.md`, result.finalText.trim());
+      await publishTextArtifact(`${skill.skillName}-${job.jobId}.md`, result.finalText.trim());
     }
 
     if (skill.skillName === 'pptx') {
-      this.ensurePptxArtifacts(job.jobId);
+      await this.ensurePptxArtifacts(job.jobId);
     }
 
     return {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import type { QueryResultRow } from 'pg';
+import type { DatabaseConnection } from './database.js';
 import type {
   ApiErrorResponse,
   JobArtifact,
@@ -10,34 +11,34 @@ import type {
 } from './contracts.js';
 import { NotFoundError } from './errors.js';
 
-interface JobRow {
+interface JobRow extends QueryResultRow {
   job_id: string;
   skill_name: string;
   model: string;
   request_text: string;
-  attachments_json: string;
+  attachments_json: string[] | string;
   working_directory: string | null;
   template_id: string | null;
   presentation_prompt: string | null;
   status: JobStatus;
   final_text: string | null;
-  error_json: string | null;
+  error_json: ApiErrorResponse | string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
 }
 
-interface JobEventRow {
+interface JobEventRow extends QueryResultRow {
   id: string;
   job_id: string;
   type: JobEvent['type'];
   message: string;
-  data_json: string | null;
+  data_json: unknown;
   created_at: string;
 }
 
-interface JobArtifactRow {
+interface JobArtifactRow extends QueryResultRow {
   artifact_id: string;
   job_id: string;
   file_name: string;
@@ -47,19 +48,33 @@ interface JobArtifactRow {
   created_at: string;
 }
 
+function parseJsonValue<T>(value: T | string | null | undefined, fallback: T): T {
+  if (value == null) {
+    return fallback;
+  }
+  if (typeof value !== 'string') {
+    return value as T;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 function mapJob(row: JobRow): StoredJobRecord {
   return {
     jobId: row.job_id,
     skillName: row.skill_name,
     model: row.model.trim() ? row.model : null,
     requestText: row.request_text,
-    attachments: JSON.parse(row.attachments_json) as string[],
+    attachments: parseJsonValue<string[]>(row.attachments_json, []),
     workingDirectory: row.working_directory,
     templateId: row.template_id,
     presentationPrompt: row.presentation_prompt,
     status: row.status,
     finalText: row.final_text,
-    error: row.error_json ? (JSON.parse(row.error_json) as ApiErrorResponse) : null,
+    error: row.error_json ? parseJsonValue<ApiErrorResponse | null>(row.error_json, null) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at,
@@ -72,7 +87,7 @@ function mapEvent(row: JobEventRow): JobEvent {
     id: row.id,
     type: row.type,
     message: row.message,
-    data: row.data_json ? JSON.parse(row.data_json) : undefined,
+    data: row.data_json ?? undefined,
     createdAt: row.created_at,
   };
 }
@@ -91,9 +106,9 @@ function mapArtifact(row: JobArtifactRow): JobArtifact & { filePath: string } {
 }
 
 export class JobRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(private readonly database: DatabaseConnection) {}
 
-  createJob(input: {
+  async createJob(input: {
     skillName: string;
     model: string | null;
     requestText: string;
@@ -101,28 +116,26 @@ export class JobRepository {
     workingDirectory: string | null;
     templateId: string | null;
     presentationPrompt: string | null;
-  }): StoredJobRecord {
+  }): Promise<StoredJobRecord> {
     const now = new Date().toISOString();
     const jobId = randomUUID();
-    this.database
-      .prepare(
-        `
-          INSERT INTO jobs (
-            job_id,
-            skill_name,
-            model,
-            request_text,
-            attachments_json,
-            working_directory,
-            template_id,
-            presentation_prompt,
-            status,
-            created_at,
-            updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
-        `,
-      )
-      .run(
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('jobs')} (
+          job_id,
+          skill_name,
+          model,
+          request_text,
+          attachments_json,
+          working_directory,
+          template_id,
+          presentation_prompt,
+          status,
+          created_at,
+          updated_at
+        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'queued', $9, $10)
+      `,
+      [
         jobId,
         input.skillName,
         input.model ?? '',
@@ -133,15 +146,17 @@ export class JobRepository {
         input.presentationPrompt,
         now,
         now,
-      );
+      ],
+    );
 
     return this.getJob(jobId);
   }
 
-  getJob(jobId: string): StoredJobRecord {
-    const row = this.database
-      .prepare('SELECT * FROM jobs WHERE job_id = ? LIMIT 1')
-      .get(jobId) as JobRow | undefined;
+  async getJob(jobId: string): Promise<StoredJobRecord> {
+    const row = await this.database.queryMaybeOne<JobRow>(
+      `SELECT * FROM ${this.database.table('jobs')} WHERE job_id = $1`,
+      [jobId],
+    );
 
     if (!row) {
       throw new NotFoundError(`Job 不存在: ${jobId}`);
@@ -150,26 +165,38 @@ export class JobRepository {
     return mapJob(row);
   }
 
-  listEvents(jobId: string): JobEvent[] {
-    const rows = this.database
-      .prepare('SELECT * FROM job_events WHERE job_id = ? ORDER BY created_at ASC, id ASC')
-      .all(jobId) as unknown as JobEventRow[];
+  async listEvents(jobId: string): Promise<JobEvent[]> {
+    const rows = await this.database.query<JobEventRow>(
+      `
+        SELECT * FROM ${this.database.table('job_events')}
+        WHERE job_id = $1
+        ORDER BY created_at ASC, id ASC
+      `,
+      [jobId],
+    );
     return rows.map(mapEvent);
   }
 
-  listArtifacts(jobId: string): Array<JobArtifact & { filePath: string }> {
-    const rows = this.database
-      .prepare('SELECT * FROM job_artifacts WHERE job_id = ? ORDER BY created_at ASC, artifact_id ASC')
-      .all(jobId) as unknown as JobArtifactRow[];
+  async listArtifacts(jobId: string): Promise<Array<JobArtifact & { filePath: string }>> {
+    const rows = await this.database.query<JobArtifactRow>(
+      `
+        SELECT * FROM ${this.database.table('job_artifacts')}
+        WHERE job_id = $1
+        ORDER BY created_at ASC, artifact_id ASC
+      `,
+      [jobId],
+    );
     return rows.map(mapArtifact);
   }
 
-  getArtifact(jobId: string, artifactId: string): JobArtifact & { filePath: string } {
-    const row = this.database
-      .prepare(
-        'SELECT * FROM job_artifacts WHERE job_id = ? AND artifact_id = ? LIMIT 1',
-      )
-      .get(jobId, artifactId) as JobArtifactRow | undefined;
+  async getArtifact(jobId: string, artifactId: string): Promise<JobArtifact & { filePath: string }> {
+    const row = await this.database.queryMaybeOne<JobArtifactRow>(
+      `
+        SELECT * FROM ${this.database.table('job_artifacts')}
+        WHERE job_id = $1 AND artifact_id = $2
+      `,
+      [jobId, artifactId],
+    );
 
     if (!row) {
       throw new NotFoundError(`Artifact 不存在: ${artifactId}`);
@@ -178,59 +205,56 @@ export class JobRepository {
     return mapArtifact(row);
   }
 
-  markRunning(jobId: string): void {
+  async markRunning(jobId: string): Promise<void> {
     const now = new Date().toISOString();
-    this.database
-      .prepare(
-        `
-          UPDATE jobs
-          SET status = 'running',
-              started_at = COALESCE(started_at, ?),
-              updated_at = ?
-          WHERE job_id = ?
-        `,
-      )
-      .run(now, now, jobId);
+    await this.database.query(
+      `
+        UPDATE ${this.database.table('jobs')}
+        SET status = 'running',
+            started_at = COALESCE(started_at, $1),
+            updated_at = $2
+        WHERE job_id = $3
+      `,
+      [now, now, jobId],
+    );
   }
 
-  markSucceeded(jobId: string, finalText: string | null): void {
+  async markSucceeded(jobId: string, finalText: string | null): Promise<void> {
     const now = new Date().toISOString();
-    this.database
-      .prepare(
-        `
-          UPDATE jobs
-          SET status = 'succeeded',
-              final_text = ?,
-              finished_at = ?,
-              updated_at = ?
-          WHERE job_id = ?
-        `,
-      )
-      .run(finalText, now, now, jobId);
+    await this.database.query(
+      `
+        UPDATE ${this.database.table('jobs')}
+        SET status = 'succeeded',
+            final_text = $1,
+            finished_at = $2,
+            updated_at = $3
+        WHERE job_id = $4
+      `,
+      [finalText, now, now, jobId],
+    );
   }
 
-  markFailed(jobId: string, error: ApiErrorResponse): void {
+  async markFailed(jobId: string, error: ApiErrorResponse): Promise<void> {
     const now = new Date().toISOString();
-    this.database
-      .prepare(
-        `
-          UPDATE jobs
-          SET status = 'failed',
-              error_json = ?,
-              finished_at = ?,
-              updated_at = ?
-          WHERE job_id = ?
-        `,
-      )
-      .run(JSON.stringify(error), now, now, jobId);
+    await this.database.query(
+      `
+        UPDATE ${this.database.table('jobs')}
+        SET status = 'failed',
+            error_json = $1::jsonb,
+            finished_at = $2,
+            updated_at = $3
+        WHERE job_id = $4
+      `,
+      [JSON.stringify(error), now, now, jobId],
+    );
   }
 
-  appendEvent(
+  async appendEvent(
     jobId: string,
     type: JobEvent['type'],
     message: string,
     data?: unknown,
-  ): JobEvent {
+  ): Promise<JobEvent> {
     const event: JobEvent = {
       id: randomUUID(),
       type,
@@ -239,51 +263,48 @@ export class JobRepository {
       createdAt: new Date().toISOString(),
     };
 
-    this.database
-      .prepare(
-        `
-          INSERT INTO job_events (id, job_id, type, message, data_json, created_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('job_events')} (id, job_id, type, message, data_json, created_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+      `,
+      [
         event.id,
         jobId,
         event.type,
         event.message,
-        event.data ? JSON.stringify(event.data) : null,
+        event.data === undefined ? null : JSON.stringify(event.data),
         event.createdAt,
-      );
+      ],
+    );
 
     return event;
   }
 
-  addArtifact(input: {
+  async addArtifact(input: {
     artifactId?: string;
     jobId: string;
     fileName: string;
     mimeType: string;
     filePath: string;
     byteSize: number;
-  }): JobArtifact {
+  }): Promise<JobArtifact> {
     const artifactId = input.artifactId ?? randomUUID();
     const createdAt = new Date().toISOString();
 
-    this.database
-      .prepare(
-        `
-          INSERT INTO job_artifacts (
-            artifact_id,
-            job_id,
-            file_name,
-            mime_type,
-            file_path,
-            byte_size,
-            created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('job_artifacts')} (
+          artifact_id,
+          job_id,
+          file_name,
+          mime_type,
+          file_path,
+          byte_size,
+          created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [
         artifactId,
         input.jobId,
         input.fileName,
@@ -291,7 +312,8 @@ export class JobRepository {
         input.filePath,
         input.byteSize,
         createdAt,
-      );
+      ],
+    );
 
     return {
       artifactId,
@@ -304,12 +326,12 @@ export class JobRepository {
     };
   }
 
-  toJobResponse(jobId: string): JobResponse {
-    const job = this.getJob(jobId);
+  async toJobResponse(jobId: string): Promise<JobResponse> {
+    const job = await this.getJob(jobId);
     return {
       ...job,
-      events: this.listEvents(jobId),
-      artifacts: this.listArtifacts(jobId).map(({ filePath: _filePath, ...artifact }) => artifact),
+      events: await this.listEvents(jobId),
+      artifacts: (await this.listArtifacts(jobId)).map(({ filePath: _filePath, ...artifact }) => artifact),
     };
   }
 }

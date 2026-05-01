@@ -23,6 +23,8 @@ test('loadAppConfig parses defaults and resolves skill runtime paths', () => {
   assert.equal(config.ark.webSearchModel, 'ep-web-search-001');
   assert.equal(config.docmee.baseUrl, 'https://open.docmee.cn');
   assert.equal(config.docmee.editorTokenHours, 1);
+  assert.equal(config.storage.postgresUrl, 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev');
+  assert.equal(config.storage.postgresSchema, 'skill_runtime');
 });
 
 test('loadAppConfig rejects non-whitelisted default model', () => {
@@ -35,5 +37,18 @@ test('loadAppConfig rejects non-whitelisted default model', () => {
         envFilePath: '/repo/.env',
       }),
     /DEEPSEEK_DEFAULT_MODEL/,
+  );
+});
+
+test('loadAppConfig rejects invalid PostgreSQL schema name', () => {
+  assert.throws(
+    () =>
+      loadAppConfig({
+        env: {
+          SKILL_RUNTIME_POSTGRES_SCHEMA: 'bad-schema',
+        },
+        envFilePath: '/repo/.env',
+      }),
+    /SKILL_RUNTIME_POSTGRES_SCHEMA/,
   );
 });

@@ -19,7 +19,8 @@ export interface AppConfig {
     port: number;
   };
   storage: {
-    sqlitePath: string;
+    postgresUrl: string;
+    postgresSchema: string;
     artifactDir: string;
   };
   runtime: {
@@ -77,7 +78,8 @@ export interface HealthResponse {
   status: 'ok';
   service: '@yzj-ai-crm/skill-runtime';
   port: number;
-  sqlitePath: string;
+  postgresDatabase: string;
+  postgresSchema: string;
   artifactDir: string;
   dependencySummary: {
     available: number;

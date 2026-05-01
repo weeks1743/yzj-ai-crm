@@ -34,23 +34,23 @@ export class OrgSyncService {
     this.now = options.now ?? (() => new Date());
   }
 
-  getSettings(): OrgSyncSettingsResponse {
-    const lastRun = this.repository.getLatestRun();
-    const activeRun = this.activeRunId ? this.repository.getActiveRun() : null;
+  async getSettings(): Promise<OrgSyncSettingsResponse> {
+    const lastRun = await this.repository.getLatestRun();
+    const activeRun = this.activeRunId ? await this.repository.getActiveRun() : null;
 
     return {
       syncMode: 'manual_full_active_only',
       schedulerEnabled: false,
       pageSize: PAGE_SIZE,
-      employeeCount: this.repository.countEmployees(this.config.yzj.eid, this.config.yzj.appId),
+      employeeCount: await this.repository.countEmployees(this.config.yzj.eid, this.config.yzj.appId),
       isSyncing: Boolean(activeRun),
       lastRun,
-      recentRuns: this.repository.getRecentRuns(10),
+      recentRuns: await this.repository.getRecentRuns(10),
     };
   }
 
-  startManualSync(): ManualSyncStartResponse {
-    const existingRun = this.repository.getActiveRun();
+  async startManualSync(): Promise<ManualSyncStartResponse> {
+    const existingRun = await this.repository.getActiveRun();
     if (this.activeRunId || existingRun) {
       throw new SyncAlreadyRunningError(existingRun?.id ?? this.activeRunId ?? undefined);
     }
@@ -58,7 +58,7 @@ export class OrgSyncService {
     const runId = randomUUID();
     const startedAt = this.now().toISOString();
 
-    this.repository.createRun({
+    await this.repository.createRun({
       id: runId,
       eid: this.config.yzj.eid,
       appId: this.config.yzj.appId,
@@ -106,7 +106,7 @@ export class OrgSyncService {
         progress.fetchedCount += employees.length;
 
         for (const employee of employees) {
-          this.persistEmployee(employee, progress);
+          await this.persistEmployee(employee, progress);
         }
 
         if (employees.length < PAGE_SIZE) {
@@ -116,7 +116,7 @@ export class OrgSyncService {
         begin += PAGE_SIZE;
       }
 
-      this.repository.completeRun(runId, {
+      await this.repository.completeRun(runId, {
         finishedAt: this.now().toISOString(),
         pageCount: progress.pageCount,
         fetchedCount: progress.fetchedCount,
@@ -125,7 +125,7 @@ export class OrgSyncService {
         errorMessage: null,
       });
     } catch (error) {
-      this.repository.failRun(runId, {
+      await this.repository.failRun(runId, {
         finishedAt: this.now().toISOString(),
         pageCount: progress.pageCount,
         fetchedCount: progress.fetchedCount,
@@ -138,13 +138,13 @@ export class OrgSyncService {
     }
   }
 
-  private persistEmployee(employee: YzjEmployee, progress: SyncProgress): void {
+  private async persistEmployee(employee: YzjEmployee, progress: SyncProgress): Promise<void> {
     if (employee.status !== '1' || !employee.openId) {
       progress.skippedCount += 1;
       return;
     }
 
-    this.repository.upsertEmployee({
+    await this.repository.upsertEmployee({
       eid: this.config.yzj.eid,
       appId: this.config.yzj.appId,
       openId: employee.openId,

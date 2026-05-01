@@ -326,8 +326,8 @@ test('AgentService runs company research, persists run, and returns evidence car
   assert.equal(response.executionState.status, 'completed');
   assert.equal(response.message.extraInfo.evidence?.[0]?.artifactId, 'artifact-001');
 
-  const runs = database.prepare('SELECT * FROM agent_runs').all();
-  const toolCalls = database.prepare('SELECT * FROM agent_tool_calls').all();
+  const runs = await database.query(`SELECT * FROM ${database.table('agent_runs')}`);
+  const toolCalls = await database.query(`SELECT * FROM ${database.table('agent_tool_calls')}`);
   assert.equal(runs.length, 1);
   assert.equal(toolCalls.length, 2);
 });
@@ -388,8 +388,10 @@ test('AgentService keeps long-running company research as running instead of too
   assert.equal(response.toolCalls[0]?.status, 'running');
   assert.equal(artifactCreated, false);
 
-  const runs = database.prepare('SELECT * FROM agent_runs').all() as Array<{ status: string }>;
-  const toolCalls = database.prepare('SELECT * FROM agent_tool_calls').all() as Array<{ status: string; finished_at: string | null }>;
+  const runs = await database.query<{ status: string }>(`SELECT * FROM ${database.table('agent_runs')}`);
+  const toolCalls = await database.query<{ status: string; finished_at: string | null }>(
+    `SELECT * FROM ${database.table('agent_tool_calls')}`,
+  );
   assert.equal(runs[0]?.status, 'running');
   assert.equal(toolCalls[0]?.status, 'running');
   assert.equal(toolCalls[0]?.finished_at, null);
@@ -444,6 +446,8 @@ test('AgentService surfaces company research dependency failure without degraded
     item.policyCode === 'external.company_research.no_degraded_artifact'
   )), true);
 
-  const toolCalls = database.prepare('SELECT * FROM agent_tool_calls ORDER BY started_at').all();
+  const toolCalls = await database.query(
+    `SELECT * FROM ${database.table('agent_tool_calls')} ORDER BY started_at`,
+  );
   assert.equal(toolCalls.length, 1);
 });

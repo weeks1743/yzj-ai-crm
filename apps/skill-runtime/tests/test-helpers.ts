@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,6 +29,7 @@ import { SkillRuntimeService } from '../src/skill-runtime-service.js';
 
 export const APP_ROOT = fileURLToPath(new URL('..', import.meta.url));
 export const REPO_ROOT = resolve(APP_ROOT, '../..');
+const DEFAULT_POSTGRES_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev';
 
 export function createTempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -104,7 +106,8 @@ export function createTestConfig(options: {
   skillDirs: string[];
   allowedRoots?: string[];
   artifactDir?: string;
-  sqlitePath?: string;
+  postgresUrl?: string;
+  postgresSchema?: string;
   deepseekApiKey?: string | null;
   arkApiKey?: string | null;
   arkWebSearchModel?: string;
@@ -119,7 +122,8 @@ export function createTestConfig(options: {
       port: 0,
     },
     storage: {
-      sqlitePath: options.sqlitePath ?? ':memory:',
+      postgresUrl: (options.postgresUrl || process.env.SKILL_RUNTIME_POSTGRES_URL || DEFAULT_POSTGRES_URL).trim(),
+      postgresSchema: options.postgresSchema ?? `skill_runtime_test_${process.pid}_${randomUUID().replace(/-/g, '')}`,
       artifactDir,
     },
     runtime: {
@@ -250,7 +254,10 @@ export async function createRuntimeHarness(options: {
   fetchImpl?: FetchLike;
   docmeeFetchImpl?: FetchLike;
 }) {
-  const database = openDatabase(options.config.storage.sqlitePath);
+  const database = await openDatabase(
+    options.config.storage.postgresUrl,
+    options.config.storage.postgresSchema,
+  );
   const repository = new JobRepository(database);
   const artifactStore = new ArtifactStore(options.config.storage.artifactDir, repository);
   const loadedSkills = loadSkillsFromDirectories(options.config.runtime.skillDirs);
@@ -293,9 +300,8 @@ export async function createRuntimeHarness(options: {
     close: async () => {
       server.close();
       await once(server, 'close');
-      if (options.config.storage.sqlitePath !== ':memory:') {
-        rmSync(options.config.storage.sqlitePath, { force: true });
-      }
+      await database.dropSchema();
+      await database.close();
       rmSync(options.config.storage.artifactDir, { recursive: true, force: true });
     },
   };

@@ -27,11 +27,11 @@ export class AgentService {
     const eid = request.tenantContext?.eid?.trim() || this.options.config.yzj.eid;
     const appId = request.tenantContext?.appId?.trim() || this.options.config.yzj.appId;
     const operatorOpenId = request.tenantContext?.operatorOpenId?.trim() || null;
-    const contextFrame = this.options.repository.findContextFrame(request.conversationKey);
-    const contextCandidates = this.options.repository.findContextCandidates(request.conversationKey);
-    const focusedName = contextFrame?.subject?.name ?? this.options.repository.findFocusedCompany(request.conversationKey);
+    const contextFrame = await this.options.repository.findContextFrame(request.conversationKey);
+    const contextCandidates = await this.options.repository.findContextCandidates(request.conversationKey);
+    const focusedName = contextFrame?.subject?.name ?? await this.options.repository.findFocusedCompany(request.conversationKey);
     const resumeFallback = request.resume?.action === 'provide_input'
-      ? this.options.repository.findPendingInteractionState({
+      ? await this.options.repository.findPendingInteractionState({
           runId: request.resume.runId,
           conversationKey: request.conversationKey,
           interactionId: request.resume.interactionId,
@@ -54,7 +54,7 @@ export class AgentService {
     const message = buildMessage(request.sceneKey, output);
 
     try {
-      this.options.repository.saveRun({
+      await this.options.repository.saveRun({
         request,
         runId,
         traceId,
@@ -69,12 +69,7 @@ export class AgentService {
         message,
       });
     } catch (error) {
-      if (!isSqliteLockedError(error)) {
-        throw error;
-      }
-      console.warn(
-        '[admin-api] sqlite database is locked while saving agent run; response is returned without run persistence. Close DB Browser before trace/writeback tests.',
-      );
+      throw error;
     }
 
     return {
@@ -100,14 +95,6 @@ export class AgentService {
       throw new Error(`主 Agent Runtime 执行失败：${getErrorMessage(error)}`);
     }
   }
-}
-
-function isSqliteLockedError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const maybeSqliteError = error as { code?: unknown; errcode?: unknown; errstr?: unknown };
-  return message.includes('database is locked')
-    || maybeSqliteError.code === 'ERR_SQLITE_ERROR' && maybeSqliteError.errcode === 5
-    || maybeSqliteError.errstr === 'database is locked';
 }
 
 function buildMessage(sceneKey: string, output: AgentRuntimeOutput): AgentChatMessage {

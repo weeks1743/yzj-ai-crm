@@ -13,6 +13,7 @@ const EXECUTABLE_SKILLS = new Set([
   'problem-statement',
   'customer-value-positioning',
   'super-ppt',
+  'pptx',
 ]);
 
 const SKILL_DEPENDENCIES: Record<string, string[]> = {
@@ -35,6 +36,49 @@ const SKILL_DEPENDENCIES: Record<string, string[]> = {
   'super-ppt': [
     'env:DOCMEE_API_KEY',
   ],
+  pptx: [
+    'env:DEEPSEEK_API_KEY',
+    'command:python3',
+    'python_module:pptx',
+    'command:soffice',
+    'command:pdftoppm',
+  ],
+};
+
+const BUILTIN_PPTX_SKILL: LoadedSkill = {
+  skillName: 'pptx',
+  skillFilePath: 'builtin:pptx',
+  rawContent: '',
+  promptContent: [
+    '# PPTX',
+    '',
+    'Use controlled PPTX tools to create or update a presentation from supplied materials.',
+    'Always produce final-deck.pptx and preview artifacts after quality checks pass.',
+  ].join('\n'),
+  frontmatter: {},
+  profile: {
+    skillName: 'pptx',
+    displayName: 'pptx',
+    description: 'Generate or update PPTX decks with controlled planning, rendering, QA, and previews.',
+    arguments: ['requestText', 'attachments'],
+    allowedTools: [
+      'read_skill_file',
+      'read_source_file',
+      'read_workspace_file',
+      'write_workspace_file',
+      'office_unpack',
+      'office_pack',
+      'office_clean',
+      'pptx_plan_deck',
+      'pptx_render_deck',
+      'pptx_quality_check',
+      'pptx_render_previews',
+    ],
+    baseDir: '',
+    supportFiles: [],
+    examples: [],
+    hasTemplate: false,
+  },
 };
 
 function resolveAllowedTools(skill: LoadedSkill): string[] {
@@ -105,10 +149,16 @@ function resolveStatus(
 }
 
 export class SkillCatalogService {
+  private readonly loadedSkills: LoadedSkill[];
+
   constructor(
-    private readonly loadedSkills: LoadedSkill[],
+    loadedSkills: LoadedSkill[],
     private readonly dependencySnapshot: DependencySnapshot,
-  ) {}
+  ) {
+    this.loadedSkills = loadedSkills.some((skill) => skill.skillName === BUILTIN_PPTX_SKILL.skillName)
+      ? loadedSkills
+      : [...loadedSkills, BUILTIN_PPTX_SKILL];
+  }
 
   listSkills(): SkillCatalogEntry[] {
     return this.loadedSkills.map((skill) => {

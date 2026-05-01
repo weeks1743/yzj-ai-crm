@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import type { QueryResultRow } from 'pg';
 import type {
   AgentChatMessage,
   AgentChatRequest,
@@ -25,25 +25,26 @@ import type {
   ContextReferenceCandidate,
   PendingInteraction,
 } from './agent-core.js';
+import type { DatabaseConnection } from './database.js';
 
-interface FocusRow {
+interface FocusRow extends QueryResultRow {
   run_id?: string;
   user_input?: string;
-  intent_frame_json: string;
-  context_subject_json?: string | null;
-  evidence_refs_json?: string;
+  intent_frame_json: unknown;
+  context_subject_json?: unknown;
+  evidence_refs_json?: unknown;
   created_at?: string;
 }
 
-interface ConfirmationRow {
+interface ConfirmationRow extends QueryResultRow {
   confirmation_id: string;
   run_id: string;
   tool_code: string;
   status: ConfirmationRequest['status'];
   title: string;
   summary: string;
-  preview_json: string;
-  request_input_json: string;
+  preview_json: unknown;
+  request_input_json: unknown;
   created_at: string;
   decided_at: string | null;
 }
@@ -64,11 +65,11 @@ interface AgentConfirmationListQuery {
   runId?: string;
 }
 
-interface CountRow {
-  total: number;
+interface CountRow extends QueryResultRow {
+  total: string | number;
 }
 
-interface AgentRunRow {
+interface AgentRunRow extends QueryResultRow {
   run_id: string;
   trace_id: string;
   eid: string;
@@ -76,31 +77,31 @@ interface AgentRunRow {
   conversation_key: string;
   scene_key: string;
   user_input: string;
-  intent_frame_json: string;
-  context_subject_json: string | null;
-  task_plan_json: string;
-  execution_state_json: string;
-  evidence_refs_json: string;
+  intent_frame_json: unknown;
+  context_subject_json: unknown;
+  task_plan_json: unknown;
+  execution_state_json: unknown;
+  evidence_refs_json: unknown;
   status: string;
   created_at: string;
   updated_at: string;
-  tool_call_count: number;
-  failed_tool_call_count: number;
-  pending_confirmation_count: number;
+  tool_call_count: string | number;
+  failed_tool_call_count: string | number;
+  pending_confirmation_count: string | number;
 }
 
-interface AgentMessageRow {
+interface AgentMessageRow extends QueryResultRow {
   message_id: string;
   run_id: string;
   conversation_key: string;
   role: string;
   content: string;
-  attachments_json: string;
-  extra_info_json: string;
+  attachments_json: unknown;
+  extra_info_json: unknown;
   created_at: string;
 }
 
-interface AgentToolCallRow {
+interface AgentToolCallRow extends QueryResultRow {
   tool_call_id: string;
   run_id: string;
   tool_code: string;
@@ -112,8 +113,8 @@ interface AgentToolCallRow {
   error_message: string | null;
 }
 
-interface PendingInteractionStateRow {
-  extra_info_json: string;
+interface PendingInteractionStateRow extends QueryResultRow {
+  extra_info_json: unknown;
 }
 
 interface ConfirmationAuditRow extends ConfirmationRow {
@@ -121,51 +122,50 @@ interface ConfirmationAuditRow extends ConfirmationRow {
 }
 
 export class AgentRunRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(private readonly database: DatabaseConnection) {}
 
-  listRuns(query: AgentRunListQuery = {}): AgentRunListResponse {
+  async listRuns(query: AgentRunListQuery = {}): Promise<AgentRunListResponse> {
     const { page, pageSize, offset } = normalizePagination(query.page, query.pageSize);
     const where = buildRunWhere(query);
-    const totalRow = this.database
-      .prepare(`SELECT COUNT(*) AS total FROM agent_runs r ${where.sql}`)
-      .get(...where.params) as unknown as CountRow;
-    const rows = this.database
-      .prepare(
-        `
-          SELECT r.*,
-                 (SELECT COUNT(*) FROM agent_tool_calls t WHERE t.run_id = r.run_id) AS tool_call_count,
-                 (SELECT COUNT(*) FROM agent_tool_calls t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
-                 (SELECT COUNT(*) FROM agent_confirmations c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
-          FROM agent_runs r
-          ${where.sql}
-          ORDER BY r.created_at DESC, r.rowid DESC
-          LIMIT ? OFFSET ?
-        `,
-      )
-      .all(...where.params, pageSize, offset) as unknown as AgentRunRow[];
+    const totalRow = await this.database.queryOne<CountRow>(
+      `SELECT COUNT(*) AS total FROM ${this.database.table('agent_runs')} r ${where.sql}`,
+      where.params,
+    );
+    const rows = await this.database.query<AgentRunRow>(
+      `
+        SELECT r.*,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id) AS tool_call_count,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_confirmations')} c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
+        FROM ${this.database.table('agent_runs')} r
+        ${where.sql}
+        ORDER BY r.created_at DESC, r.run_id DESC
+        LIMIT $${where.params.length + 1} OFFSET $${where.params.length + 2}
+      `,
+      [...where.params, pageSize, offset],
+    );
 
     return {
       page,
       pageSize,
-      total: totalRow?.total ?? 0,
+      total: Number(totalRow?.total ?? 0),
       items: rows.map(mapRunSummary),
     };
   }
 
-  getRunDetail(runId: string): AgentRunDetailResponse | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT r.*,
-                 (SELECT COUNT(*) FROM agent_tool_calls t WHERE t.run_id = r.run_id) AS tool_call_count,
-                 (SELECT COUNT(*) FROM agent_tool_calls t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
-                 (SELECT COUNT(*) FROM agent_confirmations c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
-          FROM agent_runs r
-          WHERE r.run_id = ?
-          LIMIT 1
-        `,
-      )
-      .get(runId) as unknown as AgentRunRow | undefined;
+  async getRunDetail(runId: string): Promise<AgentRunDetailResponse | null> {
+    const row = await this.database.queryMaybeOne<AgentRunRow>(
+      `
+        SELECT r.*,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id) AS tool_call_count,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_confirmations')} c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
+        FROM ${this.database.table('agent_runs')} r
+        WHERE r.run_id = $1
+        LIMIT 1
+      `,
+      [runId],
+    );
 
     if (!row) {
       return null;
@@ -174,26 +174,24 @@ export class AgentRunRepository {
     const intentFrame = parseJson<IntentFrame>(row.intent_frame_json, fallbackIntentFrame());
     const taskPlan = parseJson<TaskPlan>(row.task_plan_json, fallbackTaskPlan());
     const executionState = parseJson<ExecutionState>(row.execution_state_json, fallbackExecutionState(row));
-    const messages = this.database
-      .prepare(
-        `
-          SELECT *
-          FROM agent_messages
-          WHERE run_id = ?
-          ORDER BY created_at ASC, rowid ASC
-        `,
-      )
-      .all(runId) as unknown as AgentMessageRow[];
-    const toolCalls = this.database
-      .prepare(
-        `
-          SELECT *
-          FROM agent_tool_calls
-          WHERE run_id = ?
-          ORDER BY started_at ASC, rowid ASC
-        `,
-      )
-      .all(runId) as unknown as AgentToolCallRow[];
+    const messages = await this.database.query<AgentMessageRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('agent_messages')}
+        WHERE run_id = $1
+        ORDER BY created_at ASC, message_id ASC
+      `,
+      [runId],
+    );
+    const toolCalls = await this.database.query<AgentToolCallRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('agent_tool_calls')}
+        WHERE run_id = $1
+        ORDER BY started_at ASC, tool_call_id ASC
+      `,
+      [runId],
+    );
 
     return {
       run: mapRunSummary(row),
@@ -204,57 +202,53 @@ export class AgentRunRepository {
       evidenceRefs: parseEvidenceRefs(row.evidence_refs_json),
       messages: messages.map(mapObservedMessage),
       toolCalls: toolCalls.map(mapToolCallRow),
-      confirmations: this.listConfirmations({ runId, page: 1, pageSize: 200 }).items,
+      confirmations: (await this.listConfirmations({ runId, page: 1, pageSize: 200 })).items,
     };
   }
 
-  listConfirmations(query: AgentConfirmationListQuery = {}): AgentConfirmationListResponse {
+  async listConfirmations(query: AgentConfirmationListQuery = {}): Promise<AgentConfirmationListResponse> {
     const { page, pageSize, offset } = normalizePagination(query.page, query.pageSize);
     const where = buildConfirmationWhere(query);
-    const totalRow = this.database
-      .prepare(
-        `
-          SELECT COUNT(*) AS total
-          FROM agent_confirmations c
-          LEFT JOIN agent_runs r ON r.run_id = c.run_id
-          ${where.sql}
-        `,
-      )
-      .get(...where.params) as unknown as CountRow;
-    const rows = this.database
-      .prepare(
-        `
-          SELECT c.*, r.trace_id
-          FROM agent_confirmations c
-          LEFT JOIN agent_runs r ON r.run_id = c.run_id
-          ${where.sql}
-          ORDER BY c.created_at DESC, c.rowid DESC
-          LIMIT ? OFFSET ?
-        `,
-      )
-      .all(...where.params, pageSize, offset) as unknown as ConfirmationAuditRow[];
+    const totalRow = await this.database.queryOne<CountRow>(
+      `
+        SELECT COUNT(*) AS total
+        FROM ${this.database.table('agent_confirmations')} c
+        LEFT JOIN ${this.database.table('agent_runs')} r ON r.run_id = c.run_id
+        ${where.sql}
+      `,
+      where.params,
+    );
+    const rows = await this.database.query<ConfirmationAuditRow>(
+      `
+        SELECT c.*, r.trace_id
+        FROM ${this.database.table('agent_confirmations')} c
+        LEFT JOIN ${this.database.table('agent_runs')} r ON r.run_id = c.run_id
+        ${where.sql}
+        ORDER BY c.created_at DESC, c.confirmation_id DESC
+        LIMIT $${where.params.length + 1} OFFSET $${where.params.length + 2}
+      `,
+      [...where.params, pageSize, offset],
+    );
 
     return {
       page,
       pageSize,
-      total: totalRow?.total ?? 0,
+      total: Number(totalRow?.total ?? 0),
       items: rows.map(mapConfirmationAuditRow),
     };
   }
 
-  findContextFrame(conversationKey: string): ContextFrame | null {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT run_id, user_input, intent_frame_json, evidence_refs_json
-               , context_subject_json
-          FROM agent_runs
-          WHERE conversation_key = ?
-          ORDER BY created_at DESC, rowid DESC
-          LIMIT 10
-        `,
-      )
-      .all(conversationKey) as unknown as FocusRow[];
+  async findContextFrame(conversationKey: string): Promise<ContextFrame | null> {
+    const rows = await this.database.query<FocusRow>(
+      `
+        SELECT run_id, user_input, intent_frame_json, evidence_refs_json, context_subject_json
+        FROM ${this.database.table('agent_runs')}
+        WHERE conversation_key = $1
+        ORDER BY created_at DESC, run_id DESC
+        LIMIT 10
+      `,
+      [conversationKey],
+    );
 
     for (const row of rows) {
       const evidenceRefs = parseEvidenceRefs(row.evidence_refs_json);
@@ -280,19 +274,17 @@ export class AgentRunRepository {
     return null;
   }
 
-  findContextCandidates(conversationKey: string, limit = 12): ContextReferenceCandidate[] {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT run_id, user_input, intent_frame_json, evidence_refs_json
-               , context_subject_json, created_at
-          FROM agent_runs
-          WHERE conversation_key = ?
-          ORDER BY created_at DESC, rowid DESC
-          LIMIT ?
-        `,
-      )
-      .all(conversationKey, limit) as unknown as FocusRow[];
+  async findContextCandidates(conversationKey: string, limit = 12): Promise<ContextReferenceCandidate[]> {
+    const rows = await this.database.query<FocusRow>(
+      `
+        SELECT run_id, user_input, intent_frame_json, evidence_refs_json, context_subject_json, created_at
+        FROM ${this.database.table('agent_runs')}
+        WHERE conversation_key = $1
+        ORDER BY created_at DESC, run_id DESC
+        LIMIT $2
+      `,
+      [conversationKey, limit],
+    );
 
     const candidates: ContextReferenceCandidate[] = [];
     rows.forEach((row, index) => {
@@ -356,28 +348,27 @@ export class AgentRunRepository {
     return dedupeContextCandidates(candidates);
   }
 
-  findPendingInteractionState(input: {
+  async findPendingInteractionState(input: {
     runId: string;
     conversationKey?: string;
     interactionId?: string;
-  }): { pendingInteraction: PendingInteraction; selectedTool?: AgentToolSelection } | null {
-    const clauses = ['run_id = ?', "role = 'assistant'"];
+  }): Promise<{ pendingInteraction: PendingInteraction; selectedTool?: AgentToolSelection } | null> {
+    const clauses = ['run_id = $1', "role = 'assistant'"];
     const params: string[] = [input.runId];
     if (input.conversationKey?.trim()) {
-      clauses.push('conversation_key = ?');
+      clauses.push(`conversation_key = $${params.length + 1}`);
       params.push(input.conversationKey.trim());
     }
-    const rows = this.database
-      .prepare(
-        `
-          SELECT extra_info_json
-          FROM agent_messages
-          WHERE ${clauses.join(' AND ')}
-          ORDER BY created_at DESC, rowid DESC
-          LIMIT 20
-        `,
-      )
-      .all(...params) as unknown as PendingInteractionStateRow[];
+    const rows = await this.database.query<PendingInteractionStateRow>(
+      `
+        SELECT extra_info_json
+        FROM ${this.database.table('agent_messages')}
+        WHERE ${clauses.join(' AND ')}
+        ORDER BY created_at DESC, message_id DESC
+        LIMIT 20
+      `,
+      params,
+    );
 
     for (const row of rows) {
       const extraInfo = parseJson<Record<string, unknown>>(row.extra_info_json, {});
@@ -400,23 +391,22 @@ export class AgentRunRepository {
     return null;
   }
 
-  findFocusedCompany(conversationKey: string): string | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT intent_frame_json
-          FROM agent_runs
-          WHERE conversation_key = ?
-          ORDER BY created_at DESC, rowid DESC
-          LIMIT 10
-        `,
-      )
-      .all(conversationKey) as unknown as FocusRow[];
+  async findFocusedCompany(conversationKey: string): Promise<string | null> {
+    const row = await this.database.query<FocusRow>(
+      `
+        SELECT intent_frame_json
+        FROM ${this.database.table('agent_runs')}
+        WHERE conversation_key = $1
+        ORDER BY created_at DESC, run_id DESC
+        LIMIT 10
+      `,
+      [conversationKey],
+    );
 
     for (const item of row) {
       try {
-        const intent = JSON.parse(item.intent_frame_json) as IntentFrame;
-        const company = intent.targets.find((target) => target.type === 'company')?.name;
+        const intent = parseJson<IntentFrame | null>(item.intent_frame_json, null);
+        const company = intent?.targets.find((target) => target.type === 'company')?.name;
         if (company) {
           return company;
         }
@@ -428,7 +418,7 @@ export class AgentRunRepository {
     return null;
   }
 
-  saveRun(input: {
+  async saveRun(input: {
     request: AgentChatRequest;
     runId: string;
     traceId: string;
@@ -441,20 +431,32 @@ export class AgentRunRepository {
     evidence: AgentEvidenceCard[];
     contextFrame?: ContextFrame | null;
     message: AgentChatMessage;
-  }): void {
+  }): Promise<void> {
     const now = new Date().toISOString();
-    this.database
-      .prepare(
-        `
-          INSERT OR REPLACE INTO agent_runs (
-            run_id, trace_id, eid, app_id, conversation_key, scene_key, user_input,
-            intent_frame_json, context_subject_json, task_plan_json, execution_state_json, evidence_refs_json,
-            status, created_at, updated_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('agent_runs')} (
+          run_id, trace_id, eid, app_id, conversation_key, scene_key, user_input,
+          intent_frame_json, context_subject_json, task_plan_json, execution_state_json, evidence_refs_json,
+          status, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15)
+        ON CONFLICT (run_id) DO UPDATE SET
+          trace_id = EXCLUDED.trace_id,
+          eid = EXCLUDED.eid,
+          app_id = EXCLUDED.app_id,
+          conversation_key = EXCLUDED.conversation_key,
+          scene_key = EXCLUDED.scene_key,
+          user_input = EXCLUDED.user_input,
+          intent_frame_json = EXCLUDED.intent_frame_json,
+          context_subject_json = EXCLUDED.context_subject_json,
+          task_plan_json = EXCLUDED.task_plan_json,
+          execution_state_json = EXCLUDED.execution_state_json,
+          evidence_refs_json = EXCLUDED.evidence_refs_json,
+          status = EXCLUDED.status,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
         input.runId,
         input.traceId,
         input.eid,
@@ -470,18 +472,17 @@ export class AgentRunRepository {
         input.executionState.status,
         now,
         now,
-      );
+      ],
+    );
 
-    this.database
-      .prepare(
-        `
-          INSERT INTO agent_messages (
-            message_id, run_id, conversation_key, role, content, attachments_json, extra_info_json, created_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('agent_messages')} (
+          message_id, run_id, conversation_key, role, content, attachments_json, extra_info_json, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
+      `,
+      [
         randomUUID(),
         input.runId,
         input.request.conversationKey,
@@ -490,18 +491,17 @@ export class AgentRunRepository {
         JSON.stringify(input.request.attachments ?? []),
         '{}',
         now,
-      );
+      ],
+    );
 
-    this.database
-      .prepare(
-        `
-          INSERT INTO agent_messages (
-            message_id, run_id, conversation_key, role, content, attachments_json, extra_info_json, created_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('agent_messages')} (
+          message_id, run_id, conversation_key, role, content, attachments_json, extra_info_json, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
+      `,
+      [
         randomUUID(),
         input.runId,
         input.request.conversationKey,
@@ -510,45 +510,62 @@ export class AgentRunRepository {
         JSON.stringify(input.message.attachments ?? []),
         JSON.stringify(input.message.extraInfo),
         now,
-      );
-
-    const insertToolCall = this.database.prepare(
-      `
-        INSERT OR REPLACE INTO agent_tool_calls (
-          tool_call_id, run_id, tool_code, status, input_summary, output_summary,
-          started_at, finished_at, error_message
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
+      ],
     );
 
     for (const toolCall of input.toolCalls) {
-      insertToolCall.run(
-        toolCall.id,
-        input.runId,
-        toolCall.toolCode,
-        toolCall.status,
-        toolCall.inputSummary,
-        toolCall.outputSummary,
-        toolCall.startedAt,
-        toolCall.finishedAt,
-        toolCall.errorMessage,
+      await this.database.query(
+        `
+          INSERT INTO ${this.database.table('agent_tool_calls')} (
+            tool_call_id, run_id, tool_code, status, input_summary, output_summary,
+            started_at, finished_at, error_message
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (tool_call_id) DO UPDATE SET
+            run_id = EXCLUDED.run_id,
+            tool_code = EXCLUDED.tool_code,
+            status = EXCLUDED.status,
+            input_summary = EXCLUDED.input_summary,
+            output_summary = EXCLUDED.output_summary,
+            started_at = EXCLUDED.started_at,
+            finished_at = EXCLUDED.finished_at,
+            error_message = EXCLUDED.error_message
+        `,
+        [
+          toolCall.id,
+          input.runId,
+          toolCall.toolCode,
+          toolCall.status,
+          toolCall.inputSummary,
+          toolCall.outputSummary,
+          toolCall.startedAt,
+          toolCall.finishedAt,
+          toolCall.errorMessage,
+        ],
       );
     }
   }
 
-  saveConfirmation(confirmation: ConfirmationRequest): void {
-    this.database
-      .prepare(
-        `
-          INSERT OR REPLACE INTO agent_confirmations (
-            confirmation_id, run_id, tool_code, status, title, summary,
-            preview_json, request_input_json, created_at, decided_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
+  async saveConfirmation(confirmation: ConfirmationRequest): Promise<void> {
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('agent_confirmations')} (
+          confirmation_id, run_id, tool_code, status, title, summary,
+          preview_json, request_input_json, created_at, decided_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)
+        ON CONFLICT (confirmation_id) DO UPDATE SET
+          run_id = EXCLUDED.run_id,
+          tool_code = EXCLUDED.tool_code,
+          status = EXCLUDED.status,
+          title = EXCLUDED.title,
+          summary = EXCLUDED.summary,
+          preview_json = EXCLUDED.preview_json,
+          request_input_json = EXCLUDED.request_input_json,
+          created_at = EXCLUDED.created_at,
+          decided_at = EXCLUDED.decided_at
+      `,
+      [
         confirmation.confirmationId,
         confirmation.runId,
         confirmation.toolCode,
@@ -559,65 +576,62 @@ export class AgentRunRepository {
         JSON.stringify(confirmation.requestInput),
         confirmation.createdAt,
         confirmation.decidedAt,
-      );
+      ],
+    );
   }
 
-  findPendingConfirmation(runId: string, confirmationId?: string): ConfirmationRequest | null {
+  async findPendingConfirmation(runId: string, confirmationId?: string): Promise<ConfirmationRequest | null> {
     const row = confirmationId
-      ? this.database
-          .prepare(
-            `
-              SELECT *
-              FROM agent_confirmations
-              WHERE run_id = ? AND confirmation_id = ? AND status = 'pending'
-              LIMIT 1
-            `,
-          )
-          .get(runId, confirmationId)
-      : this.database
-          .prepare(
-            `
-              SELECT *
-              FROM agent_confirmations
-              WHERE run_id = ? AND status = 'pending'
-              ORDER BY created_at DESC
-              LIMIT 1
-            `,
-          )
-          .get(runId);
+      ? await this.database.queryMaybeOne<ConfirmationRow>(
+          `
+            SELECT *
+            FROM ${this.database.table('agent_confirmations')}
+            WHERE run_id = $1 AND confirmation_id = $2 AND status = 'pending'
+            LIMIT 1
+          `,
+          [runId, confirmationId],
+        )
+      : await this.database.queryMaybeOne<ConfirmationRow>(
+          `
+            SELECT *
+            FROM ${this.database.table('agent_confirmations')}
+            WHERE run_id = $1 AND status = 'pending'
+            ORDER BY created_at DESC, confirmation_id DESC
+            LIMIT 1
+          `,
+          [runId],
+        );
 
-    return row ? mapConfirmationRow(row as unknown as ConfirmationRow) : null;
+    return row ? mapConfirmationRow(row) : null;
   }
 
-  resolveConfirmation(input: {
+  async resolveConfirmation(input: {
     runId: string;
     confirmationId: string;
     status: 'approved' | 'rejected';
     decidedAt?: string;
-  }): ConfirmationRequest | null {
+  }): Promise<ConfirmationRequest | null> {
     const decidedAt = input.decidedAt ?? new Date().toISOString();
-    this.database
-      .prepare(
-        `
-          UPDATE agent_confirmations
-          SET status = ?, decided_at = ?
-          WHERE run_id = ? AND confirmation_id = ? AND status = 'pending'
-        `,
-      )
-      .run(input.status, decidedAt, input.runId, input.confirmationId);
+    await this.database.query(
+      `
+        UPDATE ${this.database.table('agent_confirmations')}
+        SET status = $1, decided_at = $2
+        WHERE run_id = $3 AND confirmation_id = $4 AND status = 'pending'
+      `,
+      [input.status, decidedAt, input.runId, input.confirmationId],
+    );
 
-    const row = this.database
-      .prepare(
-        `
-          SELECT *
-          FROM agent_confirmations
-          WHERE run_id = ? AND confirmation_id = ?
-          LIMIT 1
-        `,
-      )
-      .get(input.runId, input.confirmationId);
+    const row = await this.database.queryMaybeOne<ConfirmationRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('agent_confirmations')}
+        WHERE run_id = $1 AND confirmation_id = $2
+        LIMIT 1
+      `,
+      [input.runId, input.confirmationId],
+    );
 
-    return row ? mapConfirmationRow(row as unknown as ConfirmationRow) : null;
+    return row ? mapConfirmationRow(row) : null;
   }
 }
 
@@ -648,20 +662,19 @@ function buildRunWhere(query: AgentRunListQuery) {
   const params: Array<string | number> = [];
 
   if (query.status?.trim()) {
-    clauses.push('r.status = ?');
-    params.push(query.status.trim());
+    clauses.push(`r.status = $${params.push(query.status.trim())}`);
   }
   if (query.sceneKey?.trim()) {
-    clauses.push('r.scene_key = ?');
-    params.push(query.sceneKey.trim());
+    clauses.push(`r.scene_key = $${params.push(query.sceneKey.trim())}`);
   }
   if (query.conversationKey?.trim()) {
-    clauses.push('r.conversation_key = ?');
-    params.push(query.conversationKey.trim());
+    clauses.push(`r.conversation_key = $${params.push(query.conversationKey.trim())}`);
   }
   if (query.traceId?.trim()) {
-    clauses.push('(r.trace_id = ? OR r.run_id = ?)');
-    params.push(query.traceId.trim(), query.traceId.trim());
+    const traceId = query.traceId.trim();
+    const traceIndex = params.push(traceId);
+    const runIndex = params.push(traceId);
+    clauses.push(`(r.trace_id = $${traceIndex} OR r.run_id = $${runIndex})`);
   }
 
   return {
@@ -675,12 +688,10 @@ function buildConfirmationWhere(query: AgentConfirmationListQuery) {
   const params: Array<string | number> = [];
 
   if (query.status?.trim()) {
-    clauses.push('c.status = ?');
-    params.push(query.status.trim());
+    clauses.push(`c.status = $${params.push(query.status.trim())}`);
   }
   if (query.runId?.trim()) {
-    clauses.push('c.run_id = ?');
-    params.push(query.runId.trim());
+    clauses.push(`c.run_id = $${params.push(query.runId.trim())}`);
   }
 
   return {
@@ -709,9 +720,9 @@ function mapRunSummary(row: AgentRunRow): AgentRunSummary {
     planTitle: taskPlan?.title ?? '-',
     planKind: taskPlan?.kind ?? 'unknown_clarify',
     currentStepKey: executionState?.currentStepKey ?? null,
-    toolCallCount: row.tool_call_count ?? 0,
-    failedToolCallCount: row.failed_tool_call_count ?? 0,
-    pendingConfirmationCount: row.pending_confirmation_count ?? 0,
+    toolCallCount: Number(row.tool_call_count ?? 0),
+    failedToolCallCount: Number(row.failed_tool_call_count ?? 0),
+    pendingConfirmationCount: Number(row.pending_confirmation_count ?? 0),
     evidenceCount: evidenceRefs.length,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -799,9 +810,12 @@ function fallbackExecutionState(row: AgentRunRow): ExecutionState {
   };
 }
 
-function parseJson<T>(value: string | null | undefined, fallback: T): T {
-  if (!value) {
+function parseJson<T>(value: unknown, fallback: T): T {
+  if (value == null) {
     return fallback;
+  }
+  if (typeof value !== 'string') {
+    return value as T;
   }
   try {
     return JSON.parse(value) as T;
@@ -816,7 +830,13 @@ function readRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function parseIntentFrame(value: string): IntentFrame | null {
+function parseIntentFrame(value: unknown): IntentFrame | null {
+  if (value && typeof value === 'object') {
+    return value as IntentFrame;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
   try {
     return JSON.parse(value) as IntentFrame;
   } catch {
@@ -824,12 +844,15 @@ function parseIntentFrame(value: string): IntentFrame | null {
   }
 }
 
-function parseEvidenceRefs(value?: string): AgentEvidenceCard[] {
+function parseEvidenceRefs(value?: unknown): AgentEvidenceCard[] {
   if (!value) {
     return [];
   }
+  if (Array.isArray(value)) {
+    return value.filter(isEvidenceRef);
+  }
   try {
-    const parsed = JSON.parse(value) as unknown;
+    const parsed = JSON.parse(String(value)) as unknown;
     return Array.isArray(parsed) ? parsed.filter(isEvidenceRef) : [];
   } catch {
     return [];
@@ -879,12 +902,16 @@ function dedupeContextCandidates(candidates: ContextReferenceCandidate[]): Conte
   });
 }
 
-function parseContextSubject(value?: string | null): ContextFrameSubject | null {
+function parseContextSubject(value?: unknown): ContextFrameSubject | null {
   if (!value) {
     return null;
   }
+  if (typeof value === 'object') {
+    const subject = value as ContextFrameSubject;
+    return subject.name?.trim() ? subject : null;
+  }
   try {
-    const parsed = JSON.parse(value) as unknown;
+    const parsed = JSON.parse(String(value)) as unknown;
     if (!parsed || typeof parsed !== 'object') {
       return null;
     }
@@ -905,12 +932,14 @@ function isEvidenceRef(value: unknown): value is AgentEvidenceCard {
 }
 
 function resolveSubjectFromRun(input: {
-  intentJson: string;
+  intentJson: unknown;
   evidenceRefs: AgentEvidenceCard[];
   userInput?: string;
 }): ContextFrameSubject | null {
   try {
-    const intent = JSON.parse(input.intentJson) as IntentFrame;
+    const intent = typeof input.intentJson === 'string'
+      ? JSON.parse(input.intentJson) as IntentFrame
+      : input.intentJson as IntentFrame;
     const target = intent.targets.find((item) => item.name?.trim());
     if (target && shouldUseIntentTargetAsContextSubject(intent, target, input.userInput)) {
       return {
@@ -1037,7 +1066,7 @@ function mapTargetKind(type: IntentFrame['targetType']): ContextFrameSubject['ki
 }
 
 function mapConfirmationRow(row: ConfirmationRow): ConfirmationRequest {
-  const preview = JSON.parse(row.preview_json);
+  const preview = parseJson(row.preview_json, null);
   return {
     confirmationId: row.confirmation_id,
     runId: row.run_id,
@@ -1046,7 +1075,7 @@ function mapConfirmationRow(row: ConfirmationRow): ConfirmationRequest {
     summary: row.summary,
     preview,
     debugPayload: preview,
-    requestInput: JSON.parse(row.request_input_json),
+    requestInput: parseJson(row.request_input_json, {}),
     status: row.status,
     createdAt: row.created_at,
     decidedAt: row.decided_at,

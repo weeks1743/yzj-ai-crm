@@ -218,24 +218,24 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
       }
 
       if (method === 'GET' && url.pathname === '/api/settings/org-sync') {
-        writeJson(response, 200, options.orgSyncService.getSettings());
+        writeJson(response, 200, await options.orgSyncService.getSettings());
         return;
       }
 
       if (method === 'POST' && url.pathname === '/api/settings/org-sync/manual-sync') {
-        writeJson(response, 202, options.orgSyncService.startManualSync());
+        writeJson(response, 202, await options.orgSyncService.startManualSync());
         return;
       }
 
       if (method === 'GET' && url.pathname === '/api/settings/ppt-templates') {
-        writeJson(response, 200, options.enterprisePptTemplateService.listTemplates());
+        writeJson(response, 200, await options.enterprisePptTemplateService.listTemplates());
         return;
       }
 
       if (method === 'POST' && url.pathname === '/api/settings/ppt-templates/default-prompt') {
         const payload = await readJsonBody<{ prompt?: string }>(request);
         const result: EnterprisePptTemplatePromptResponse =
-          options.enterprisePptTemplateService.updateDefaultPrompt(payload.prompt ?? '');
+          await options.enterprisePptTemplateService.updateDefaultPrompt(payload.prompt ?? '');
         writeJson(
           response,
           200,
@@ -314,7 +314,7 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         if (!options.agentObservabilityService) {
           throw new ServiceUnavailableError('Agent 观测服务未启用');
         }
-        writeJson(response, 200, options.agentObservabilityService.listRuns({
+        writeJson(response, 200, await options.agentObservabilityService.listRuns({
           page: parseOptionalPositiveInteger(url.searchParams.get('page')),
           pageSize: parseOptionalPositiveInteger(url.searchParams.get('pageSize')),
           status: url.searchParams.get('status') ?? undefined,
@@ -329,7 +329,7 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         if (!options.agentObservabilityService) {
           throw new ServiceUnavailableError('Agent 观测服务未启用');
         }
-        writeJson(response, 200, options.agentObservabilityService.listConfirmations({
+        writeJson(response, 200, await options.agentObservabilityService.listConfirmations({
           page: parseOptionalPositiveInteger(url.searchParams.get('page')),
           pageSize: parseOptionalPositiveInteger(url.searchParams.get('pageSize')),
           status: url.searchParams.get('status') ?? undefined,
@@ -345,7 +345,7 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         const parts = url.pathname.split('/').filter(Boolean);
         if (parts.length === 4) {
           const runId = decodeURIComponent(parts[3] ?? '');
-          writeJson(response, 200, options.agentObservabilityService.getRunDetail(runId));
+          writeJson(response, 200, await options.agentObservabilityService.getRunDetail(runId));
           return;
         }
       }

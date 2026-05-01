@@ -44,7 +44,7 @@ interface HarnessTurn {
     continuationAction?: string;
     policyCode?: string;
     noToolPrefix?: string;
-    assert?: (response: AgentChatResponse, harness: AgentScenarioHarness) => void;
+    assert?: (response: AgentChatResponse, harness: AgentScenarioHarness) => void | Promise<void>;
   };
 }
 
@@ -240,23 +240,23 @@ async function runAgentScenarios(scenarios: AgentScenario[]): Promise<void> {
         tenantContext: turn.omitOperator ? undefined : { operatorOpenId: TEST_OPERATOR_OPEN_ID },
         resume,
       });
-      assertTurnExpectation(scenario, turnIndex, turn, response, harness, beforeCallCount);
+      await assertTurnExpectation(scenario, turnIndex, turn, response, harness, beforeCallCount);
       if (scenario.qualityGate) {
-        assertTraceQuality(scenario, turnIndex, turn, response, harness, beforeCallCount);
+        await assertTraceQuality(scenario, turnIndex, turn, response, harness, beforeCallCount);
       }
       previous = response;
     }
   }
 }
 
-function assertTurnExpectation(
+async function assertTurnExpectation(
   scenario: AgentScenario,
   turnIndex: number,
   turn: HarnessTurn,
   response: AgentChatResponse,
   harness: AgentScenarioHarness,
   beforeCallCount: number,
-): void {
+): Promise<void> {
   const label = `${scenario.id} turn ${turnIndex + 1}`;
   const trace = response.message.extraInfo.agentTrace;
   if (turn.expect.status) {
@@ -287,31 +287,31 @@ function assertTurnExpectation(
     const calls = harness.calls.slice(beforeCallCount);
     assert.equal(calls.some((item) => item.tool.startsWith(turn.expect.noToolPrefix!)), false, `${label}: should not call ${turn.expect.noToolPrefix}`);
   }
-  turn.expect.assert?.(response, harness);
+  await turn.expect.assert?.(response, harness);
 }
 
-function assertTraceQuality(
+async function assertTraceQuality(
   scenario: AgentScenario,
   turnIndex: number,
   turn: HarnessTurn,
   response: AgentChatResponse,
   harness: AgentScenarioHarness,
   beforeCallCount: number,
-): void {
-  const report = inspectTraceQuality(scenario, turnIndex, turn, response, harness, beforeCallCount);
+): Promise<void> {
+  const report = await inspectTraceQuality(scenario, turnIndex, turn, response, harness, beforeCallCount);
   harness.qualityReports.push(report);
   assert.deepEqual(report.hardFailures, [], `${scenario.id} turn ${turnIndex + 1}: QA hard failures\n${JSON.stringify(report, null, 2)}`);
   assert.ok(report.bugProbability < 0.15, `${scenario.id} turn ${turnIndex + 1}: QA risk too high\n${JSON.stringify(report, null, 2)}`);
 }
 
-function inspectTraceQuality(
+async function inspectTraceQuality(
   scenario: AgentScenario,
   turnIndex: number,
   turn: HarnessTurn,
   response: AgentChatResponse,
   harness: AgentScenarioHarness,
   beforeCallCount: number,
-): TraceQualityReport {
+): Promise<TraceQualityReport> {
   const trace = response.message.extraInfo.agentTrace;
   const selectedToolCode = trace.selectedTool?.toolCode ?? '';
   const selectedInput = (trace.selectedTool?.input ?? {}) as Record<string, any>;
@@ -349,7 +349,7 @@ function inspectTraceQuality(
     if (trace.resolvedContext?.usageMode && trace.resolvedContext.usageMode !== 'skipped_collection_query') {
       addRisk('debug', '裸集合查询未标记 skipped_collection_query，调试区难以看出跳过原因。');
     }
-    if (harness.repository.getRunDetail(response.executionState.runId)?.contextSubject) {
+    if ((await harness.repository.getRunDetail(response.executionState.runId))?.contextSubject) {
       addHard('memory', '裸集合查询把当前 run 沉淀成了新的上下文主体。');
     }
   }
@@ -1665,13 +1665,13 @@ const collectionContextIsolationScenarios: AgentScenario[] = [
         expect: {
           status: 'completed',
           selectedTool: 'record.customer.search',
-          assert: (response, harness) => {
+          assert: async (response, harness) => {
             const input = response.message.extraInfo.agentTrace.selectedTool?.input as { filters?: unknown[]; agentControl?: { targetSanitization?: { reasonCode?: string } } } | undefined;
             assert.deepEqual(input?.filters, []);
             assert.equal(input?.agentControl?.targetSanitization?.reasonCode, 'ignored_ungrounded_target');
             assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usageMode, 'skipped_collection_query');
             assertNoSearchFilterValue(harness, 'record.customer.search', '69f16bbd21bf2b00014fbc6f');
-            const candidates = harness.repository.findContextCandidates(`harness-71b-collection-customer-ignores-ungrounded-llm-target`);
+            const candidates = await harness.repository.findContextCandidates(`harness-71b-collection-customer-ignores-ungrounded-llm-target`);
             assert.equal(candidates.some((candidate) => candidate.sourceRunId === response.executionState.runId), false);
           },
         },

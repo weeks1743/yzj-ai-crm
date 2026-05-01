@@ -11,11 +11,13 @@
     "diagnose:docmee": "tsx scripts/docmee-v2-diagnose.ts"
   },
   "devDependencies": {
+    "@types/pg": "^8.15.6",
     "@types/node": "^24.6.1",
     "tsx": "^4.21.0",
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "pg": "^8.16.3",
     "pptxgenjs": "^4.0.1",
     "yaml": "^2.8.1"
   }

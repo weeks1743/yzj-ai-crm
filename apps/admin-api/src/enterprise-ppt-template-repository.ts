@@ -1,17 +1,18 @@
-import { DatabaseSync } from 'node:sqlite';
+import type { QueryResultRow } from 'pg';
+import type { DatabaseConnection } from './database.js';
 import type { EnterprisePptTemplateItem } from './contracts.js';
 import { NotFoundError } from './errors.js';
 
-interface EnterprisePptTemplateRow {
+interface EnterprisePptTemplateRow extends QueryResultRow {
   template_id: string;
   name: string;
   source_file_name: string;
-  is_active: number;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
 
-interface EnterprisePptTemplateSettingsRow {
+interface EnterprisePptTemplateSettingsRow extends QueryResultRow {
   default_prompt: string;
 }
 
@@ -20,201 +21,182 @@ function mapTemplate(row: EnterprisePptTemplateRow): EnterprisePptTemplateItem {
     templateId: row.template_id,
     name: row.name,
     sourceFileName: row.source_file_name,
-    isActive: row.is_active === 1,
+    isActive: Boolean(row.is_active),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 export class EnterprisePptTemplateRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(private readonly database: DatabaseConnection) {}
 
-  getDefaultPrompt(): string | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT default_prompt
-          FROM enterprise_ppt_template_settings
-          WHERE singleton_id = 1
-          LIMIT 1
-        `,
-      )
-      .get() as EnterprisePptTemplateSettingsRow | undefined;
+  async getDefaultPrompt(): Promise<string | null> {
+    const row = await this.database.queryMaybeOne<EnterprisePptTemplateSettingsRow>(
+      `
+        SELECT default_prompt
+        FROM ${this.database.table('enterprise_ppt_template_settings')}
+        WHERE singleton_id = 1
+      `,
+    );
 
     return row?.default_prompt?.trim() || null;
   }
 
-  updateDefaultPrompt(prompt: string): string {
+  async updateDefaultPrompt(prompt: string): Promise<string> {
     const now = new Date().toISOString();
-    this.database
-      .prepare(
-        `
-          INSERT INTO enterprise_ppt_template_settings (
-            singleton_id,
-            default_prompt,
-            created_at,
-            updated_at
-          ) VALUES (1, ?, ?, ?)
-          ON CONFLICT(singleton_id) DO UPDATE SET
-            default_prompt = excluded.default_prompt,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(prompt, now, now);
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('enterprise_ppt_template_settings')} (
+          singleton_id,
+          default_prompt,
+          created_at,
+          updated_at
+        ) VALUES (1, $1, $2, $3)
+        ON CONFLICT (singleton_id) DO UPDATE SET
+          default_prompt = EXCLUDED.default_prompt,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [prompt, now, now],
+    );
 
-    return this.getDefaultPrompt() ?? prompt;
+    return (await this.getDefaultPrompt()) ?? prompt;
   }
 
-  list(): EnterprisePptTemplateItem[] {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT *
-          FROM enterprise_ppt_templates
-          ORDER BY is_active DESC, updated_at DESC, template_id DESC
-        `,
-      )
-      .all() as unknown as EnterprisePptTemplateRow[];
+  async list(): Promise<EnterprisePptTemplateItem[]> {
+    const rows = await this.database.query<EnterprisePptTemplateRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('enterprise_ppt_templates')}
+        ORDER BY is_active DESC, updated_at DESC, template_id DESC
+      `,
+    );
 
     return rows.map(mapTemplate);
   }
 
-  getById(templateId: string): EnterprisePptTemplateItem | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT *
-          FROM enterprise_ppt_templates
-          WHERE template_id = ?
-          LIMIT 1
-        `,
-      )
-      .get(templateId) as EnterprisePptTemplateRow | undefined;
+  async getById(templateId: string): Promise<EnterprisePptTemplateItem | null> {
+    const row = await this.database.queryMaybeOne<EnterprisePptTemplateRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('enterprise_ppt_templates')}
+        WHERE template_id = $1
+      `,
+      [templateId],
+    );
 
     return row ? mapTemplate(row) : null;
   }
 
-  getActive(): EnterprisePptTemplateItem | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT *
-          FROM enterprise_ppt_templates
-          WHERE is_active = 1
-          LIMIT 1
-        `,
-      )
-      .get() as EnterprisePptTemplateRow | undefined;
+  async getActive(): Promise<EnterprisePptTemplateItem | null> {
+    const row = await this.database.queryMaybeOne<EnterprisePptTemplateRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('enterprise_ppt_templates')}
+        WHERE is_active = true
+        LIMIT 1
+      `,
+    );
 
     return row ? mapTemplate(row) : null;
   }
 
-  save(input: {
+  async save(input: {
     templateId: string;
     name: string;
     sourceFileName: string;
-  }): EnterprisePptTemplateItem {
+  }): Promise<EnterprisePptTemplateItem> {
     const now = new Date().toISOString();
-    this.database
-      .prepare(
-        `
-          INSERT INTO enterprise_ppt_templates (
-            template_id,
-            name,
-            source_file_name,
-            is_active,
-            created_at,
-            updated_at
-          ) VALUES (?, ?, ?, 0, ?, ?)
-          ON CONFLICT(template_id) DO UPDATE SET
-            name = excluded.name,
-            source_file_name = excluded.source_file_name,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('enterprise_ppt_templates')} (
+          template_id,
+          name,
+          source_file_name,
+          is_active,
+          created_at,
+          updated_at
+        ) VALUES ($1, $2, $3, false, $4, $5)
+        ON CONFLICT (template_id) DO UPDATE SET
+          name = EXCLUDED.name,
+          source_file_name = EXCLUDED.source_file_name,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
         input.templateId,
         input.name,
         input.sourceFileName,
         now,
         now,
-      );
+      ],
+    );
 
     return this.requireById(input.templateId);
   }
 
-  rename(templateId: string, name: string): EnterprisePptTemplateItem {
+  async rename(templateId: string, name: string): Promise<EnterprisePptTemplateItem> {
     const now = new Date().toISOString();
-    const result = this.database
-      .prepare(
-        `
-          UPDATE enterprise_ppt_templates
-          SET name = ?,
-              updated_at = ?
-          WHERE template_id = ?
-        `,
-      )
-      .run(name, now, templateId);
+    const rows = await this.database.query<EnterprisePptTemplateRow>(
+      `
+        UPDATE ${this.database.table('enterprise_ppt_templates')}
+        SET name = $1,
+            updated_at = $2
+        WHERE template_id = $3
+        RETURNING *
+      `,
+      [name, now, templateId],
+    );
 
-    if (result.changes === 0) {
+    if (rows.length === 0) {
       throw new NotFoundError(`企业 PPT 模板不存在: ${templateId}`);
     }
+
+    return mapTemplate(rows[0]!);
+  }
+
+  async activate(templateId: string): Promise<EnterprisePptTemplateItem> {
+    const current = await this.getById(templateId);
+    if (!current) {
+      throw new NotFoundError(`企业 PPT 模板不存在: ${templateId}`);
+    }
+
+    const now = new Date().toISOString();
+    await this.database.transaction(async (tx) => {
+      await tx.query(
+        `
+          UPDATE ${tx.table('enterprise_ppt_templates')}
+          SET is_active = false,
+              updated_at = $1
+          WHERE is_active = true
+        `,
+        [now],
+      );
+
+      await tx.query(
+        `
+          UPDATE ${tx.table('enterprise_ppt_templates')}
+          SET is_active = true,
+              updated_at = $1
+          WHERE template_id = $2
+        `,
+        [now, templateId],
+      );
+    });
 
     return this.requireById(templateId);
   }
 
-  activate(templateId: string): EnterprisePptTemplateItem {
-    if (!this.getById(templateId)) {
-      throw new NotFoundError(`企业 PPT 模板不存在: ${templateId}`);
-    }
-
-    const now = new Date().toISOString();
-    this.database.exec('BEGIN IMMEDIATE');
-    try {
-      this.database
-        .prepare(
-          `
-            UPDATE enterprise_ppt_templates
-            SET is_active = 0,
-                updated_at = ?
-            WHERE is_active = 1
-          `,
-        )
-        .run(now);
-
-      this.database
-        .prepare(
-          `
-            UPDATE enterprise_ppt_templates
-            SET is_active = 1,
-                updated_at = ?
-            WHERE template_id = ?
-          `,
-        )
-        .run(now, templateId);
-
-      this.database.exec('COMMIT');
-    } catch (error) {
-      this.database.exec('ROLLBACK');
-      throw error;
-    }
-
-    return this.requireById(templateId);
+  async delete(templateId: string): Promise<void> {
+    await this.database.query(
+      `
+        DELETE FROM ${this.database.table('enterprise_ppt_templates')}
+        WHERE template_id = $1
+      `,
+      [templateId],
+    );
   }
 
-  delete(templateId: string): void {
-    this.database
-      .prepare(
-        `
-          DELETE FROM enterprise_ppt_templates
-          WHERE template_id = ?
-        `,
-      )
-      .run(templateId);
-  }
-
-  private requireById(templateId: string): EnterprisePptTemplateItem {
-    const item = this.getById(templateId);
+  private async requireById(templateId: string): Promise<EnterprisePptTemplateItem> {
+    const item = await this.getById(templateId);
     if (!item) {
       throw new NotFoundError(`企业 PPT 模板不存在: ${templateId}`);
     }

@@ -1,4 +1,5 @@
-import { DatabaseSync } from 'node:sqlite';
+import type { QueryResultRow } from 'pg';
+import type { DatabaseConnection } from './database.js';
 import type {
   ShadowDictionaryBindingRecord,
   ShadowObjectActivationStatus,
@@ -9,10 +10,10 @@ import type {
   ShadowStandardizedField,
 } from './contracts.js';
 
-interface ShadowObjectRegistryRow {
+interface ShadowObjectRegistryRow extends QueryResultRow {
   object_key: ShadowObjectKey;
   label: string;
-  enabled: number;
+  enabled: boolean;
   activation_status: ShadowObjectActivationStatus;
   form_code_id: string | null;
   form_def_id: string | null;
@@ -23,17 +24,32 @@ interface ShadowObjectRegistryRow {
   last_error: string | null;
 }
 
-interface ShadowObjectSnapshotRow {
+interface ShadowObjectSnapshotRow extends QueryResultRow {
   id: string;
   object_key: ShadowObjectKey;
   snapshot_version: string;
   schema_hash: string;
   form_code_id: string;
   form_def_id: string | null;
-  normalized_fields_json: string;
-  dictionary_bindings_json: string;
-  raw_template_json: string;
+  normalized_fields_json: ShadowStandardizedField[] | string;
+  dictionary_bindings_json: ShadowDictionaryBindingRecord[] | string;
+  raw_template_json: unknown;
   created_at: string;
+}
+
+function parseJsonArray<T>(value: T[] | string | null | undefined): T[] {
+  if (!value) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
 }
 
 function mapRegistryRow(row: ShadowObjectRegistryRow): ShadowObjectRegistryRecord {
@@ -60,105 +76,101 @@ function mapSnapshotRow(row: ShadowObjectSnapshotRow): ShadowObjectSnapshotRecor
     schemaHash: row.schema_hash,
     formCodeId: row.form_code_id,
     formDefId: row.form_def_id,
-    normalizedFields: JSON.parse(row.normalized_fields_json) as ShadowStandardizedField[],
-    dictionaryBindings: JSON.parse(row.dictionary_bindings_json || '[]') as ShadowDictionaryBindingRecord[],
-    rawTemplate: JSON.parse(row.raw_template_json),
+    normalizedFields: parseJsonArray<ShadowStandardizedField>(row.normalized_fields_json),
+    dictionaryBindings: parseJsonArray<ShadowDictionaryBindingRecord>(row.dictionary_bindings_json),
+    rawTemplate: row.raw_template_json,
     createdAt: row.created_at,
   };
 }
 
 export class ShadowMetadataRepository {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(private readonly database: DatabaseConnection) {}
 
-  upsertObjectRegistryConfig(record: {
+  async upsertObjectRegistryConfig(record: {
     objectKey: ShadowObjectKey;
     label: string;
     enabled: boolean;
     activationStatus: ShadowObjectActivationStatus;
     formCodeId: string | null;
     now: string;
-  }): void {
-    this.database
-      .prepare(
-        `
-          INSERT INTO shadow_object_registry (
-            object_key, label, enabled, activation_status, form_code_id, form_def_id,
-            refresh_status, latest_snapshot_version, latest_schema_hash, last_refresh_at,
-            last_error, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, NULL, 'not_started', NULL, NULL, NULL, NULL, ?, ?)
-          ON CONFLICT(object_key) DO UPDATE SET
-            label = excluded.label,
-            enabled = excluded.enabled,
-            activation_status = excluded.activation_status,
-            form_code_id = excluded.form_code_id,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
+  }): Promise<void> {
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('shadow_object_registry')} (
+          object_key, label, enabled, activation_status, form_code_id, form_def_id,
+          refresh_status, latest_snapshot_version, latest_schema_hash, last_refresh_at,
+          last_error, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, NULL, 'not_started', NULL, NULL, NULL, NULL, $6, $7)
+        ON CONFLICT (object_key) DO UPDATE SET
+          label = EXCLUDED.label,
+          enabled = EXCLUDED.enabled,
+          activation_status = EXCLUDED.activation_status,
+          form_code_id = EXCLUDED.form_code_id,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
         record.objectKey,
         record.label,
-        record.enabled ? 1 : 0,
+        record.enabled,
         record.activationStatus,
         record.formCodeId,
         record.now,
         record.now,
-      );
+      ],
+    );
   }
 
-  markRefreshFailed(params: {
+  async markRefreshFailed(params: {
     objectKey: ShadowObjectKey;
     formCodeId: string | null;
     formDefId: string | null;
     message: string;
     now: string;
-  }): void {
-    this.database
-      .prepare(
-        `
-          UPDATE shadow_object_registry
-          SET form_code_id = ?,
-              form_def_id = ?,
-              refresh_status = 'failed',
-              last_error = ?,
-              last_refresh_at = ?,
-              updated_at = ?
-          WHERE object_key = ?
-        `,
-      )
-      .run(
+  }): Promise<void> {
+    await this.database.query(
+      `
+        UPDATE ${this.database.table('shadow_object_registry')}
+        SET form_code_id = $1,
+            form_def_id = $2,
+            refresh_status = 'failed',
+            last_error = $3,
+            last_refresh_at = $4,
+            updated_at = $5
+        WHERE object_key = $6
+      `,
+      [
         params.formCodeId,
         params.formDefId,
         params.message,
         params.now,
         params.now,
         params.objectKey,
-      );
+      ],
+    );
   }
 
-  markRefreshReady(params: {
+  async markRefreshReady(params: {
     objectKey: ShadowObjectKey;
     formCodeId: string;
     formDefId: string | null;
     snapshotVersion: string;
     schemaHash: string;
     now: string;
-  }): void {
-    this.database
-      .prepare(
-        `
-          UPDATE shadow_object_registry
-          SET form_code_id = ?,
-              form_def_id = ?,
-              refresh_status = 'ready',
-              latest_snapshot_version = ?,
-              latest_schema_hash = ?,
-              last_refresh_at = ?,
-              last_error = NULL,
-              updated_at = ?
-          WHERE object_key = ?
-        `,
-      )
-      .run(
+  }): Promise<void> {
+    await this.database.query(
+      `
+        UPDATE ${this.database.table('shadow_object_registry')}
+        SET form_code_id = $1,
+            form_def_id = $2,
+            refresh_status = 'ready',
+            latest_snapshot_version = $3,
+            latest_schema_hash = $4,
+            last_refresh_at = $5,
+            last_error = NULL,
+            updated_at = $6
+        WHERE object_key = $7
+      `,
+      [
         params.formCodeId,
         params.formDefId,
         params.snapshotVersion,
@@ -166,40 +178,38 @@ export class ShadowMetadataRepository {
         params.now,
         params.now,
         params.objectKey,
-      );
+      ],
+    );
   }
 
-  listObjectRegistry(): ShadowObjectRegistryRecord[] {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT object_key, label, enabled, activation_status, form_code_id, form_def_id,
-                 refresh_status, latest_snapshot_version, latest_schema_hash, last_refresh_at, last_error
-          FROM shadow_object_registry
-          ORDER BY object_key ASC
-        `,
-      )
-      .all() as unknown as ShadowObjectRegistryRow[];
+  async listObjectRegistry(): Promise<ShadowObjectRegistryRecord[]> {
+    const rows = await this.database.query<ShadowObjectRegistryRow>(
+      `
+        SELECT object_key, label, enabled, activation_status, form_code_id, form_def_id,
+               refresh_status, latest_snapshot_version, latest_schema_hash, last_refresh_at, last_error
+        FROM ${this.database.table('shadow_object_registry')}
+        ORDER BY object_key ASC
+      `,
+    );
 
     return rows.map(mapRegistryRow);
   }
 
-  getObjectRegistry(objectKey: ShadowObjectKey): ShadowObjectRegistryRecord | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT object_key, label, enabled, activation_status, form_code_id, form_def_id,
-                 refresh_status, latest_snapshot_version, latest_schema_hash, last_refresh_at, last_error
-          FROM shadow_object_registry
-          WHERE object_key = ?
-        `,
-      )
-      .get(objectKey) as ShadowObjectRegistryRow | undefined;
+  async getObjectRegistry(objectKey: ShadowObjectKey): Promise<ShadowObjectRegistryRecord | null> {
+    const row = await this.database.queryMaybeOne<ShadowObjectRegistryRow>(
+      `
+        SELECT object_key, label, enabled, activation_status, form_code_id, form_def_id,
+               refresh_status, latest_snapshot_version, latest_schema_hash, last_refresh_at, last_error
+        FROM ${this.database.table('shadow_object_registry')}
+        WHERE object_key = $1
+      `,
+      [objectKey],
+    );
 
     return row ? mapRegistryRow(row) : null;
   }
 
-  saveSnapshot(snapshot: {
+  async saveSnapshot(snapshot: {
     id: string;
     objectKey: ShadowObjectKey;
     snapshotVersion: string;
@@ -210,17 +220,15 @@ export class ShadowMetadataRepository {
     dictionaryBindings: ShadowDictionaryBindingRecord[];
     rawTemplate: unknown;
     createdAt: string;
-  }): void {
-    this.database
-      .prepare(
-        `
-          INSERT INTO shadow_object_snapshots (
-            id, object_key, snapshot_version, schema_hash, form_code_id, form_def_id,
-            normalized_fields_json, dictionary_bindings_json, raw_template_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
+  }): Promise<void> {
+    await this.database.query(
+      `
+        INSERT INTO ${this.database.table('shadow_object_snapshots')} (
+          id, object_key, snapshot_version, schema_hash, form_code_id, form_def_id,
+          normalized_fields_json, dictionary_bindings_json, raw_template_json, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10)
+      `,
+      [
         snapshot.id,
         snapshot.objectKey,
         snapshot.snapshotVersion,
@@ -231,41 +239,39 @@ export class ShadowMetadataRepository {
         JSON.stringify(snapshot.dictionaryBindings),
         JSON.stringify(snapshot.rawTemplate),
         snapshot.createdAt,
-      );
+      ],
+    );
   }
 
-  getLatestSnapshot(objectKey: ShadowObjectKey): ShadowObjectSnapshotRecord | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT id, object_key, snapshot_version, schema_hash, form_code_id, form_def_id,
-                 normalized_fields_json, dictionary_bindings_json, raw_template_json, created_at
-          FROM shadow_object_snapshots
-          WHERE object_key = ?
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-      )
-      .get(objectKey) as ShadowObjectSnapshotRow | undefined;
+  async getLatestSnapshot(objectKey: ShadowObjectKey): Promise<ShadowObjectSnapshotRecord | null> {
+    const row = await this.database.queryMaybeOne<ShadowObjectSnapshotRow>(
+      `
+        SELECT id, object_key, snapshot_version, schema_hash, form_code_id, form_def_id,
+               normalized_fields_json, dictionary_bindings_json, raw_template_json, created_at
+        FROM ${this.database.table('shadow_object_snapshots')}
+        WHERE object_key = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      `,
+      [objectKey],
+    );
 
     return row ? mapSnapshotRow(row) : null;
   }
 
-  getSnapshotByVersion(
+  async getSnapshotByVersion(
     objectKey: ShadowObjectKey,
     snapshotVersion: string,
-  ): ShadowObjectSnapshotRecord | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT id, object_key, snapshot_version, schema_hash, form_code_id, form_def_id,
-                 normalized_fields_json, dictionary_bindings_json, raw_template_json, created_at
-          FROM shadow_object_snapshots
-          WHERE object_key = ? AND snapshot_version = ?
-          LIMIT 1
-        `,
-      )
-      .get(objectKey, snapshotVersion) as ShadowObjectSnapshotRow | undefined;
+  ): Promise<ShadowObjectSnapshotRecord | null> {
+    const row = await this.database.queryMaybeOne<ShadowObjectSnapshotRow>(
+      `
+        SELECT id, object_key, snapshot_version, schema_hash, form_code_id, form_def_id,
+               normalized_fields_json, dictionary_bindings_json, raw_template_json, created_at
+        FROM ${this.database.table('shadow_object_snapshots')}
+        WHERE object_key = $1 AND snapshot_version = $2
+      `,
+      [objectKey, snapshotVersion],
+    );
 
     return row ? mapSnapshotRow(row) : null;
   }

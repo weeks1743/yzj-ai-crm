@@ -92,6 +92,14 @@ function parseDeepseekDefaultModel(
   );
 }
 
+function parsePostgresSchema(value: string | undefined, fallbackValue: string): string {
+  const schema = (value?.trim() || fallbackValue).trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+    throw new ConfigError('SKILL_RUNTIME_POSTGRES_SCHEMA 必须是合法 PostgreSQL schema 名称');
+  }
+  return schema;
+}
+
 export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
   const envFilePath = options.envFilePath ?? findEnvFile();
 
@@ -108,10 +116,11 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
       port: parsePort(env.SKILL_RUNTIME_PORT),
     },
     storage: {
-      sqlitePath: resolve(
-        rootDir,
-        env.SKILL_RUNTIME_SQLITE_PATH || '.local/skill-runtime.sqlite',
-      ),
+      postgresUrl: (
+        env.SKILL_RUNTIME_POSTGRES_URL
+        || 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev'
+      ).trim(),
+      postgresSchema: parsePostgresSchema(env.SKILL_RUNTIME_POSTGRES_SCHEMA, 'skill_runtime'),
       artifactDir: resolve(
         rootDir,
         env.SKILL_RUNTIME_ARTIFACT_DIR || '.local/skill-runtime-artifacts',
