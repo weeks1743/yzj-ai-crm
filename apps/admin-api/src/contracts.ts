@@ -256,6 +256,35 @@ export interface ArtifactPresentationResponse {
   updatedAt?: string;
 }
 
+export type ArtifactImageStatus =
+  | 'not_started'
+  | 'queued'
+  | 'succeeded'
+  | 'failed';
+
+export interface ArtifactImageResponse {
+  artifactId: string;
+  versionId: string;
+  title: string;
+  status: ArtifactImageStatus;
+  generationId?: string;
+  prompt?: string | null;
+  fileName?: string;
+  mimeType?: string;
+  byteSize?: number;
+  previewUrl?: string;
+  downloadPath?: string;
+  model?: string;
+  provider?: string;
+  size?: ImageGenerationSize;
+  quality?: ImageGenerationQuality;
+  latencyMs?: number;
+  errorMessage?: string | null;
+  generatedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export type AgentActionType = 'query' | 'analyze' | 'write' | 'plan' | 'export' | 'clarify';
 export type AgentTargetType = 'company' | 'customer' | 'opportunity' | 'contact' | 'followup' | 'artifact' | 'unknown';
 export type AgentTaskPlanKind =
@@ -862,6 +891,22 @@ export interface AgentConversationListResponse {
 export interface AgentConversationUpsertRequest {
   operatorOpenId?: string;
   conversation: ConversationSession;
+}
+
+export interface AgentPersonalSettingsResponse {
+  eid: string;
+  appId: string;
+  operatorOpenId: string;
+  displayName: string;
+  roleLabel: string;
+  soulPrompt: string;
+  isDefaultSoulPrompt: boolean;
+  updatedAt: string | null;
+}
+
+export interface AgentPersonalSettingsUpdateRequest {
+  operatorOpenId?: string;
+  soulPrompt?: string;
 }
 
 export interface TenantAppSettingsResponse {

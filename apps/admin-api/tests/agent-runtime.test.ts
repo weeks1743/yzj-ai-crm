@@ -397,7 +397,7 @@ function createCompanyResearchMocks(input: {
         runtimeSkillName: 'ext.company_research_pm',
         model: null,
         status: 'succeeded',
-        finalText: `# ${input.companyName} 公司研究\n\n## 研究摘要\n销售切入点：关注预算、组织变化和数字化项目。`,
+        finalText: `# ${input.companyName} 公司研究\n\n## 公司概览\n${input.companyName} 是本次公司研究目标。\n\n## 业务定位\n公开资料显示其业务需要结合行业与经营范围继续核实。\n\n## 核心风险\n关注公开披露完整性、行业周期和经营信息更新。`,
         events: [],
         artifacts: [],
         error: null,
@@ -1036,6 +1036,231 @@ test('Agent runtime returns A2UI surfaces for empty, single, and multi record se
   }
 });
 
+test('Agent runtime hides formInstId and uses record important title for customer cards', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const formInstId = '69faf11ad03e580001fd4508';
+  const customerName = '江苏友升汽车科技有限公司';
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'query', '江苏友升'),
+    shadowMetadataService: {
+      executeSearch: async () => ({
+        objectKey: 'customer',
+        operation: 'search',
+        mode: 'live',
+        requestBody: {},
+        pageNumber: 1,
+        pageSize: 5,
+        totalPages: 1,
+        totalElements: 1,
+        records: [
+          {
+            formInstId,
+            important: { 标题: customerName },
+            fields: [],
+            fieldMap: {},
+            rawRecord: { important: { 标题: customerName } },
+          },
+        ],
+      }),
+      executeGet: async () => ({ record: null }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-record-important-title',
+    sceneKey: 'chat',
+    query: '查询江苏友升',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const surface = response.message.extraInfo.uiSurfaces?.[0];
+  const recordResult = surface?.commands.find((command: any) => command.updateDataModel)?.updateDataModel.value as any;
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(recordResult?.record?.title, customerName);
+  assert.equal(recordResult?.record?.formInstId, formInstId);
+  assert.match(response.message.content, new RegExp(customerName));
+  assert.doesNotMatch(response.message.content, new RegExp(formInstId));
+});
+
+test('Agent runtime falls back to query name instead of exposing formInstId when record has no display title', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const formInstId = '69faf11ad03e580001fd4508';
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'query', '江苏友升'),
+    shadowMetadataService: {
+      executeSearch: async () => ({
+        objectKey: 'customer',
+        operation: 'search',
+        mode: 'live',
+        requestBody: {},
+        pageNumber: 1,
+        pageSize: 5,
+        totalPages: 1,
+        totalElements: 1,
+        records: [
+          {
+            formInstId,
+            important: {},
+            fields: [],
+            fieldMap: {},
+            rawRecord: {},
+          },
+        ],
+      }),
+      executeGet: async () => ({ record: null }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-record-query-title-fallback',
+    sceneKey: 'chat',
+    query: '查询江苏友升',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const surface = response.message.extraInfo.uiSurfaces?.[0];
+  const recordResult = surface?.commands.find((command: any) => command.updateDataModel)?.updateDataModel.value as any;
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(recordResult?.record?.title, '江苏友升');
+  assert.equal(recordResult?.record?.formInstId, formInstId);
+  assert.match(response.message.content, /江苏友升/);
+  assert.doesNotMatch(response.message.content, new RegExp(formInstId));
+});
+
+test('Agent runtime uses important summary fields for customer list display', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'query', ''),
+    shadowMetadataService: {
+      executeSearch: async () => ({
+        objectKey: 'customer',
+        operation: 'search',
+        mode: 'live',
+        requestBody: {},
+        pageNumber: 1,
+        pageSize: 5,
+        totalPages: 2,
+        totalElements: 8,
+        records: [
+          {
+            formInstId: '69faf11ad03e580001fd4508',
+            important: {
+              标题: '江苏友升汽车科技有限公司',
+              客户状态: '商机阶段客户',
+              客户类型: '直客',
+              省: '江苏省',
+              市: '无锡市',
+              负责人: '陈伟棠',
+            },
+            fields: [],
+            fieldMap: {},
+            rawRecord: {},
+          },
+          {
+            formInstId: '69faf11ad03e580001fd4509',
+            important: {
+              标题: '上海品宏企业管理有限公司',
+              客户状态: '销售线索阶段',
+              省: '上海市',
+              负责人: '李敏',
+            },
+            fields: [],
+            fieldMap: {},
+            rawRecord: {},
+          },
+        ],
+      }),
+      executeGet: async () => ({ record: null }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-record-important-list',
+    sceneKey: 'chat',
+    query: '查询客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const surface = response.message.extraInfo.uiSurfaces?.[0];
+  const recordResult = surface?.commands.find((command: any) => command.updateDataModel)?.updateDataModel.value as any;
+  const firstRecord = recordResult?.records?.[0];
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(recordResult?.displayMode, 'list');
+  assert.equal(firstRecord?.title, '江苏友升汽车科技有限公司');
+  assert.deepEqual(firstRecord?.tags, ['商机阶段客户', '直客']);
+  assert.equal(firstRecord?.subtitle, '江苏省 / 无锡市');
+  assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '客户状态' && field.value === '商机阶段客户'));
+  assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '省' && field.value === '江苏省'));
+  assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '市' && field.value === '无锡市'));
+  assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '负责人' && field.value === '陈伟棠'));
+  assert.notEqual(firstRecord?.title, '客户记录');
+});
+
+test('Agent runtime displays customer list fields synthesized from live widget values without leaking openId', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const ownerOpenId = '69e75eb5e4b0e65b61c014da';
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'query', ''),
+    shadowMetadataService: {
+      executeSearch: async () => ({
+        objectKey: 'customer',
+        operation: 'search',
+        mode: 'live',
+        requestBody: {},
+        pageNumber: 1,
+        pageSize: 5,
+        totalPages: 2,
+        totalElements: 8,
+        records: [
+          {
+            formInstId: '69f150a897fc79000112488c',
+            important: {},
+            fields: [
+              {
+                codeId: '_S_NAME',
+                title: '客户名称',
+                value: `联系人姓名：陈晨联系人手机：13612952103启用状态：启用客户类型：普通客户客户状态：销售线索阶段客户是否分配：已分配负责人：${ownerOpenId}`,
+              },
+              { codeId: 'Ra_0', title: '客户状态', value: '销售线索阶段' },
+              { codeId: 'Ra_3', title: '客户类型', value: '普通客户' },
+              { codeId: 'Pw_0', title: '省', value: ['江苏'] },
+              { codeId: 'Pw_1', title: '市', value: ['南通市'] },
+              { codeId: 'Ps_0', title: '负责人', value: '已绑定人员' },
+            ],
+            fieldMap: {},
+            rawRecord: {},
+          },
+        ],
+      }),
+      executeGet: async () => ({ record: null }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-record-widget-value-list',
+    sceneKey: 'chat',
+    query: '查询客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const surface = response.message.extraInfo.uiSurfaces?.[0];
+  const recordResult = surface?.commands.find((command: any) => command.updateDataModel)?.updateDataModel.value as any;
+  const firstRecord = recordResult?.records?.[0];
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(recordResult?.displayMode, 'list');
+  assert.doesNotMatch(firstRecord?.title ?? '', new RegExp(ownerOpenId));
+  assert.deepEqual(firstRecord?.tags, ['销售线索阶段', '普通客户']);
+  assert.equal(firstRecord?.subtitle, '江苏 / 南通市');
+  assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '客户状态' && field.value === '销售线索阶段'));
+  assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '省' && field.value === '江苏'));
+  assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '市' && field.value === '南通市'));
+  assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '负责人' && field.value === '已绑定人员'));
+});
+
 test('Record A2UI view model promotes relation fields for associated CRM objects', async () => {
   const cases: Array<{
     objectKey: ShadowObjectKey;
@@ -1570,15 +1795,16 @@ test('Agent runtime clarifies ambiguous implicit record search field instead of 
   assert.equal(searchExtraction.fallbackName, undefined);
 });
 
-test('Agent runtime probes existing customer before ambiguous company info request', async () => {
+test('Agent runtime routes company info request to external info by default', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
-  let searchInput: any = null;
+  let searchCalled = false;
+  let artifactInput: any = null;
   const { service } = createAgentTestService({
     repository,
     intentFrame: companyIntent('安徽艳阳电气集团有限公司'),
     shadowMetadataService: {
       executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
-        searchInput = input;
+        searchCalled = true;
         return {
           records: [
             {
@@ -1598,40 +1824,46 @@ test('Agent runtime probes existing customer before ambiguous company info reque
         throw new Error('not used');
       },
     },
+    artifactService: {
+      createCompanyResearchArtifact: async () => {
+        throw new Error('not used');
+      },
+      search: async (input: any) => {
+        artifactInput = input;
+        return {
+          evidence: [{
+            artifactId: 'artifact-ahyy-001',
+            versionId: 'version-ahyy-001',
+            title: '安徽艳阳电气集团有限公司 公司研究',
+            version: 1,
+            sourceToolCode: 'ext.company_research_pm',
+            anchorIds: ['安徽艳阳电气集团有限公司'],
+            snippet: '公开资料显示其公司信息来自外部信息资料。',
+            score: 0.91,
+          }],
+          qdrantFilter: {},
+          vectorStatus: 'searched',
+          query: input.query,
+        };
+      },
+    },
   });
 
   const response = await service.chat({
-    conversationKey: 'conv-ambiguous-company-info-probe',
+    conversationKey: 'conv-company-info-external-default',
     sceneKey: 'chat',
     query: '给出 安徽艳阳电气 公司信息',
     tenantContext: { operatorOpenId: 'operator-001' },
   });
-  const question = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions[0];
 
-  assert.equal(response.executionState.status, 'waiting_input');
-  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.search');
-  assert.equal(searchInput.agentControl, undefined);
-  assert.equal(searchInput.filters?.[0]?.field, 'customer_name');
-  assert.equal(searchInput.filters?.[0]?.value, '安徽艳阳电气集团有限公司');
-  assert.match(response.message.content, /已找到已有客户/);
-  assert.equal(question?.paramKey, 'next_action');
-  assert.equal(question?.options?.some((item) => item.label === '查看客户信息'), true);
-  assert.equal(question?.options?.some((item) => item.label === '查看已有研究'), false);
-  assert.equal(question?.options?.some((item) => item.label === '进行公司研究'), true);
-  assert.equal(response.message.extraInfo.agentTrace.toolArbitration?.ruleCode, 'crm.subject_profile_lookup');
-  assert.equal(response.message.extraInfo.agentTrace.toolArbitration?.action, 'clarify');
-  assert.equal(response.message.extraInfo.agentTrace.toolArbitration?.probeResult?.count, 1);
-  assert.equal(
-    response.message.extraInfo.agentTrace.toolArbitration?.candidateTools.some((item) => item.toolCode === 'artifact.search'),
-    false,
-  );
-  assert.equal(
-    response.message.extraInfo.agentTrace.policyDecisions?.some((item) => item.policyCode === 'tool.semantic_arbitration_probe'),
-    true,
-  );
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'artifact.search');
+  assert.equal(searchCalled, false);
+  assert.equal(artifactInput.anchors?.[0]?.id, '安徽艳阳电气');
+  assert.match(response.message.content, /外部信息/);
 });
 
-test('Agent runtime does not route unavailable existing research choice to company research', async () => {
+test('Agent runtime does not auto-run company research for company info request', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   let researchCalls = 0;
   const { service } = createAgentTestService({
@@ -1670,223 +1902,17 @@ test('Agent runtime does not route unavailable existing research choice to compa
     },
   });
 
-  const waiting = await service.chat({
-    conversationKey: 'conv-unavailable-existing-research-choice',
+  const response = await service.chat({
+    conversationKey: 'conv-company-info-no-auto-research',
     sceneKey: 'chat',
     query: '给出 安徽艳阳电气 公司信息',
     tenantContext: { operatorOpenId: 'operator-001' },
   });
-  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
 
-  const response = await service.chat({
-    conversationKey: 'conv-unavailable-existing-research-choice',
-    sceneKey: 'chat',
-    query: '查看已有研究',
-    tenantContext: { operatorOpenId: 'operator-001' },
-    resume: {
-      runId: waiting.executionState.runId,
-      action: 'provide_input',
-      interactionId: pending!.interactionId,
-      answers: {
-        next_action: '查看已有研究',
-      },
-    },
-  });
-
-  assert.equal(response.executionState.status, 'waiting_input');
-  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.search');
-  assert.equal(response.message.extraInfo.agentTrace.continuationResolution?.action, 'wait_for_input');
-  assert.match(response.message.extraInfo.agentTrace.continuationResolution?.reason ?? '', /尚未定义/);
-  assert.match(response.message.content, /能力暂未开放/);
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'artifact.search');
+  assert.match(response.message.content, /当前没有检索到可引用外部信息/);
   assert.equal(researchCalls, 0);
-});
-
-test('Agent runtime routes ambiguous company info choice to customer get', async () => {
-  const repository = new AgentRunRepository(createInMemoryDatabase());
-  let getInput: any = null;
-  const longTailMarker = '完整输出尾部标记-END';
-  const longRecordPayload = `${'完整输出字段-'.repeat(700)}${longTailMarker}`;
-  const { service } = createAgentTestService({
-    repository,
-    intentFrame: companyIntent('安徽艳阳电气集团有限公司'),
-    shadowMetadataService: {
-      executeSearch: async () => ({
-        records: [
-          {
-            formInstId: 'customer-ahyy-001',
-            title: '安徽艳阳电气集团有限公司',
-            fields: [{ title: '客户名称', value: '安徽艳阳电气集团有限公司' }],
-            rawRecord: {},
-          },
-        ],
-      }),
-      executeGet: async (_objectKey: ShadowObjectKey, input: any) => {
-        getInput = input;
-        return {
-          record: {
-            formInstId: 'customer-ahyy-001',
-            fields: [
-              { title: '客户名称', value: '安徽艳阳电气集团有限公司' },
-              { title: '客户状态', value: '销售线索阶段' },
-              { title: '完整字段', value: longRecordPayload },
-            ],
-            rawRecord: {
-              longRecordPayload,
-            },
-          },
-        };
-      },
-      previewUpsert: async () => {
-        throw new Error('not used');
-      },
-      executeUpsert: async () => {
-        throw new Error('not used');
-      },
-    },
-  });
-
-  const waiting = await service.chat({
-    conversationKey: 'conv-ambiguous-company-info-view',
-    sceneKey: 'chat',
-    query: '给出 安徽艳阳电气 公司信息',
-    tenantContext: { operatorOpenId: 'operator-001' },
-  });
-  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
-
-  const response = await service.chat({
-    conversationKey: 'conv-ambiguous-company-info-view',
-    sceneKey: 'chat',
-    query: '查看客户信息',
-    tenantContext: { operatorOpenId: 'operator-001' },
-    resume: {
-      runId: waiting.executionState.runId,
-      action: 'provide_input',
-      interactionId: pending!.interactionId,
-      answers: {
-        next_action: '查看客户信息',
-      },
-    },
-  });
-
-  assert.equal(response.executionState.status, 'completed');
-  assert.equal(response.message.extraInfo.agentTrace.continuationResolution?.action, 'route_tool');
-  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.get');
-  assert.equal(getInput.formInstId, 'customer-ahyy-001');
-  assert.match(response.message.content, /已查询到客户/);
-  assert.doesNotMatch(response.message.content, /```json/);
-  assert.doesNotMatch(response.message.content, new RegExp(longTailMarker));
-  assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.kind, 'record-detail');
-  assert.equal(response.message.extraInfo.uiSurfaces?.[0]?.summary.displayMode, 'card');
-  assert.match(
-    JSON.stringify(response.message.extraInfo.uiSurfaces?.[0]?.rawResult),
-    new RegExp(longTailMarker),
-  );
-});
-
-test('Agent runtime routes ambiguous company info choice to company research', async () => {
-  const repository = new AgentRunRepository(createInMemoryDatabase());
-  const researchMocks = createCompanyResearchMocks({ companyName: '安徽艳阳电气集团有限公司' });
-  const { service } = createAgentTestService({
-    repository,
-    intentFrame: companyIntent('安徽艳阳电气集团有限公司'),
-    shadowMetadataService: {
-      executeSearch: async () => ({
-        records: [
-          {
-            formInstId: 'customer-ahyy-001',
-            title: '安徽艳阳电气集团有限公司',
-            fields: [{ title: '客户名称', value: '安徽艳阳电气集团有限公司' }],
-            rawRecord: {},
-          },
-        ],
-      }),
-      executeGet: async () => ({ record: null }),
-      previewUpsert: async () => {
-        throw new Error('not used');
-      },
-      executeUpsert: async () => {
-        throw new Error('not used');
-      },
-    },
-    externalSkillService: researchMocks.externalSkillService,
-    artifactService: researchMocks.artifactService,
-  });
-
-  const waiting = await service.chat({
-    conversationKey: 'conv-ambiguous-company-info-research',
-    sceneKey: 'chat',
-    query: '给出 安徽艳阳电气 公司信息',
-    tenantContext: { operatorOpenId: 'operator-001' },
-  });
-  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
-
-  const response = await service.chat({
-    conversationKey: 'conv-ambiguous-company-info-research',
-    sceneKey: 'chat',
-    query: '进行公司研究',
-    tenantContext: { operatorOpenId: 'operator-001' },
-    resume: {
-      runId: waiting.executionState.runId,
-      action: 'provide_input',
-      interactionId: pending!.interactionId,
-      answers: {
-        next_action: 'company_research',
-      },
-    },
-  });
-
-  const artifactCall = researchMocks.calls.find((item) => item.tool === 'artifact.company_research');
-  assert.equal(response.executionState.status, 'completed');
-  assert.equal(response.message.extraInfo.agentTrace.continuationResolution?.action, 'route_tool');
-  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'external.company_research');
-  assert.equal(response.message.extraInfo.agentTrace.toolArbitration?.conflictGroup, 'subject_profile_lookup');
-  assert.match(response.message.content, /公司研究已完成/);
-  assert.equal((artifactCall?.input as any)?.title, '安徽艳阳电气集团有限公司 公司研究');
-});
-
-test('Agent runtime asks before company research when ambiguous customer probe has no hit', async () => {
-  const repository = new AgentRunRepository(createInMemoryDatabase());
-  const researchCalls: Array<{ tool: string; input: unknown }> = [];
-  const { service } = createAgentTestService({
-    repository,
-    intentFrame: companyIntent('安徽艳阳电气集团有限公司'),
-    shadowMetadataService: {
-      executeSearch: async () => ({ records: [] }),
-      executeGet: async () => ({ record: null }),
-      previewUpsert: async () => {
-        throw new Error('not used');
-      },
-      executeUpsert: async () => {
-        throw new Error('not used');
-      },
-    },
-    externalSkillService: {
-      createSkillJob: async () => {
-        researchCalls.push({ tool: 'external.company_research.job', input: {} });
-        throw new Error('should not auto research');
-      },
-      getSkillJob: async () => {
-        throw new Error('not used');
-      },
-      getSkillJobArtifact: async () => {
-        throw new Error('not used');
-      },
-    },
-  });
-
-  const response = await service.chat({
-    conversationKey: 'conv-ambiguous-company-info-no-hit',
-    sceneKey: 'chat',
-    query: '给出 安徽艳阳电气 公司信息',
-    tenantContext: { operatorOpenId: 'operator-001' },
-  });
-  const question = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions[0];
-
-  assert.equal(response.executionState.status, 'waiting_input');
-  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.search');
-  assert.match(response.message.content, /未查到已有客户/);
-  assert.equal(question?.options?.some((item) => item.value === 'company_research'), true);
-  assert.equal(researchCalls.length, 0);
 });
 
 test('Agent runtime keeps explicit customer info request on record search', async () => {

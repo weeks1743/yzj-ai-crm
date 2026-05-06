@@ -268,6 +268,8 @@ export class SkillExecutor {
         '- 报告必须包含来源链接、日期和简明引用说明。',
         '- 为保证稳定性，请控制在最多 2 次 web_search 与最多 2 次 web_fetch_extract 内完成。',
         '- 已获得公司主体、业务定位、主要产品和 2 条以上来源后，立即调用 write_text_artifact 收口。',
+        '- 如果无法从公开来源确认目标公司主体，或没有可靠公开资料支撑，请不要编造业务定位、产品、风险或销售建议。',
+        '- 查不到有效资料时，仍需调用 write_text_artifact 写入简短 Markdown，明确写出“未检索到「目标公司名」的有效公开公司信息”，并说明未生成公司研究资料。',
         '- 优先选择最新、信息密度高的一手或权威来源，证据足够后立即收口。',
         `- 输出 artifact 建议文件名：company-research-${job.jobId}.md`,
         `- Job 输出目录：${paths.outputsDir}`,

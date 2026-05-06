@@ -5,6 +5,7 @@ import type {
   AppConfig,
   AgentChatRequest,
   AgentConversationUpsertRequest,
+  AgentPersonalSettingsUpdateRequest,
   AgentMetaQuestionOptionsRequest,
   AgentRecordSearchPageRequest,
   ArtifactSearchRequest,
@@ -25,7 +26,9 @@ import type {
 import { ApprovalFileService } from './approval-file-service.js';
 import type { AgentConversationService } from './agent-conversation-service.js';
 import type { AgentObservabilityService } from './agent-observability-service.js';
+import type { AgentPersonalSettingsService } from './agent-personal-settings-service.js';
 import { AgentService } from './agent-service.js';
+import { ArtifactImageService } from './artifact-image-service.js';
 import { AppError, BadRequestError, ServiceUnavailableError } from './errors.js';
 import { ArtifactPresentationService } from './artifact-presentation-service.js';
 import { ArtifactService } from './artifact-service.js';
@@ -47,8 +50,10 @@ interface CreateAdminApiServerOptions {
   enterprisePptTemplateService: EnterprisePptTemplateService;
   artifactService?: ArtifactService;
   artifactPresentationService?: ArtifactPresentationService;
+  artifactImageService?: ArtifactImageService;
   agentService?: AgentService;
   agentConversationService?: AgentConversationService;
+  agentPersonalSettingsService?: AgentPersonalSettingsService;
   agentObservabilityService?: AgentObservabilityService;
 }
 
@@ -67,7 +72,7 @@ function writeJson(
   response.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   });
   response.end(JSON.stringify(payload));
@@ -336,6 +341,29 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         return;
       }
 
+      if (method === 'GET' && url.pathname === '/api/agent/personal-settings') {
+        if (!options.agentPersonalSettingsService) {
+          throw new ServiceUnavailableError('Agent 个人设置服务未启用');
+        }
+        writeJson(
+          response,
+          200,
+          await options.agentPersonalSettingsService.getSettings(
+            url.searchParams.get('operatorOpenId') ?? undefined,
+          ),
+        );
+        return;
+      }
+
+      if (method === 'PUT' && url.pathname === '/api/agent/personal-settings') {
+        if (!options.agentPersonalSettingsService) {
+          throw new ServiceUnavailableError('Agent 个人设置服务未启用');
+        }
+        const payload = await readJsonBody<AgentPersonalSettingsUpdateRequest>(request);
+        writeJson(response, 200, await options.agentPersonalSettingsService.updateSettings(payload));
+        return;
+      }
+
       if (method === 'GET' && url.pathname === '/api/agent/runs') {
         if (!options.agentObservabilityService) {
           throw new ServiceUnavailableError('Agent 观测服务未启用');
@@ -421,6 +449,26 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         const payload = await readJsonBody<ImageGenerationRequest>(request);
         writeJson(response, 200, await options.externalSkillService.generateImage(payload));
         return;
+      }
+
+      if (method === 'GET' && url.pathname.startsWith('/api/artifact-images/')) {
+        if (!options.artifactImageService) {
+          throw new ServiceUnavailableError('Artifact 图片生成服务未启用');
+        }
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length === 4 && parts[3] === 'file') {
+          const generationId = decodeURIComponent(parts[2] ?? '');
+          const { fileName, mimeType, content } = await options.artifactImageService.getImageFile(generationId);
+          const disposition = url.searchParams.get('download') === '1' ? 'attachment' : 'inline';
+          response.writeHead(200, {
+            'Content-Type': mimeType,
+            'Content-Length': String(content.byteLength),
+            'Content-Disposition': `${disposition}; filename="${encodeURIComponent(fileName)}"`,
+            'Access-Control-Allow-Origin': '*',
+          });
+          response.end(content);
+          return;
+        }
       }
 
       if (url.pathname.startsWith('/api/external-skills/')) {
@@ -521,6 +569,15 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           return;
         }
 
+        if (parts.length === 4 && parts[3] === 'image') {
+          if (!options.artifactImageService) {
+            throw new ServiceUnavailableError('Artifact 图片生成服务未启用');
+          }
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          writeJson(response, 200, await options.artifactImageService.getImage(artifactId));
+          return;
+        }
+
         if (parts.length === 3) {
           const artifactId = decodeURIComponent(parts[2] ?? '');
           writeJson(response, 200, await options.artifactService.getArtifact(artifactId));
@@ -536,6 +593,16 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           }
           const artifactId = decodeURIComponent(parts[2] ?? '');
           writeJson(response, 202, await options.artifactPresentationService.ensurePresentation(artifactId));
+          return;
+        }
+
+        if (parts.length === 4 && parts[3] === 'image') {
+          if (!options.artifactImageService) {
+            throw new ServiceUnavailableError('Artifact 图片生成服务未启用');
+          }
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          const payload = await readJsonBody<ImageGenerationRequest>(request);
+          writeJson(response, 202, await options.artifactImageService.generateImage(artifactId, payload));
           return;
         }
       }

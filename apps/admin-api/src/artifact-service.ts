@@ -2,6 +2,7 @@ import type {
   AppConfig,
   ArtifactCreateResponse,
   ArtifactDetailResponse,
+  ArtifactEvidenceRef,
   ArtifactSearchRequest,
   ArtifactSearchResponse,
   ArtifactVersionSummary,
@@ -41,16 +42,36 @@ export class ArtifactService {
     return this.options.repository.getArtifact(artifactId);
   }
 
+  async findLatestCompanyResearchArtifact(input: {
+    eid?: string;
+    appId?: string;
+    companyName: string;
+  }): Promise<ArtifactDetailResponse | null> {
+    const companyName = input.companyName.trim();
+    if (!companyName) {
+      throw new BadRequestError('companyName 不能为空');
+    }
+
+    const detail = await this.options.repository.findLatestCompanyResearchArtifactByAnchor({
+      eid: input.eid?.trim() || this.options.config.yzj.eid,
+      appId: input.appId?.trim() || this.options.config.yzj.appId,
+      companyName,
+    });
+
+    return detail?.markdown.trim() ? detail : null;
+  }
+
   async search(input: ArtifactSearchRequest): Promise<ArtifactSearchResponse> {
     const normalized = this.normalizeSearchInput(input);
     const filter = this.options.vectorService.buildFilter(normalized);
 
     if (!this.options.embeddingService.isConfigured()) {
+      const evidence = await this.searchMetadataFallbackEvidence(normalized);
       return {
         query: normalized.query,
         vectorStatus: 'pending_config',
         qdrantFilter: filter,
-        evidence: [],
+        evidence,
       };
     }
 
@@ -61,20 +82,57 @@ export class ArtifactService {
         filter,
         limit: normalized.limit ?? 5,
       });
+      if (evidence.length) {
+        return {
+          query: normalized.query,
+          vectorStatus: 'searched',
+          qdrantFilter: filter,
+          evidence,
+        };
+      }
+
+      const fallbackEvidence = await this.searchMetadataFallbackEvidence(normalized);
       return {
         query: normalized.query,
         vectorStatus: 'searched',
         qdrantFilter: filter,
-        evidence,
+        evidence: fallbackEvidence,
       };
     } catch {
+      const evidence = await this.searchMetadataFallbackEvidence(normalized);
       return {
         query: normalized.query,
         vectorStatus: 'embedding_failed',
         qdrantFilter: filter,
-        evidence: [],
+        evidence,
       };
     }
+  }
+
+  private async searchMetadataFallbackEvidence(
+    input: Required<Pick<ArtifactSearchRequest, 'eid' | 'appId' | 'query'>> &
+      Omit<ArtifactSearchRequest, 'eid' | 'appId' | 'query'>,
+  ): Promise<ArtifactEvidenceRef[]> {
+    const terms = buildMetadataSearchTerms(input);
+    if (!terms.length) {
+      return [];
+    }
+
+    const repository = this.options.repository as ArtifactRepository & {
+      findCompanyResearchArtifactsByMetadata?: ArtifactRepository['findCompanyResearchArtifactsByMetadata'];
+    };
+    if (typeof repository.findCompanyResearchArtifactsByMetadata !== 'function') {
+      return [];
+    }
+
+    const details = await repository.findCompanyResearchArtifactsByMetadata({
+      eid: input.eid,
+      appId: input.appId,
+      terms,
+      limit: input.limit ?? 5,
+    });
+
+    return details.map((detail, index) => buildFallbackEvidence(detail, index));
   }
 
   private async vectorizeSavedArtifact(saved: SavedArtifactVersion): Promise<ArtifactVersionSummary> {
@@ -172,4 +230,65 @@ export class ArtifactService {
       limit: Math.min(Math.max(input.limit ?? 5, 1), 10),
     };
   }
+}
+
+function buildMetadataSearchTerms(
+  input: Required<Pick<ArtifactSearchRequest, 'eid' | 'appId' | 'query'>> &
+    Omit<ArtifactSearchRequest, 'eid' | 'appId' | 'query'>,
+): string[] {
+  const terms = [
+    ...(input.anchors ?? []).flatMap((anchor) => [anchor.id, anchor.name ?? '']),
+    normalizeMetadataQueryTerm(input.query),
+  ];
+  const seen = new Set<string>();
+  return terms
+    .map((term) => term.replace(/\s+/g, '').trim())
+    .filter((term) => {
+      if (term.length < 2 || seen.has(term)) {
+        return false;
+      }
+      seen.add(term);
+      return true;
+    });
+}
+
+function normalizeMetadataQueryTerm(query: string): string {
+  return query
+    .replace(/(?:只看|仅看|只用|仅用|基于|使用|从|根据|请|帮我|麻烦)/g, '')
+    .replace(/(?:外部信息|系统外信息|系统外资料|公开资料|公开信息)/g, '')
+    .replace(/(?:介绍|说明|讲一下|说说|了解一下|概览|概况)/g, '')
+    .replace(/(?:有什么业务|有哪些业务|主营业务|业务是什么|做什么|优势是什么|竞争优势|核心优势)/g, '')
+    .replace(/(?:公司信息|客户信息|公司资料|客户资料|信息|资料|详情|业务|产品|服务|优势|风险)/g, '')
+    .replace(/(?:是什么|有什么|有哪些|多少|谁|吗|呢|的)/g, '')
+    .replace(/[^\p{Script=Han}A-Za-z0-9]+/gu, '')
+    .trim();
+}
+
+function buildFallbackEvidence(detail: ArtifactDetailResponse, index: number): ArtifactEvidenceRef {
+  const anchors = detail.artifact.anchors;
+  const chunks = chunkMarkdown(detail.markdown);
+  const fallbackChunk = chunks.find((item) => normalizeSnippet(item.text).length >= 40)
+    ?? chunks.find((item) => item.text.trim());
+  const snippet = normalizeSnippet(detail.summary || fallbackChunk?.text || detail.markdown);
+  return {
+    artifactId: detail.artifact.artifactId,
+    versionId: detail.artifact.versionId,
+    title: detail.artifact.title,
+    version: detail.artifact.version,
+    sourceToolCode: detail.artifact.sourceToolCode,
+    anchorTypes: Array.from(new Set(anchors.map((item) => item.type))),
+    anchorIds: Array.from(new Set(anchors.map((item) => item.name || item.id).filter(Boolean))),
+    snippet,
+    heading: fallbackChunk?.heading,
+    score: Math.max(0.3, 0.55 - index * 0.03),
+  };
+}
+
+function normalizeSnippet(value: string): string {
+  return value
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/^#+\s*/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 360);
 }

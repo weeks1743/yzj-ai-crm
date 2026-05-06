@@ -34,6 +34,7 @@ import { ApprovalClient } from './approval-client.js';
 import { DictionaryResolver } from './dictionary-resolver.js';
 import { BadRequestError, NotFoundError } from './errors.js';
 import { LightCloudClient } from './lightcloud-client.js';
+import type { OrgSyncRepository } from './org-sync-repository.js';
 import { ShadowSkillBundleWriter } from './shadow-skill-bundle-writer.js';
 import { ShadowMetadataRepository } from './shadow-metadata-repository.js';
 import {
@@ -111,6 +112,7 @@ interface ShadowMetadataServiceOptions {
   lightCloudClient: LightCloudClient;
   dictionaryResolver: DictionaryResolver;
   skillBundleWriter?: ShadowSkillBundleWriter;
+  orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>;
   publicTemplateProvider?: ShadowPublicTemplateProvider;
   internalTemplateProvider?: ShadowInternalTemplateProvider;
   now?: () => Date;
@@ -493,6 +495,23 @@ function normalizeComparable(value: unknown): string {
     .replace(/\s+/g, '')
     .trim()
     .toLowerCase();
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function hasReadableLiveValue(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasReadableLiveValue);
+  }
+  return true;
 }
 
 function normalizeSwitchInput(value: unknown): {
@@ -1267,6 +1286,7 @@ export class ShadowMetadataService {
   private readonly lightCloudClient: LightCloudClient;
   private readonly dictionaryResolver: DictionaryResolver;
   private readonly skillBundleWriter: ShadowSkillBundleWriter;
+  private readonly orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>;
   private readonly publicTemplateProvider: ShadowPublicTemplateProvider;
   private readonly internalTemplateProvider: ShadowInternalTemplateProvider;
   private readonly now: () => Date;
@@ -1283,6 +1303,7 @@ export class ShadowMetadataService {
     this.skillBundleWriter = options.skillBundleWriter ?? new ShadowSkillBundleWriter({
       outputDir: this.config.shadow.skillOutputDir,
     });
+    this.orgSyncRepository = options.orgSyncRepository;
     this.publicTemplateProvider = options.publicTemplateProvider ?? new ApprovalPublicTemplateProvider({
       approvalClient: this.approvalClient,
     });
@@ -1570,6 +1591,9 @@ export class ShadowMetadataService {
       body: requestBody,
     });
 
+    const records = page.content.map((record) => this.mapLiveRecord(record, objectKey));
+    await this.resolveLivePersonFieldNames(records);
+
     return {
       objectKey,
       operation: 'search',
@@ -1579,7 +1603,7 @@ export class ShadowMetadataService {
       pageSize: page.pageSize,
       totalPages: page.totalPages,
       totalElements: page.totalElements,
-      records: page.content.map((record) => this.mapLiveRecord(record)),
+      records,
     };
   }
 
@@ -1754,12 +1778,15 @@ export class ShadowMetadataService {
       throw new NotFoundError(`未找到${mapShadowObjectLabel(objectKey)}记录: ${formInstId}`);
     }
 
+    const liveRecord = this.mapLiveRecord(record, objectKey);
+    await this.resolveLivePersonFieldNames([liveRecord]);
+
     return {
       objectKey,
       operation: 'get',
       mode: 'live',
       requestBody,
-      record: this.mapLiveRecord(record),
+      record: liveRecord,
     };
   }
 
@@ -3029,8 +3056,10 @@ export class ShadowMetadataService {
     formInstId?: string;
     formInstance?: {
       id?: string;
+      widgetValue?: Record<string, unknown>;
     };
     important?: Record<string, unknown>;
+    widgetValue?: Record<string, unknown>;
     fieldContent?: Array<{
       codeId: string;
       title?: string;
@@ -3040,7 +3069,7 @@ export class ShadowMetadataService {
       parentCodeId?: string | null;
     }>;
     [key: string]: unknown;
-  }): ShadowLiveRecord {
+  }, objectKey?: ShadowObjectKey): ShadowLiveRecord {
     const formInstId =
       (typeof record.formInstId === 'string' && record.formInstId.trim()) ||
       (typeof record.id === 'string' && record.id.trim()) ||
@@ -3054,6 +3083,7 @@ export class ShadowMetadataService {
       rawValue: field.rawValue,
       parentCodeId: field.parentCodeId ?? null,
     }));
+    fields.push(...this.buildLiveFieldsFromWidgetValue(record, objectKey, fields));
 
     return {
       formInstId,
@@ -3062,6 +3092,244 @@ export class ShadowMetadataService {
       fieldMap: Object.fromEntries(fields.map((field) => [field.codeId, field])),
       rawRecord: record,
     };
+  }
+
+  private buildLiveFieldsFromWidgetValue(record: {
+    formInstId?: string;
+    formInstance?: {
+      widgetValue?: Record<string, unknown>;
+    };
+    widgetValue?: Record<string, unknown>;
+  }, objectKey?: ShadowObjectKey, existingFields: ShadowLiveRecordField[] = []): ShadowLiveRecordField[] {
+    if (!objectKey) {
+      return [];
+    }
+    const widgetValue = isPlainRecord(record.widgetValue)
+      ? record.widgetValue
+      : isPlainRecord(record.formInstance?.widgetValue)
+        ? record.formInstance.widgetValue
+        : null;
+    if (!widgetValue) {
+      return [];
+    }
+    const snapshot = this.getObjectContext(objectKey).snapshot;
+    if (!snapshot) {
+      return [];
+    }
+    const existingCodes = new Set(existingFields.map((field) => field.codeId));
+    const dictionaryBindings = new Map((snapshot.dictionaryBindings ?? []).map((binding) => [binding.fieldCode, binding]));
+    return snapshot.normalizedFields
+      .filter((field) => !existingCodes.has(field.fieldCode))
+      .filter((field) => Object.prototype.hasOwnProperty.call(widgetValue, field.fieldCode))
+      .map((field) => {
+        const rawValue = widgetValue[field.fieldCode];
+        return {
+          codeId: field.fieldCode,
+          title: field.label,
+          type: field.widgetType,
+          value: this.formatLiveWidgetValue({
+            field,
+            rawValue,
+            dictionaryBinding: dictionaryBindings.get(field.fieldCode),
+          }),
+          rawValue,
+          parentCodeId: null,
+        } satisfies ShadowLiveRecordField;
+      })
+      .filter((field) => hasReadableLiveValue(field.value) || hasReadableLiveValue(field.rawValue));
+  }
+
+  private formatLiveWidgetValue(params: {
+    field: ShadowStandardizedField;
+    rawValue: unknown;
+    dictionaryBinding?: ShadowDictionaryBindingRecord;
+  }): unknown {
+    const { field, rawValue, dictionaryBinding } = params;
+    if (rawValue === null || rawValue === undefined || rawValue === '') {
+      return '';
+    }
+
+    if (field.widgetType === 'radioWidget') {
+      return this.formatLiveStaticOptionValue(field, rawValue);
+    }
+
+    if (field.widgetType === 'checkboxWidget') {
+      const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+      return values.map((value) => this.formatLiveStaticOptionValue(field, value)).filter(Boolean);
+    }
+
+    if (field.widgetType === 'switchWidget') {
+      return this.formatLiveSwitchValue(field, rawValue);
+    }
+
+    if (field.widgetType === 'publicOptBoxWidget') {
+      return this.formatLivePublicOptionValue(rawValue, dictionaryBinding);
+    }
+
+    if (field.widgetType === 'personSelectWidget') {
+      return this.formatLivePersonValue(rawValue);
+    }
+
+    if (field.widgetType === 'dateWidget') {
+      return this.formatLiveDateValue(rawValue);
+    }
+
+    return rawValue;
+  }
+
+  private formatLiveStaticOptionValue(field: ShadowStandardizedField, rawValue: unknown): string {
+    const rawText = String(rawValue ?? '').trim();
+    if (!rawText) {
+      return '';
+    }
+    const option = field.options.find((item) =>
+      item.key === rawValue ||
+      item.title === rawValue ||
+      item.value === rawValue ||
+      item.key === rawText ||
+      item.title === rawText ||
+      item.value === rawText
+    );
+    return String(option?.title ?? option?.value ?? option?.key ?? rawText).trim();
+  }
+
+  private formatLiveSwitchValue(field: ShadowStandardizedField, rawValue: unknown): string {
+    const matched = this.formatLiveStaticOptionValue(field, rawValue);
+    if (matched && matched !== String(rawValue ?? '').trim()) {
+      return matched;
+    }
+    const normalized = normalizeSwitchInput(rawValue);
+    if (normalized.booleanValue !== null) {
+      return normalized.booleanValue ? '启用' : '停用';
+    }
+    return matched;
+  }
+
+  private formatLivePublicOptionValue(rawValue: unknown, dictionaryBinding?: ShadowDictionaryBindingRecord): unknown {
+    const entries = dictionaryBinding?.entries ?? [];
+    const entryByDicId = new Map(entries.map((entry) => [entry.dicId, entry]));
+    const formatOne = (value: unknown): unknown => {
+      if (value && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        const title = typeof record.title === 'string' && record.title.trim()
+          ? record.title.trim()
+          : '';
+        if (title) {
+          return title;
+        }
+        const dicId = typeof record.dicId === 'string' && record.dicId.trim()
+          ? record.dicId.trim()
+          : '';
+        return entryByDicId.get(dicId)?.title ?? dicId;
+      }
+      if (typeof value === 'string' && value.trim()) {
+        return entryByDicId.get(value.trim())?.title ?? value.trim();
+      }
+      return value;
+    };
+    return Array.isArray(rawValue)
+      ? rawValue.map(formatOne).filter(Boolean)
+      : formatOne(rawValue);
+  }
+
+  private formatLivePersonValue(rawValue: unknown): unknown {
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    const names = values
+      .map((item) => {
+        if (item && typeof item === 'object') {
+          const record = item as Record<string, unknown>;
+          return String(record.name ?? record.title ?? record.displayName ?? record.showName ?? '').trim();
+        }
+        return '';
+      })
+      .filter(Boolean);
+    if (names.length) {
+      return names;
+    }
+    return values.filter((item) => typeof item === 'string' && item.trim()).length ? '已绑定人员' : '';
+  }
+
+  private async resolveLivePersonFieldNames(records: ShadowLiveRecord[]): Promise<void> {
+    if (!this.orgSyncRepository || records.length === 0) {
+      return;
+    }
+    const openIds = new Set<string>();
+    for (const record of records) {
+      for (const field of record.fields) {
+        if (field.type === 'personSelectWidget') {
+          for (const openId of this.extractLivePersonOpenIds(field.rawValue)) {
+            openIds.add(openId);
+          }
+        }
+      }
+    }
+    if (openIds.size === 0) {
+      return;
+    }
+
+    const nameByOpenId = new Map<string, string>();
+    await Promise.all([...openIds].map(async (openId) => {
+      try {
+        const candidates = await this.orgSyncRepository?.findEmployees({
+          eid: this.config.yzj.eid,
+          appId: this.config.yzj.appId,
+          keyword: openId,
+          limit: 5,
+        }) ?? [];
+        const exact = candidates.find((candidate) => candidate.openId === openId && candidate.name?.trim());
+        if (exact?.name?.trim()) {
+          nameByOpenId.set(openId, exact.name.trim());
+        }
+      } catch {
+        // Employee names improve display only; record reads should not fail when org lookup is unavailable.
+      }
+    }));
+    if (nameByOpenId.size === 0) {
+      return;
+    }
+
+    for (const record of records) {
+      for (const field of record.fields) {
+        if (field.type !== 'personSelectWidget') {
+          continue;
+        }
+        const names = this.extractLivePersonOpenIds(field.rawValue)
+          .map((openId) => nameByOpenId.get(openId))
+          .filter((name): name is string => Boolean(name));
+        if (names.length === 1) {
+          field.value = names[0];
+        } else if (names.length > 1) {
+          field.value = names;
+        }
+      }
+    }
+  }
+
+  private extractLivePersonOpenIds(rawValue: unknown): string[] {
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    return values
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item.trim();
+        }
+        if (item && typeof item === 'object') {
+          const record = item as Record<string, unknown>;
+          return String(record.open_id ?? record.openId ?? '').trim();
+        }
+        return '';
+      })
+      .filter((openId) => /^[0-9a-f]{16,64}$/i.test(openId));
+  }
+
+  private formatLiveDateValue(rawValue: unknown): unknown {
+    if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) {
+      return rawValue;
+    }
+    const date = new Date(rawValue);
+    if (Number.isNaN(date.getTime())) {
+      return rawValue;
+    }
+    return date.toISOString().slice(0, 10);
   }
 
   private findField(fields: ShadowStandardizedField[], inputKey: string): ShadowStandardizedField | undefined {

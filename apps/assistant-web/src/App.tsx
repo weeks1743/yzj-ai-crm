@@ -1,17 +1,16 @@
 import {
-  BarsOutlined,
   CloudUploadOutlined,
   CompassOutlined,
   CopyOutlined,
   CloseOutlined,
+  DownloadOutlined,
   EyeOutlined,
   FileSearchOutlined,
   GlobalOutlined,
+  PictureOutlined,
   PlusOutlined,
   ProductOutlined,
-  QuestionCircleOutlined,
-  RobotOutlined,
-  ScheduleOutlined,
+  SettingOutlined,
   ShareAltOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
@@ -26,7 +25,6 @@ import {
   Attachments,
   Bubble,
   Conversations,
-  FileCard,
   Prompts,
   Sender,
   Think,
@@ -51,7 +49,6 @@ import {
   Alert,
   Button,
   Card,
-  Divider,
   Drawer,
   Flex,
   Space,
@@ -75,11 +72,14 @@ import type {
   AgentRecordSearchPageResponse,
   AgentConversationListResponse,
   AgentConversationUpsertRequest,
+  AgentPersonalSettingsResponse,
+  AgentPersonalSettingsUpdateRequest,
   AgentMetaQuestionOptionsResponse,
   AgentRunDetailResponse,
   AgentRunListResponse,
   AgentUiSurface,
   ConversationSession,
+  ImageGenerationRequest,
   ShadowObjectKey,
 } from '@shared/types';
 import { brandTitle } from '@shared/brand';
@@ -94,7 +94,7 @@ import {
   buildAssistantConversationKey,
   providerFactory,
 } from './agent-api-provider';
-import { assistantScenes, buildPromptGroups, getSceneByPath, sceneOrder } from './scene-meta';
+import { assistantScenes, buildPromptGroups, getSceneByPath } from './scene-meta';
 import { RunInsightDrawer } from './RunInsightDrawer';
 import { useMarkdownTheme } from './use-markdown-theme';
 import brandLogo from '@shared/assets/logo.png';
@@ -121,10 +121,40 @@ const LEGACY_CHAT_STORAGE_KEYS = [
 ];
 const USER_CONVERSATION_KEY_PREFIX = `${buildAssistantConversationKey('user')}-`;
 const NEW_CONVERSATION_LABEL = '新会话';
-const NEW_CONVERSATION_LAST_MESSAGE = '可以描述目标、选择场景或输入 slash 命令。';
+const NEW_CONVERSATION_LAST_MESSAGE = '输入公司名称，或使用 /公司研究 开始研究。';
+const DEPRECATED_WORKBENCH_SCENE_KEYS = new Set([
+  'customer-analysis',
+  'conversation-understanding',
+  'needs-todo-analysis',
+  'problem-statement',
+  'value-positioning',
+  'solution-matching',
+  'tasks',
+]);
+const DEPRECATED_WORKBENCH_ROUTES = new Set([
+  '/chat/customer-analysis',
+  '/chat/conversation-understanding',
+  '/chat/needs-todo-analysis',
+  '/chat/problem-statement',
+  '/chat/value-positioning',
+  '/chat/solution-matching',
+  '/chat/tasks',
+]);
 const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1';
 const RECORD_RESULT_TABLE_PAGE_SIZE = 5;
 const REMOTE_CONVERSATION_RUN_PAGE_SIZE = 50;
+const PERSONAL_SETTINGS_ROUTE = '/settings/personal';
+
+const DEFAULT_PERSONAL_SETTINGS: AgentPersonalSettingsResponse = {
+  eid: '',
+  appId: '',
+  operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+  displayName: '陈伟棠',
+  roleLabel: '金蝶云之家销售',
+  soulPrompt: '',
+  isDefaultSoulPrompt: true,
+  updatedAt: null,
+};
 
 const recordResultCatalog: Catalog = {
   $id: RECORD_RESULT_A2UI_CATALOG_ID,
@@ -154,97 +184,24 @@ const recordResultCatalog: Catalog = {
 registerCatalog(recordResultCatalog);
 
 const runtimeTenantContext = {
-  owner: '当前用户',
-  tenantName: '当前租户',
+  owner: '陈伟棠',
+  tenantName: '金蝶云之家销售',
   eidLabel: '由 admin-api 配置',
   appIdLabel: '由 admin-api 配置',
 };
 
-const sceneIconMap: Record<string, React.ReactNode> = {
-  'customer-analysis': <FileSearchOutlined />,
-  'conversation-understanding': <RobotOutlined />,
-  'needs-todo-analysis': <ScheduleOutlined />,
-  'problem-statement': <GlobalOutlined />,
-  'value-positioning': <ProductOutlined />,
-  'solution-matching': <ProductOutlined />,
-  tasks: <BarsOutlined />,
-  chat: <CompassOutlined />,
-};
-
 const senderShortcutIcons = [
-  <CloudUploadOutlined />,
-  <FileSearchOutlined />,
-  <RobotOutlined />,
-  <GlobalOutlined />,
-  <ProductOutlined />,
-  <ShareAltOutlined />,
   <FileSearchOutlined />,
 ];
 
 const slashCommands = [
   {
-    key: 'plan',
-    command: '/计划',
-    description: '基于录音、纪要或自然语言目标生成可裁剪计划',
-    icon: <CompassOutlined />,
-    route: '/chat',
-    draft: '/计划 ',
-  },
-  {
-    key: 'customer-analysis',
-    command: '/客户分析',
-    description: '汇总客户、联系人、商机和公司研究供给',
+    key: 'company-research',
+    command: '/公司研究',
+    description: '研究公司并复用已有有效研究',
     icon: <FileSearchOutlined />,
-    route: '/chat/customer-analysis',
-    draft: '/客户分析 ',
-  },
-  {
-    key: 'conversation-understanding',
-    command: '/拜访会话理解',
-    description: '从录音或纪要提炼事实、承诺事项和风险',
-    icon: <RobotOutlined />,
-    route: '/chat/conversation-understanding',
-    draft: '/拜访会话理解 ',
-  },
-  {
-    key: 'needs-todo-analysis',
-    command: '/客户需求工作待办分析',
-    description: '拆解客户需求、客户侧待办和我方待办',
-    icon: <ScheduleOutlined />,
-    route: '/chat/needs-todo-analysis',
-    draft: '/客户需求工作待办分析 ',
-  },
-  {
-    key: 'problem-statement',
-    command: '/问题陈述',
-    description: '把需求、约束和风险整理成统一问题定义',
-    icon: <GlobalOutlined />,
-    route: '/chat/problem-statement',
-    draft: '/问题陈述 ',
-  },
-  {
-    key: 'value-positioning',
-    command: '/客户价值定位',
-    description: '形成价值主张、推进话术和方案输入',
-    icon: <ProductOutlined />,
-    route: '/chat/value-positioning',
-    draft: '/客户价值定位 ',
-  },
-  {
-    key: 'solution-matching',
-    command: '/方案匹配',
-    description: '匹配内部方案和可引用案例',
-    icon: <ProductOutlined />,
-    route: '/chat/solution-matching',
-    draft: '/方案匹配 ',
-  },
-  {
-    key: 'tasks',
-    command: '/我的任务',
-    description: '查看任务、资产、追踪和待确认写回',
-    icon: <BarsOutlined />,
-    route: '/chat/tasks',
-    draft: '/我的任务',
+    route: '/chat',
+    draft: '/公司研究 ',
   },
 ];
 
@@ -253,6 +210,8 @@ type SlashCommand = (typeof slashCommands)[number];
 type OpenArtifactHandler = (evidence: AssistantEvidenceCard) => void;
 type PresentationTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title'>;
 type GeneratePresentationHandler = (target: PresentationTarget) => void;
+type ImageGenerationTarget = PresentationTarget & Pick<AssistantEvidenceCard, 'snippet' | 'anchorLabel'>;
+type GenerateImageHandler = (target: ImageGenerationTarget) => void;
 type MetaQuestionSubmitHandler = (input: {
   runId: string;
   interactionId: string;
@@ -308,6 +267,36 @@ interface ArtifactPresentationPayload {
     downloadPath: string;
   };
   errorMessage?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+type ArtifactImageStatus = 'not_started' | 'queued' | 'succeeded' | 'failed';
+
+type GroupedEvidenceCard = AssistantEvidenceCard & {
+  matchCount: number;
+};
+
+interface ArtifactImagePayload {
+  artifactId: string;
+  versionId: string;
+  title: string;
+  status: ArtifactImageStatus;
+  generationId?: string;
+  prompt?: string;
+  previewDataUrl?: string;
+  previewUrl?: string;
+  downloadPath?: string;
+  fileName?: string;
+  mimeType?: string;
+  byteSize?: number;
+  model?: string;
+  provider?: string;
+  size?: string;
+  quality?: string;
+  latencyMs?: number;
+  errorMessage?: string | null;
+  generatedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -450,6 +439,72 @@ const useStyles = createStyles(({ token, css }) => ({
   `,
   sideFooterInfo: css`
     min-width: 0;
+  `,
+  sideFooterButton: css`
+    flex: none;
+  `,
+  settingsPage: css`
+    height: 100%;
+    width: calc(100% - 280px);
+    min-width: 0;
+    overflow-y: auto;
+    background: ${token.colorBgContainer};
+    padding: 32px 40px;
+    box-sizing: border-box;
+  `,
+  settingsInner: css`
+    max-width: 920px;
+    margin: 0 auto;
+  `,
+  settingsHeader: css`
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+  `,
+  settingsTitle: css`
+    margin: 0;
+    color: ${token.colorText};
+    font-size: 24px;
+    line-height: 1.25;
+    font-weight: 700;
+  `,
+  settingsDescription: css`
+    margin-top: 8px;
+    color: ${token.colorTextSecondary};
+    line-height: 1.7;
+  `,
+  settingsPanel: css`
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    background: ${token.colorBgContainer};
+    box-shadow: 0 14px 38px rgba(15, 23, 42, 0.06);
+  `,
+  settingsPanelBody: css`
+    padding: 20px;
+  `,
+  settingsTextarea: css`
+    width: 100%;
+    margin-top: 14px;
+    font-family:
+      AlibabaPuHuiTi,
+      "Alibaba Sans",
+      ${token.fontFamily},
+      sans-serif;
+    line-height: 1.75;
+  `,
+  settingsActions: css`
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 14px;
+  `,
+  settingsMeta: css`
+    margin-top: 12px;
+    color: ${token.colorTextTertiary};
+    font-size: 12px;
+    line-height: 1.6;
   `,
   chat: css`
     height: 100%;
@@ -876,19 +931,6 @@ const useStyles = createStyles(({ token, css }) => ({
     padding: 10px 12px;
     background: ${token.colorFillQuaternary};
   `,
-  artifactFileList: css`
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 8px;
-
-    .ant-file-card {
-      width: 260px;
-      background: ${token.colorBgContainer};
-      border-color: ${token.colorPrimaryBorder};
-      cursor: pointer;
-    }
-  `,
   evidenceGrid: css`
     margin-top: 8px;
 
@@ -937,6 +979,28 @@ const useStyles = createStyles(({ token, css }) => ({
     font-size: 12px;
     line-height: 1.5;
   `,
+  evidenceImagePreview: css`
+    margin-top: 12px;
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    background: ${token.colorBgContainer};
+    overflow: hidden;
+    max-width: 520px;
+
+    img {
+      display: block;
+      width: 100%;
+      aspect-ratio: 3 / 2;
+      object-fit: cover;
+      background: ${token.colorFillQuaternary};
+    }
+  `,
+  evidenceImageCaption: css`
+    padding: 8px 10px;
+    color: ${token.colorTextSecondary};
+    font-size: 12px;
+    line-height: 1.5;
+  `,
   markdownDrawerBody: css`
     .ant-drawer-body {
       padding: 0;
@@ -981,36 +1045,64 @@ const ThinkComponent = React.memo((props: ComponentProps) => {
   return <Think title={title} loading={loading}>{props.children}</Think>;
 });
 
-function getEvidenceKey(item: AssistantEvidenceCard, index: number) {
-  return `${item.artifactId}-${item.versionId}-${index}`;
+function getGroupedEvidenceKey(item: AssistantEvidenceCard) {
+  return `${item.artifactId}-${item.versionId}`;
 }
 
-function getVectorStatusColor(status?: string) {
-  if (status === 'indexed' || status === 'searched') {
-    return 'success';
+function groupEvidenceByArtifact(evidence: AssistantEvidenceCard[]): GroupedEvidenceCard[] {
+  const grouped = new Map<string, GroupedEvidenceCard>();
+  for (const item of evidence) {
+    const key = getGroupedEvidenceKey(item);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, { ...item, matchCount: 1 });
+      continue;
+    }
+
+    existing.matchCount += 1;
+    const currentScore = typeof existing.score === 'number' ? existing.score : -1;
+    const nextScore = typeof item.score === 'number' ? item.score : -1;
+    if (nextScore > currentScore) {
+      existing.snippet = item.snippet;
+      existing.score = item.score;
+      existing.anchorLabel = item.anchorLabel || existing.anchorLabel;
+    }
   }
-  if (status === 'embedding_failed') {
-    return 'error';
-  }
-  if (status === 'pending_config' || status === 'pending_embedding') {
-    return 'warning';
-  }
-  return 'default';
+  return [...grouped.values()];
 }
 
 function compactSnippet(value?: string) {
   const normalized = (value || '').replace(/\s+/g, ' ').trim();
-  return normalized.length > 220 ? `${normalized.slice(0, 220)}…` : normalized;
+  return normalized.length > 420 ? `${normalized.slice(0, 420)}…` : normalized;
 }
 
 function formatReferenceLabel(value: string) {
   if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value)) {
-    return `Skill Job · ${value.slice(0, 8)}`;
+    return '';
   }
-  if (value === 'company-research' || value === 'company-research-fallback') {
-    return 'company-research Skill';
+  if (
+    value === 'company-research'
+    || value === 'company-research-fallback'
+    || value === 'external.company_research'
+    || value === 'artifact.company_research.lookup'
+  ) {
+    return '公司研究资料';
+  }
+  if (value === 'ext.company_research_pm') {
+    return '公司研究服务';
+  }
+  if (/^record\./.test(value) || /^artifact\./.test(value) || /^meta\./.test(value)) {
+    return '';
   }
   return value;
+}
+
+function getVisibleReferenceLabels(references?: string[]) {
+  return Array.from(new Set(
+    (references ?? [])
+      .map(formatReferenceLabel)
+      .filter((item): item is string => Boolean(item)),
+  ));
 }
 
 function isPresentationRunning(status?: ArtifactPresentationStatus) {
@@ -1028,6 +1120,35 @@ function getPresentationButtonLabel(presentation?: ArtifactPresentationPayload) 
     return '下载 PPT';
   }
   return '重新生成 PPT';
+}
+
+function isImageGenerating(status?: ArtifactImageStatus) {
+  return status === 'queued';
+}
+
+function getImageButtonLabel(image?: ArtifactImagePayload) {
+  if (!image || image.status === 'not_started') {
+    return '生成图片';
+  }
+  if (isImageGenerating(image.status)) {
+    return '图片生成中';
+  }
+  if (image.status === 'succeeded') {
+    return '重新生成图片';
+  }
+  return '重新生成图片';
+}
+
+function buildCompanyResearchImagePrompt(target: ImageGenerationTarget) {
+  const company = target.anchorLabel?.trim() || target.title.replace(/\s*公司研究\s*$/, '').trim();
+  const summary = (target.snippet || '').replace(/\s+/g, ' ').trim();
+  return [
+    '请生成一张适合销售汇报或客户洞察页使用的商务配图。',
+    `公司：${company || target.title}`,
+    `资料标题：${target.title}`,
+    summary ? `研究摘要：${summary}` : '',
+    '画面要求：专业、清晰、偏真实商务视觉，体现行业洞察、业务机会、风险判断和销售推进，不要包含小字长文，不要出现技术界面截图。',
+  ].filter(Boolean).join('\n');
 }
 
 function getBrowserStorage() {
@@ -1288,6 +1409,15 @@ function isUserCreatedConversationKey(key?: string) {
   return Boolean(key?.startsWith(USER_CONVERSATION_KEY_PREFIX));
 }
 
+function isDeprecatedWorkbenchSceneConversation(conversation: ConversationSession) {
+  return (
+    conversation.group === '场景入口'
+    || DEPRECATED_WORKBENCH_SCENE_KEYS.has(conversation.scene)
+    || DEPRECATED_WORKBENCH_ROUTES.has(conversation.route)
+    || conversation.key.startsWith(buildAssistantConversationKey('scene-'))
+  );
+}
+
 function normalizeConversationTitle(title: string) {
   if (/^新会话\s+\d{1,2}:\d{2}$/.test(title.trim())) {
     return NEW_CONVERSATION_LABEL;
@@ -1315,6 +1445,20 @@ function isBlankUserConversation(conversation?: ConversationSession) {
     normalizeConversationTitle(conversation.label) === NEW_CONVERSATION_LABEL
     && conversation.lastMessage === NEW_CONVERSATION_LAST_MESSAGE
   );
+}
+
+function keepSingleBlankConversation(conversations: ConversationSession[]): ConversationSession[] {
+  let blankSeen = false;
+  return conversations.filter((conversation) => {
+    if (!isBlankUserConversation(conversation)) {
+      return true;
+    }
+    if (blankSeen) {
+      return false;
+    }
+    blankSeen = true;
+    return true;
+  });
 }
 
 function buildConversationTitleFromQuery(query: string) {
@@ -1346,9 +1490,12 @@ function readPersistedConversationStore(): PersistedConversationStore {
     }
     return {
       version: CHAT_STORAGE_VERSION,
-      conversations: parsed.conversations
-        .filter(isPersistableConversation)
-        .map(normalizeConversationSession),
+      conversations: keepSingleBlankConversation(
+        parsed.conversations
+          .filter(isPersistableConversation)
+          .filter((item) => !isDeprecatedWorkbenchSceneConversation(item))
+          .map(normalizeConversationSession),
+      ),
     };
   } catch {
     return { version: CHAT_STORAGE_VERSION, conversations: [] };
@@ -1372,7 +1519,7 @@ function mergePersistedConversations(baseConversations: ConversationSession[]) {
   const customConversations = readPersistedConversationStore().conversations
     .filter((item) => !fixedKeys.has(item.key));
 
-  return [...customConversations, ...baseConversations];
+  return [...keepSingleBlankConversation(customConversations), ...baseConversations];
 }
 
 function persistCustomConversations(
@@ -1382,10 +1529,13 @@ function persistCustomConversations(
   const fixedKeys = new Set(baseConversations.map((item) => item.key));
   writePersistedConversationStore({
     version: CHAT_STORAGE_VERSION,
-    conversations: conversations
-      .filter((item) => !fixedKeys.has(item.key))
-      .filter(isPersistableConversation)
-      .map(normalizeConversationSession),
+    conversations: keepSingleBlankConversation(
+      conversations
+        .filter((item) => !fixedKeys.has(item.key))
+        .filter(isPersistableConversation)
+        .filter((item) => !isDeprecatedWorkbenchSceneConversation(item))
+        .map(normalizeConversationSession),
+    ),
   });
 }
 
@@ -1398,18 +1548,23 @@ function mergeRemoteConversations(
   const customConversations = remoteConversations
     .filter(isPersistableConversation)
     .map(normalizeConversationSession)
+    .filter((item) => !isDeprecatedWorkbenchSceneConversation(item))
     .filter((item) => !fixedKeys.has(item.key));
   const remoteKeys = new Set(customConversations.map((item) => item.key));
   const pendingLocalConversations = localConversations
     .filter(isPersistableConversation)
     .map(normalizeConversationSession)
+    .filter((item) => !isDeprecatedWorkbenchSceneConversation(item))
     .filter((item) =>
       !fixedKeys.has(item.key)
       && !remoteKeys.has(item.key)
       && isBlankUserConversation(item),
     );
 
-  return [...pendingLocalConversations, ...customConversations, ...baseConversations];
+  return [
+    ...keepSingleBlankConversation([...pendingLocalConversations, ...customConversations]),
+    ...baseConversations,
+  ];
 }
 
 async function fetchRemoteConversations(): Promise<ConversationSession[] | null> {
@@ -1445,6 +1600,35 @@ async function persistRemoteConversation(conversation: ConversationSession): Pro
   }
 }
 
+async function fetchPersonalSettings(): Promise<AgentPersonalSettingsResponse> {
+  const query = new URLSearchParams({
+    operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+  });
+  const response = await fetch(`/api/agent/personal-settings?${query.toString()}`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(await readApiErrorMessage(response));
+  }
+  return response.json() as Promise<AgentPersonalSettingsResponse>;
+}
+
+async function updatePersonalSettings(soulPrompt: string): Promise<AgentPersonalSettingsResponse> {
+  const payload: AgentPersonalSettingsUpdateRequest = {
+    operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+    soulPrompt,
+  };
+  const response = await fetch('/api/agent/personal-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await readApiErrorMessage(response));
+  }
+  return response.json() as Promise<AgentPersonalSettingsResponse>;
+}
+
 function getStoredActiveConversationKey(allowedKeys: string[]) {
   const storage = getBrowserStorage();
   const key = storage?.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
@@ -1458,17 +1642,6 @@ function persistActiveConversationKey(key: string) {
   } catch {
     // Ignore storage quota or private-mode failures.
   }
-}
-
-function uniqueEvidenceArtifacts(evidence: AssistantEvidenceCard[]) {
-  const visited = new Set<string>();
-  return evidence.filter((item) => {
-    if (visited.has(item.artifactId)) {
-      return false;
-    }
-    visited.add(item.artifactId);
-    return true;
-  });
 }
 
 type PendingConfirmationView = NonNullable<
@@ -2044,7 +2217,7 @@ function RecordResultList({
       fixed: 'left',
       render: (_value, record) => (
         <div className={styles.recordResultItem}>
-          <Text strong className={styles.recordResultTitleText}>{record.title}</Text>
+          <Text strong className={styles.recordResultTitleText}>{getRecordDisplayTitle(record, activeResult)}</Text>
           {record.subtitle ? <div className={styles.recordResultSummary}>{record.subtitle}</div> : null}
         </div>
       ),
@@ -2104,7 +2277,7 @@ function RecordResultList({
           onClick={() => onAction?.('record.open', {
             objectKey: activeResult?.objectKey,
             formInstId: record.formInstId,
-            title: record.title,
+            title: getRecordDisplayTitle(record, activeResult),
           })}
         >
           查看详情
@@ -2220,11 +2393,12 @@ function RecordResultCard({
     return <RecordResultEmpty result={result} styles={styles} />;
   }
   const fields = [...(record.primaryFields ?? []), ...(record.secondaryFields ?? [])];
+  const recordTitle = getRecordDisplayTitle(record, result);
   return (
     <div className={styles.recordResultPanel}>
       <div className={styles.recordResultHeader}>
         <div className={styles.recordResultCardTitle}>
-          <Text strong>{record.title}</Text>
+          <Text strong>{recordTitle}</Text>
           {record.subtitle ? <div className={styles.recordResultSummary}>{record.subtitle}</div> : null}
           <RecordTags tags={record.tags} />
         </div>
@@ -2235,7 +2409,7 @@ function RecordResultCard({
             onClick={() => onAction?.('record.open', {
               objectKey: result?.objectKey,
               formInstId: record.formInstId,
-              title: record.title,
+              title: recordTitle,
             })}
           >
             查看详情
@@ -2386,6 +2560,49 @@ function mapRecordObjectLabel(objectKey?: string) {
   return '客户';
 }
 
+function getRecordDisplayTitle(record: RecordResultRecordView, result?: RecordResultViewModel): string {
+  const rawTitle = record.title?.trim() ?? '';
+  if (rawTitle && !isInternalRecordIdentifier(rawTitle, record.formInstId)) {
+    return rawTitle;
+  }
+  return readRecordQueryTitleFallback(result?.queryText, result?.objectKey)
+    || `${mapRecordObjectLabel(result?.objectKey)}记录`;
+}
+
+function readRecordQueryTitleFallback(query?: string, objectKey?: string): string {
+  if (!query?.trim()) {
+    return '';
+  }
+  const objectLabels = objectKey === 'contact'
+    ? '(?:联系人|人员)'
+    : objectKey === 'opportunity'
+      ? '(?:商机|机会)'
+      : objectKey === 'followup'
+        ? '(?:跟进记录|拜访记录|回访记录|跟进|拜访|回访)'
+        : '(?:客户|公司)';
+  return query
+    .trim()
+    .replace(/^\/\S+\s*/, '')
+    .replace(/^(?:查询|查一下|查|搜索|找一下|查看|看下|打开|帮我查|帮我搜)\s*/, '')
+    .replace(new RegExp(`^${objectLabels}\\s*[：:,，]?\\s*`), '')
+    .replace(/(?:客户情况|客户状态|客户处于什么状态|客户是什么状态|详情|信息|资料|列表|结果)$/g, '')
+    .replace(/^[：:，。！？、\s]+/g, '')
+    .replace(/[：:，。！？、\s]+$/g, '')
+    .trim();
+}
+
+function isInternalRecordIdentifier(value?: string, formInstId?: string): boolean {
+  const normalized = value?.replace(/\s+/g, '').trim() ?? '';
+  if (!normalized) {
+    return false;
+  }
+  if (formInstId && normalized === formInstId.replace(/\s+/g, '').trim()) {
+    return true;
+  }
+  return /^[0-9a-f]{16,64}$/i.test(normalized)
+    || /^(?:customer|contact|opportunity|followup|form|record)[-_][A-Za-z0-9_-]+$/i.test(normalized);
+}
+
 function isShadowObjectKey(value: string): value is ShadowObjectKey {
   return value === 'customer' || value === 'contact' || value === 'opportunity' || value === 'followup';
 }
@@ -2397,11 +2614,13 @@ function AssistantMessageContent({
   markdownClassName,
   onOpenArtifact,
   onGeneratePresentation,
+  onGenerateImage,
   onOpenRecord,
   onSubmitQuestionCard,
   activeQuestionInteractionId,
   submittedQuestionInteractionIds,
   presentationByArtifactId,
+  imageByArtifactId,
 }: {
   content: string;
   info: any;
@@ -2409,19 +2628,25 @@ function AssistantMessageContent({
   markdownClassName: string;
   onOpenArtifact: OpenArtifactHandler;
   onGeneratePresentation: GeneratePresentationHandler;
+  onGenerateImage: GenerateImageHandler;
   onOpenRecord?: OpenRecordHandler;
   onSubmitQuestionCard?: MetaQuestionSubmitHandler;
   activeQuestionInteractionId?: string;
   submittedQuestionInteractionIds?: Set<string>;
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>;
+  imageByArtifactId: Record<string, ArtifactImagePayload>;
 }) {
   const evidence = (info.extraInfo?.evidence ?? []) as AssistantEvidenceCard[];
+  const groupedEvidence = useMemo(() => groupEvidenceByArtifact(evidence), [evidence]);
   const uiSurfaces = (info.extraInfo?.uiSurfaces ?? []) as AgentUiSurface[];
   const pendingConfirmation = info.extraInfo?.agentTrace?.pendingConfirmation as PendingConfirmationView | null | undefined;
   const pendingInteraction = info.extraInfo?.agentTrace?.pendingInteraction as PendingInteractionView | null | undefined;
-  const artifactFiles = uniqueEvidenceArtifacts(evidence);
+  const referenceLabels = getVisibleReferenceLabels(info.extraInfo?.references);
+  const visibleAttachments = ((info.attachments as any[]) ?? []).filter(
+    (attachment) => attachment?.type !== 'markdown',
+  );
   const evidenceByKey = new Map(
-    evidence.map((item, index) => [getEvidenceKey(item, index), item]),
+    groupedEvidence.map((item) => [getGroupedEvidenceKey(item), item]),
   );
 
   return (
@@ -2457,28 +2682,11 @@ function AssistantMessageContent({
         </div>
       )}
 
-      {artifactFiles.length ? (
-        <div className={styles.inlineRefs}>
-          <Text strong>Markdown Artifact</Text>
-          <div className={styles.artifactFileList}>
-            {artifactFiles.map((item) => (
-              <FileCard
-                key={item.artifactId}
-                name={`${item.title}.md`}
-                icon="markdown"
-                description={`v${item.version} · ${item.vectorStatus ?? 'artifact'}`}
-                onClick={() => onOpenArtifact(item)}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {(info.attachments as any[])?.length ? (
+      {visibleAttachments.length ? (
         <div className={styles.inlineRefs}>
           <Text strong>关联附件</Text>
           <div style={{ marginTop: 8 }}>
-            {(info.attachments as any[]).map((attachment: any) => (
+            {visibleAttachments.map((attachment: any) => (
               <Tag key={attachment.name} color="blue">
                 {attachment.name}
               </Tag>
@@ -2487,52 +2695,52 @@ function AssistantMessageContent({
         </div>
       ) : null}
 
-      {info.extraInfo?.references?.length ? (
+      {referenceLabels.length ? (
         <div className={styles.inlineRefs}>
           <Text strong>引用上下文</Text>
           <div style={{ marginTop: 8 }}>
-            {info.extraInfo.references.map((item: string) => (
-              <Tag key={item}>{formatReferenceLabel(item)}</Tag>
+            {referenceLabels.map((item) => (
+              <Tag key={item}>{item}</Tag>
             ))}
           </div>
         </div>
       ) : null}
 
-      {evidence.length ? (
+      {groupedEvidence.length ? (
         <div className={styles.inlineRefs}>
           <Space align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Text strong>证据卡</Text>
-            <Text type="secondary">{evidence.length} 条可引用片段</Text>
+            <Text strong>公司研究资料</Text>
+            <Text type="secondary">
+              {groupedEvidence.length} 份资料 · {evidence.length} 条引用内容
+            </Text>
           </Space>
           <Prompts
             vertical
             wrap
             className={styles.evidenceGrid}
-            items={evidence.map((item, index) => ({
-              key: getEvidenceKey(item, index),
+            items={groupedEvidence.map((item) => ({
+              key: getGroupedEvidenceKey(item),
               icon: <FileSearchOutlined />,
               label: (
                 <Space size={6} wrap>
                   <Text strong>{item.title}</Text>
-                  <Tag color="geekblue">v{item.version}</Tag>
-                  {item.vectorStatus ? (
-                    <Tag color={getVectorStatusColor(item.vectorStatus)}>
-                      {item.vectorStatus}
-                    </Tag>
-                  ) : null}
+                  <Tag color="geekblue">第 {item.version} 版</Tag>
                 </Space>
               ),
               description: (
                 <div>
                   {(() => {
                     const presentation = presentationByArtifactId[item.artifactId];
+                    const image = imageByArtifactId[item.artifactId];
                     return (
                       <>
                   <div className={styles.evidenceMeta}>
-                    <Tag color="blue">{item.sourceToolCode}</Tag>
                     <Tag>{item.anchorLabel}</Tag>
                     {typeof item.score === 'number' ? (
                       <Tag color="purple">{Math.round(item.score * 100)}%</Tag>
+                    ) : null}
+                    {item.matchCount > 1 ? (
+                      <Tag>{item.matchCount} 条命中片段</Tag>
                     ) : null}
                   </div>
                   <div className={styles.evidenceSnippet}>{compactSnippet(item.snippet)}</div>
@@ -2547,7 +2755,7 @@ function AssistantMessageContent({
                         onOpenArtifact(item);
                       }}
                     >
-                      查看完整 Markdown
+                      查看完整研究
                     </Button>
                     <Button
                       type="link"
@@ -2567,9 +2775,48 @@ function AssistantMessageContent({
                     >
                       {getPresentationButtonLabel(presentation)}
                     </Button>
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<PictureOutlined />}
+                      loading={isImageGenerating(image?.status)}
+                      disabled={isImageGenerating(image?.status)}
+                      style={{ paddingInline: 0 }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onGenerateImage(item);
+                      }}
+                    >
+                      {getImageButtonLabel(image)}
+                    </Button>
                   </Space>
                   {presentation?.status === 'failed' && presentation.errorMessage ? (
                     <div className={styles.evidenceErrorText}>{presentation.errorMessage}</div>
+                  ) : null}
+                  {image?.status === 'failed' && image.errorMessage ? (
+                    <div className={styles.evidenceErrorText}>{image.errorMessage}</div>
+                  ) : null}
+                  {image?.status === 'succeeded' && (image.previewUrl || image.previewDataUrl) ? (
+                    <div className={styles.evidenceImagePreview}>
+                      <img src={image.previewUrl || image.previewDataUrl} alt={`${item.anchorLabel || item.title} 公司研究配图`} />
+                      <Space size={8} wrap className={styles.evidenceImageCaption}>
+                        <span>公司研究配图已保存，可继续基于这份资料追问或制作材料。</span>
+                        {image.downloadPath ? (
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<DownloadOutlined />}
+                            style={{ paddingInline: 0 }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              window.open(image.downloadPath, '_blank', 'noopener,noreferrer');
+                            }}
+                          >
+                            下载图片
+                          </Button>
+                        ) : null}
+                      </Space>
+                    </div>
                   ) : null}
                       </>
                     );
@@ -2680,47 +2927,6 @@ function AgentThinkingPanel({
   );
 }
 
-function buildSceneEntryPrompts() {
-  return [
-    {
-      key: 'scene-entry',
-      label: '销售主链路',
-      children: sceneOrder
-        .filter((item) =>
-          [
-            'customer-analysis',
-            'conversation-understanding',
-            'needs-todo-analysis',
-            'problem-statement',
-            'value-positioning',
-            'solution-matching',
-          ].includes(item.key),
-        )
-        .map((item) => ({
-          key: `scene-${item.key}`,
-          label: item.title,
-          description: item.subtitle,
-          icon: sceneIconMap[item.key],
-          route: item.route,
-        })),
-    },
-  ] satisfies GetProp<typeof Prompts, 'items'>;
-}
-
-function buildFixedSceneConversations(): ConversationSession[] {
-  return sceneOrder
-    .filter((item) => item.key !== 'chat')
-    .map((item) => ({
-      key: buildAssistantConversationKey(`scene-${item.key}`),
-      label: item.title,
-      route: item.route,
-      group: '场景入口',
-      lastMessage: item.subtitle,
-      updatedAt: '固定入口',
-      scene: item.key,
-    }));
-}
-
 function buildSenderPrompts(scene = assistantScenes.chat) {
   return scene.prompts.slice(0, 4).map((item, index) => ({
     key: item.key,
@@ -2732,21 +2938,21 @@ function buildSenderPrompts(scene = assistantScenes.chat) {
 function getSceneSlashCommand(sceneKey: string) {
   switch (sceneKey) {
     case 'customer-analysis':
-      return '/客户分析';
+      return '/公司研究';
     case 'conversation-understanding':
-      return '/拜访会话理解';
+      return '/公司研究';
     case 'needs-todo-analysis':
-      return '/客户需求工作待办分析';
+      return '/公司研究';
     case 'problem-statement':
-      return '/问题陈述';
+      return '/公司研究';
     case 'value-positioning':
-      return '/客户价值定位';
+      return '/公司研究';
     case 'solution-matching':
-      return '/方案匹配';
+      return '/公司研究';
     case 'tasks':
-      return '/我的任务';
+      return '/公司研究';
     default:
-      return '/';
+      return '/公司研究';
   }
 }
 
@@ -2759,7 +2965,7 @@ function getSlashCommandFromInput(text: string) {
 }
 
 function getSlashCommandByRoute(route: string) {
-  return slashCommands.find((item) => item.route === route && item.key !== 'plan');
+  return slashCommands.find((item) => item.route === route && item.route !== '/chat');
 }
 
 function resolveWritebackResume(
@@ -2835,7 +3041,7 @@ function getSceneSourceTags(sceneKey: string) {
   if (sceneKey === 'tasks') {
     return ['追踪编号', '任务编号', '资产结果', '写回状态'];
   }
-  return ['slash 命令', '计划模板', 'shadow.* 对象能力', 'ext.* 外部技能'];
+  return ['公司名称', '已有研究', '公司研究服务', '公司研究资料'];
 }
 
 function MessageFooter({
@@ -2904,11 +3110,13 @@ function buildRole(
   markdownClassName: string,
   onOpenArtifact: OpenArtifactHandler,
   onGeneratePresentation: GeneratePresentationHandler,
+  onGenerateImage: GenerateImageHandler,
   onOpenRecord: OpenRecordHandler,
   onSubmitQuestionCard: MetaQuestionSubmitHandler,
   activeQuestionInteractionId: string | undefined,
   submittedQuestionInteractionIds: Set<string>,
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>,
+  imageByArtifactId: Record<string, ArtifactImagePayload>,
 ): BubbleListProps['role'] {
   return {
     assistant: {
@@ -2961,11 +3169,13 @@ function buildRole(
           markdownClassName={markdownClassName}
           onOpenArtifact={onOpenArtifact}
           onGeneratePresentation={onGeneratePresentation}
+          onGenerateImage={onGenerateImage}
           onOpenRecord={onOpenRecord}
           onSubmitQuestionCard={onSubmitQuestionCard}
           activeQuestionInteractionId={activeQuestionInteractionId}
           submittedQuestionInteractionIds={submittedQuestionInteractionIds}
           presentationByArtifactId={presentationByArtifactId}
+          imageByArtifactId={imageByArtifactId}
         />
       ),
     },
@@ -2996,15 +3206,15 @@ function ArtifactMarkdownDrawer({
     <Drawer
       title={
         <Space orientation="vertical" size={2}>
-          <Text strong>{state.title || '公司研究 Markdown'}</Text>
+          <Text strong>{state.title || '公司研究资料'}</Text>
           {state.artifact ? (
             <Text type="secondary">
-              {state.artifact.sourceToolCode} · v{state.artifact.version} · {state.artifact.chunkCount} chunks
+              第 {state.artifact.version} 版 · 更新于 {state.artifact.updatedAt}
             </Text>
           ) : null}
         </Space>
       }
-      width="min(960px, 92vw)"
+      size="large"
       open={state.open}
       onClose={onClose}
       destroyOnClose={false}
@@ -3046,7 +3256,7 @@ function ArtifactMarkdownDrawer({
           <Alert
             type="error"
             showIcon
-            message="Markdown 加载失败"
+            message="公司研究资料加载失败"
             description={state.error}
           />
         ) : (
@@ -3054,17 +3264,13 @@ function ArtifactMarkdownDrawer({
             {state.artifact ? (
               <>
                 <Space wrap>
-                  <Tag color="geekblue">v{state.artifact.version}</Tag>
-                  <Tag color={getVectorStatusColor(state.artifact.vectorStatus)}>
-                    {state.artifact.vectorStatus}
-                  </Tag>
+                  <Tag color="geekblue">第 {state.artifact.version} 版</Tag>
                   <Tag>{state.artifact.updatedAt}</Tag>
                 </Space>
-                <Divider />
               </>
             ) : null}
             <XMarkdown paragraphTag="div" className={markdownClassName}>
-              {state.markdown || '暂无 Markdown 内容。'}
+              {state.markdown || '暂无公司研究资料内容。'}
             </XMarkdown>
           </Card>
         )}
@@ -3118,6 +3324,7 @@ function AssistantConversationRuntime({
   const [presentationByArtifactId, setPresentationByArtifactId] = useState<
     Record<string, ArtifactPresentationPayload>
   >({});
+  const [imageByArtifactId, setImageByArtifactId] = useState<Record<string, ArtifactImagePayload>>({});
   const [submittedQuestionInteractionIds, setSubmittedQuestionInteractionIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -3125,7 +3332,6 @@ function AssistantConversationRuntime({
     null,
   );
   const promptGroups = useMemo(() => buildPromptGroups(scene), [scene]);
-  const sceneEntryPrompts = useMemo(() => buildSceneEntryPrompts(), []);
   const senderPrompts = useMemo(() => buildSenderPrompts(scene), [scene]);
   const slashInput = inputValue.trimStart();
   const slashQuery = slashInput.startsWith('/') ? slashInput.slice(1).trim() : '';
@@ -3228,6 +3434,10 @@ function AssistantConversationRuntime({
   const latestPendingConfirmationTrace = findLatestPendingConfirmationTrace(displayMessageList);
   const activeQuestionInteractionId = findLatestPendingQuestionInteractionId(displayMessageList);
   const latestEvidence = latestAgentMessage?.message.extraInfo?.evidence ?? [];
+  const visibleEvidenceCards = useMemo(
+    () => displayMessageList.flatMap((item) => item.message.extraInfo?.evidence ?? []),
+    [displayMessageList],
+  );
   const safeScrollToBottom = React.useCallback(() => {
     const bubbleList = listRef.current;
     if (!bubbleList?.scrollBoxNativeElement) {
@@ -3299,6 +3509,57 @@ function AssistantConversationRuntime({
     }));
     return payload;
   }, []);
+
+  const fetchImageStatus = React.useCallback(async (artifactId: string) => {
+    const response = await fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/image`);
+    if (!response.ok) {
+      throw new Error(`图片状态接口返回 ${response.status}`);
+    }
+    const payload = (await response.json()) as ArtifactImagePayload;
+    setImageByArtifactId((current) => ({
+      ...current,
+      [artifactId]: payload,
+    }));
+    return payload;
+  }, []);
+
+  useEffect(() => {
+    const missingArtifacts = Array.from(new Set(
+      visibleEvidenceCards
+        .filter((item) => item.artifactId && !imageByArtifactId[item.artifactId])
+        .map((item) => item.artifactId),
+    ));
+
+    if (!missingArtifacts.length) {
+      return;
+    }
+
+    missingArtifacts.forEach((artifactId) => {
+      void fetchImageStatus(artifactId).catch(() => {
+        // Keep the evidence card usable even if the stored image metadata is not available.
+      });
+    });
+  }, [fetchImageStatus, imageByArtifactId, visibleEvidenceCards]);
+
+  useEffect(() => {
+    const generatingArtifacts = Object.values(imageByArtifactId)
+      .filter((item) => isImageGenerating(item.status))
+      .map((item) => item.artifactId);
+
+    if (!generatingArtifacts.length) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      generatingArtifacts.forEach((artifactId) => {
+        void fetchImageStatus(artifactId).catch(() => {
+          // Keep the visible generating state; the next poll or manual retry can recover.
+        });
+      });
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [fetchImageStatus, imageByArtifactId]);
 
   useEffect(() => {
     const runningArtifacts = Object.values(presentationByArtifactId)
@@ -3380,6 +3641,75 @@ function AssistantConversationRuntime({
     [messageApi, presentationByArtifactId],
   );
 
+  const handleGenerateImage = React.useCallback<GenerateImageHandler>(
+    async (evidence) => {
+      const existing = imageByArtifactId[evidence.artifactId];
+      if (isImageGenerating(existing?.status)) {
+        return;
+      }
+
+      const prompt = buildCompanyResearchImagePrompt(evidence);
+      setImageByArtifactId((current) => ({
+        ...current,
+        [evidence.artifactId]: {
+          artifactId: evidence.artifactId,
+          versionId: evidence.versionId,
+          title: evidence.title,
+          status: 'queued',
+          prompt,
+        },
+      }));
+
+      try {
+        const request: ImageGenerationRequest = {
+          prompt,
+          size: '1536x1024',
+          quality: 'auto',
+        };
+        const response = await fetch(`/api/artifacts/${encodeURIComponent(evidence.artifactId)}/image`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request),
+        });
+        if (!response.ok) {
+          throw new Error(await readApiErrorMessage(response));
+        }
+
+        const payload = (await response.json()) as ArtifactImagePayload;
+        setImageByArtifactId((current) => ({
+          ...current,
+          [evidence.artifactId]: {
+            ...payload,
+            prompt: payload.prompt ?? prompt,
+          },
+        }));
+        if (payload.status === 'succeeded') {
+          messageApi.success('图片已生成并保存');
+        } else {
+          messageApi.error(payload.errorMessage || '图片生成失败，可重新生成');
+        }
+        window.requestAnimationFrame(() => {
+          safeScrollToBottom();
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : '图片生成失败';
+        setImageByArtifactId((current) => ({
+          ...current,
+          [evidence.artifactId]: {
+            artifactId: evidence.artifactId,
+            versionId: evidence.versionId,
+            title: evidence.title,
+            status: 'failed',
+            prompt,
+            errorMessage,
+          },
+        }));
+        messageApi.error(errorMessage);
+      }
+    },
+    [imageByArtifactId, messageApi, safeScrollToBottom],
+  );
+
   const handleSubmitQuestionCard = React.useCallback<MetaQuestionSubmitHandler>(
     ({ runId, interactionId, answers, queryText }) => {
       if (isRequesting) {
@@ -3416,8 +3746,11 @@ function AssistantConversationRuntime({
         return;
       }
       const objectLabel = mapRecordObjectLabel(objectKey);
-      const queryText = title?.trim()
-        ? `打开${objectLabel}：${title.trim()}`
+      const safeTitle = title?.trim() && !isInternalRecordIdentifier(title, formInstId)
+        ? title.trim()
+        : '';
+      const queryText = safeTitle
+        ? `打开${objectLabel}：${safeTitle}`
         : `打开${objectLabel}详情`;
       onRequest({
         query: queryText,
@@ -3429,7 +3762,7 @@ function AssistantConversationRuntime({
                 type: 'record.open' as const,
                 objectKey,
                 formInstId,
-                ...(title?.trim() ? { title: title.trim() } : {}),
+                ...(safeTitle ? { title: safeTitle } : {}),
               },
             }
           : {}),
@@ -3455,7 +3788,7 @@ function AssistantConversationRuntime({
       try {
         const response = await fetch(`/api/artifacts/${encodeURIComponent(evidence.artifactId)}`);
         if (!response.ok) {
-          throw new Error(`Artifact API 返回 ${response.status}`);
+          throw new Error(`公司研究资料接口返回 ${response.status}`);
         }
         const payload = (await response.json()) as ArtifactDetailPayload;
         setArtifactViewer({
@@ -3477,16 +3810,18 @@ function AssistantConversationRuntime({
           title: evidence.title,
           artifactId: evidence.artifactId,
           markdown: '',
-          error: error instanceof Error ? error.message : '无法读取 Artifact Markdown',
+          error: error instanceof Error ? error.message : '无法读取公司研究资料',
         });
       }
-    }, handleGeneratePresentation, handleOpenRecord, handleSubmitQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, presentationByArtifactId),
+    }, handleGeneratePresentation, handleGenerateImage, handleOpenRecord, handleSubmitQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, presentationByArtifactId, imageByArtifactId),
     [
       activeQuestionInteractionId,
       fetchPresentationStatus,
+      handleGenerateImage,
       handleGeneratePresentation,
       handleOpenRecord,
       handleSubmitQuestionCard,
+      imageByArtifactId,
       markdownClassName,
       presentationByArtifactId,
       submittedQuestionInteractionIds,
@@ -3507,7 +3842,9 @@ function AssistantConversationRuntime({
   }, [handleNavigateToScene, locationPathname]);
 
   const selectSlashCommand = (command: SlashCommand) => {
-    handleNavigateToScene(command.route);
+    if (locationPathname !== command.route) {
+      handleNavigateToScene(command.route);
+    }
     setAttachmentsOpen(false);
     setSlashMenuOpen(false);
     setSelectedComposerCommand(command);
@@ -3532,6 +3869,11 @@ function AssistantConversationRuntime({
 
   const onSubmit = (text: string) => {
     const normalizedText = text.trim();
+    if (selectedComposerCommand?.key === 'company-research' && !normalizedText) {
+      messageApi.warning('请输入公司全称');
+      return;
+    }
+
     const queryText = selectedComposerCommand && !getSlashCommandFromInput(normalizedText)
       ? `${selectedComposerCommand.command}${normalizedText ? ` ${normalizedText}` : ''}`
       : normalizedText;
@@ -3589,6 +3931,7 @@ function AssistantConversationRuntime({
       resume: resolveWritebackResume(queryText, latestPendingConfirmationTrace ?? latestAgentTrace),
     });
     setInputValue('');
+    setSelectedComposerCommand(null);
     setAttachedFiles([]);
     setAttachmentsOpen(false);
     setSlashMenuOpen(false);
@@ -3604,6 +3947,11 @@ function AssistantConversationRuntime({
 
     const normalized = value.trim();
     if (!normalized) {
+      return;
+    }
+
+    if (normalized === '/公司研究') {
+      selectSlashCommand(slashCommands[0]);
       return;
     }
 
@@ -3623,11 +3971,11 @@ function AssistantConversationRuntime({
         onChange={(info) => setAttachedFiles(info.fileList)}
         placeholder={(type) =>
           type === 'drop'
-            ? { title: '把录音、纪要或材料拖到这里' }
+            ? { title: '把公司资料或临时材料拖到这里' }
             : {
                 icon: <CloudUploadOutlined />,
-                title: '上传录音与材料',
-                description: '支持录音、纪要、研究资料和临时附件',
+                title: '上传公司材料',
+                description: '支持研究资料和临时附件',
               }
         }
       />
@@ -3647,13 +3995,10 @@ function AssistantConversationRuntime({
             className={styles.promptCard}
           />
           <Prompts
-            items={sceneEntryPrompts}
+            items={promptGroups.guides}
             styles={promptGroupStyles}
             onItemClick={(info) => {
-              const route = (info.data as { route?: string }).route;
-              if (route) {
-                handleNavigateToScene(route);
-              }
+              submitPromptText((info.data.description || info.data.label) as string);
             }}
             className={styles.promptCard}
           />
@@ -3840,7 +4185,11 @@ function AssistantConversationRuntime({
         loading={isRequesting}
         className={styles.sender}
         allowSpeech
-        placeholder={scene.defaultInput}
+        placeholder={
+          selectedComposerCommand?.key === 'company-research'
+            ? '请输入公司全称，例如：上海松井机械有限公司'
+            : scene.defaultInput
+        }
       />
     </Flex>
   );
@@ -3855,7 +4204,7 @@ function AssistantConversationRuntime({
               <Tag color="purple">命中 {getSceneSlashCommand(scene.key)}</Tag>
             </>
           ) : (
-            <Tag color="cyan">slash 命令入口</Tag>
+            <Tag color="cyan">公司研究入口</Tag>
           )}
           <Button
             type="text"
@@ -3896,6 +4245,111 @@ function AssistantConversationRuntime({
   );
 }
 
+function PersonalSettingsPage({
+  settings,
+  loading,
+  styles,
+  messageApi,
+  onSettingsChange,
+}: {
+  settings: AgentPersonalSettingsResponse;
+  loading: boolean;
+  styles: ReturnType<typeof useStyles>['styles'];
+  messageApi: ReturnType<typeof message.useMessage>[0];
+  onSettingsChange: (settings: AgentPersonalSettingsResponse) => void;
+}) {
+  const [draft, setDraft] = useState(settings.soulPrompt);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(settings.soulPrompt);
+  }, [settings.soulPrompt]);
+
+  const handleSave = React.useCallback(async () => {
+    setSaving(true);
+    try {
+      const next = await updatePersonalSettings(draft);
+      onSettingsChange(next);
+      messageApi.success('SOUL 已保存');
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : 'SOUL 保存失败');
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, messageApi, onSettingsChange]);
+
+  const handleRestoreDefault = React.useCallback(async () => {
+    setSaving(true);
+    try {
+      const next = await updatePersonalSettings('');
+      onSettingsChange(next);
+      setDraft(next.soulPrompt);
+      messageApi.success('已恢复默认 SOUL');
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : '恢复默认 SOUL 失败');
+    } finally {
+      setSaving(false);
+    }
+  }, [messageApi, onSettingsChange]);
+
+  return (
+    <main className={styles.settingsPage}>
+      <div className={styles.settingsInner}>
+        <div className={styles.settingsHeader}>
+          <div>
+            <h1 className={styles.settingsTitle}>个人设置</h1>
+            <div className={styles.settingsDescription}>
+              SOUL 是你的销售立场配置。本轮仅保存配置，后续销售速览和拜访建议可基于它生成更贴近金蝶云之家制造业方案的内容。
+            </div>
+          </div>
+          <Space>
+            <Tag color="blue">{settings.displayName}</Tag>
+            <Tag color={settings.isDefaultSoulPrompt ? 'default' : 'green'}>
+              {settings.isDefaultSoulPrompt ? 'SOUL 未配置' : 'SOUL 已配置'}
+            </Tag>
+          </Space>
+        </div>
+        <div className={styles.settingsPanel}>
+          <div className={styles.settingsPanelBody}>
+            {loading ? (
+              <Skeleton active paragraph={{ rows: 10 }} />
+            ) : (
+              <>
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Text strong>SOUL 提示词</Text>
+                  <Text type="secondary">
+                    当前按租户和用户保存，绑定 eid 与 operatorOpenId，不会影响其他销售。
+                  </Text>
+                </Space>
+                <Input.TextArea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  autoSize={{ minRows: 16, maxRows: 26 }}
+                  className={styles.settingsTextarea}
+                  placeholder="请输入你的销售立场、主推方案和输出偏好。"
+                />
+                <div className={styles.settingsActions}>
+                  <Button onClick={handleRestoreDefault} loading={saving}>
+                    恢复默认
+                  </Button>
+                  <Button type="primary" onClick={handleSave} loading={saving}>
+                    保存 SOUL
+                  </Button>
+                </div>
+                <div className={styles.settingsMeta}>
+                  {settings.updatedAt
+                    ? `上次保存：${settings.updatedAt}`
+                    : '当前使用系统默认 SOUL，保存后会生成你的个人配置。'}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
 function AssistantWorkspace() {
   const { styles } = useStyles();
   const location = useLocation();
@@ -3903,6 +4357,11 @@ function AssistantWorkspace() {
   const [markdownClassName] = useMarkdownTheme();
   const [messageApi, contextHolder] = message.useMessage();
   const scene = getSceneByPath(location.pathname);
+  const isPersonalSettingsRoute = location.pathname === PERSONAL_SETTINGS_ROUTE;
+  const [personalSettings, setPersonalSettings] = useState<AgentPersonalSettingsResponse>(
+    DEFAULT_PERSONAL_SETTINGS,
+  );
+  const [personalSettingsLoading, setPersonalSettingsLoading] = useState(true);
   const [blankConversationKeys, setBlankConversationKeys] = useState<Set<string>>(
     () => new Set(),
   );
@@ -3913,14 +4372,14 @@ function AssistantWorkspace() {
       label: 'AI 销售工作台',
       route: '/chat',
       group: '固定会话',
-      lastMessage: '从这里描述目标生成计划，或按销售主链路逐步推进。',
+      lastMessage: '输入公司名称，使用公司研究生成或复用 Markdown 资料。',
       updatedAt: '刚刚',
       scene: 'chat',
     }),
     [],
   );
   const baseConversations = useMemo(
-    () => [homeConversation, ...buildFixedSceneConversations()],
+    () => [homeConversation],
     [homeConversation],
   );
   const defaultConversations = useMemo(
@@ -3939,6 +4398,31 @@ function AssistantWorkspace() {
 
   useEffect(() => {
     clearLegacyAssistantStorage();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPersonalSettingsLoading(true);
+    void fetchPersonalSettings()
+      .then((settings) => {
+        if (!cancelled) {
+          setPersonalSettings(settings);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPersonalSettings(DEFAULT_PERSONAL_SETTINGS);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPersonalSettingsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const {
@@ -4030,7 +4514,18 @@ function AssistantWorkspace() {
     navigate(route);
   }, [getConversationKeyByRoute, navigate, setActiveConversationKey]);
 
+  const footerSubtitle = `${personalSettings.roleLabel}${personalSettings.isDefaultSoulPrompt ? ' · SOUL 未配置' : ' · SOUL 已配置'}`;
+
   const onCreateConversation = () => {
+    const existingBlankConversation = conversations.find((item) => (
+      isBlankUserConversation(item as ConversationSession)
+    )) as ConversationSession | undefined;
+    if (existingBlankConversation) {
+      setActiveConversationKey(existingBlankConversation.key);
+      navigate('/chat');
+      return;
+    }
+
     const now = new Date();
     const conversationKey = `${USER_CONVERSATION_KEY_PREFIX}${now.getTime()}`;
     const newConversation: ConversationSession = {
@@ -4047,9 +4542,6 @@ function AssistantWorkspace() {
     setBlankConversationKeys((current) => new Set(current).add(conversationKey));
     persistMessages(conversationKey, []);
     addConversation(newConversation, 'prepend');
-    void persistRemoteConversation(newConversation).catch(() => {
-      // Local state remains usable when admin-api is unavailable.
-    });
     setActiveConversationKey(conversationKey);
     navigate('/chat');
   };
@@ -4090,24 +4582,52 @@ function AssistantWorkspace() {
       <div className={styles.sideFooter}>
         <Space size={10}>
           <Avatar size={24} style={{ backgroundColor: '#1677ff' }}>
-            {runtimeTenantContext.owner.slice(0, 1)}
+            {personalSettings.displayName.slice(0, 1)}
           </Avatar>
           <Space orientation="vertical" size={0} className={styles.sideFooterInfo}>
             <Text strong ellipsis>
-              {runtimeTenantContext.owner}
+              {personalSettings.displayName}
             </Text>
             <Text type="secondary" ellipsis>
-              {runtimeTenantContext.tenantName}
+              {footerSubtitle}
             </Text>
           </Space>
         </Space>
         <Button
           type="text"
-          icon={<QuestionCircleOutlined />}
-          onClick={() => messageApi.info('帮助中心原型将在后续迭代补齐。')}
+          icon={<SettingOutlined />}
+          className={styles.sideFooterButton}
+          onClick={() => navigate(PERSONAL_SETTINGS_ROUTE)}
         />
       </div>
     </div>
+  );
+
+  const mainContent = isPersonalSettingsRoute ? (
+    <PersonalSettingsPage
+      settings={personalSettings}
+      loading={personalSettingsLoading}
+      styles={styles}
+      messageApi={messageApi}
+      onSettingsChange={setPersonalSettings}
+    />
+  ) : (
+    <AssistantConversationRuntime
+      key={activeConversationKey}
+      activeConversationKey={activeConversationKey}
+      activeConversation={activeConversation}
+      conversations={conversations as ConversationSession[]}
+      scene={scene}
+      locationPathname={location.pathname}
+      styles={styles}
+      markdownClassName={markdownClassName}
+      messageApi={messageApi}
+      setConversation={(key, conversation) => setConversation(key, conversation)}
+      navigateToScene={navigateToScene}
+      blankConversationKeys={blankConversationKeys}
+      setBlankConversationKeys={setBlankConversationKeys}
+      pendingBlankConversationSubmitRef={pendingBlankConversationSubmitRef}
+    />
   );
 
   return (
@@ -4115,22 +4635,7 @@ function AssistantWorkspace() {
       {contextHolder}
       <div className={styles.layout}>
         {chatSide}
-        <AssistantConversationRuntime
-          key={activeConversationKey}
-          activeConversationKey={activeConversationKey}
-          activeConversation={activeConversation}
-          conversations={conversations as ConversationSession[]}
-          scene={scene}
-          locationPathname={location.pathname}
-          styles={styles}
-          markdownClassName={markdownClassName}
-          messageApi={messageApi}
-          setConversation={(key, conversation) => setConversation(key, conversation)}
-          navigateToScene={navigateToScene}
-          blankConversationKeys={blankConversationKeys}
-          setBlankConversationKeys={setBlankConversationKeys}
-          pendingBlankConversationSubmitRef={pendingBlankConversationSubmitRef}
-        />
+        {mainContent}
       </div>
     </XProvider>
   );
@@ -4141,13 +4646,15 @@ function App() {
     <Routes>
       <Route path="/" element={<Navigate to="/chat" replace />} />
       <Route path="/chat" element={<AssistantWorkspace />} />
-      <Route path="/chat/customer-analysis" element={<AssistantWorkspace />} />
-      <Route path="/chat/conversation-understanding" element={<AssistantWorkspace />} />
-      <Route path="/chat/needs-todo-analysis" element={<AssistantWorkspace />} />
-      <Route path="/chat/problem-statement" element={<AssistantWorkspace />} />
-      <Route path="/chat/value-positioning" element={<AssistantWorkspace />} />
-      <Route path="/chat/solution-matching" element={<AssistantWorkspace />} />
-      <Route path="/chat/tasks" element={<AssistantWorkspace />} />
+      <Route path="/settings/personal" element={<AssistantWorkspace />} />
+      <Route path="/chat/company-research" element={<Navigate to="/chat" replace />} />
+      <Route path="/chat/customer-analysis" element={<Navigate to="/chat" replace />} />
+      <Route path="/chat/conversation-understanding" element={<Navigate to="/chat" replace />} />
+      <Route path="/chat/needs-todo-analysis" element={<Navigate to="/chat" replace />} />
+      <Route path="/chat/problem-statement" element={<Navigate to="/chat" replace />} />
+      <Route path="/chat/value-positioning" element={<Navigate to="/chat" replace />} />
+      <Route path="/chat/solution-matching" element={<Navigate to="/chat" replace />} />
+      <Route path="/chat/tasks" element={<Navigate to="/chat" replace />} />
     </Routes>
   );
 }

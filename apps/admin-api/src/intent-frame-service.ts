@@ -1,6 +1,12 @@
 import type { AgentChatRequest, AppConfig, IntentFrame } from './contracts.js';
 import type { DeepSeekChatClient } from './deepseek-chat-client.js';
-import { cleanupCompanyName, extractCompanyName, inferFallbackIntent, isCompanyResearchQuery } from './agent-utils.js';
+import {
+  cleanupCompanyName,
+  extractCompanyName,
+  inferFallbackIntent,
+  isCompanyResearchQuery,
+  isUsableCompanyName,
+} from './agent-utils.js';
 import { getErrorMessage } from './errors.js';
 
 export class IntentFrameService {
@@ -47,6 +53,7 @@ function normalizeIntent(value: any, input: AgentChatRequest, focusedCompany?: s
   const queryCompanyName = extractCompanyName(input.query);
   const materialCompanyName = extractCompanyNameFromMaterials(value?.inputMaterials);
   const repairedCompanyName = queryCompanyName || materialCompanyName || '';
+  const hasCompanyResearchVerb = isCompanyResearchQuery(input.query);
   const targets: IntentFrame['targets'] = Array.isArray(value?.targets)
     ? value.targets
         .map((item: any) => ({
@@ -54,9 +61,14 @@ function normalizeIntent(value: any, input: AgentChatRequest, focusedCompany?: s
           id: cleanupCompanyName(String(item?.id || item?.name || '').trim()),
           name: cleanupCompanyName(String(item?.name || item?.id || '').trim()),
         }))
-        .filter((item: { id: string; name: string }) => item.id && item.name)
+        .filter((item: { type: IntentFrame['targetType']; id: string; name: string }) => (
+          item.id
+          && item.name
+          && (item.type !== 'company' && !hasCompanyResearchVerb
+            ? true
+            : isUsableCompanyName(item.name || item.id))
+        ))
     : [];
-  const hasCompanyResearchVerb = isCompanyResearchQuery(input.query);
   if (hasCompanyResearchVerb && repairedCompanyName) {
     const repairedTarget = { type: 'company' as const, id: repairedCompanyName, name: repairedCompanyName };
     const companyTargetIndex = targets.findIndex((item) => item.type === 'company');
@@ -65,19 +77,20 @@ function normalizeIntent(value: any, input: AgentChatRequest, focusedCompany?: s
     } else {
       targets.unshift(repairedTarget);
     }
-  } else if (!targets.length && repairedCompanyName) {
+  } else if (!targets.length && isUsableCompanyName(repairedCompanyName)) {
     targets.push({ type: 'company', id: repairedCompanyName, name: repairedCompanyName });
   }
-  if (!targets.length && focusedCompany && value?.actionType === 'query') {
-    targets.push({ type: 'company', id: focusedCompany, name: focusedCompany });
+  if (!targets.length && focusedCompany && isUsableCompanyName(cleanupCompanyName(focusedCompany)) && value?.actionType === 'query') {
+    const cleanedFocusedCompany = cleanupCompanyName(focusedCompany);
+    targets.push({ type: 'company', id: cleanedFocusedCompany, name: cleanedFocusedCompany });
   }
 
-  const actionType = hasCompanyResearchVerb && repairedCompanyName
+  const actionType = hasCompanyResearchVerb
     ? 'analyze'
     : ['query', 'analyze', 'write', 'plan', 'export', 'clarify'].includes(value?.actionType)
     ? value.actionType
     : 'clarify';
-  const targetType = hasCompanyResearchVerb && repairedCompanyName
+  const targetType = hasCompanyResearchVerb
     ? 'company'
     : ['company', 'customer', 'opportunity', 'contact', 'followup', 'artifact', 'unknown'].includes(value?.targetType)
     ? value.targetType
@@ -90,7 +103,7 @@ function normalizeIntent(value: any, input: AgentChatRequest, focusedCompany?: s
     targets,
     inputMaterials: Array.isArray(value?.inputMaterials) ? value.inputMaterials.map(String) : [],
     constraints: Array.isArray(value?.constraints) ? value.constraints.map(String) : [],
-    missingSlots: Array.isArray(value?.missingSlots) ? value.missingSlots.map(String) : [],
+    missingSlots: normalizeMissingSlots(value?.missingSlots, hasCompanyResearchVerb && !targets.length),
     confidence: Number.isFinite(Number(value?.confidence)) ? Math.max(0, Math.min(1, Number(value.confidence))) : 0.6,
     source: 'llm',
   };
@@ -109,10 +122,18 @@ function extractCompanyNameFromMaterials(value: unknown): string {
 
   for (const item of value) {
     const candidate = cleanupCompanyName(String(item ?? ''));
-    if (candidate && (candidate.includes('公司') || candidate.includes('集团') || candidate.includes('有限'))) {
+    if (isUsableCompanyName(candidate) && (candidate.includes('公司') || candidate.includes('集团') || candidate.includes('有限'))) {
       return candidate;
     }
   }
 
   return '';
+}
+
+function normalizeMissingSlots(value: unknown, needsCompanyName: boolean): string[] {
+  const slots = Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+  if (needsCompanyName && !slots.includes('公司全称')) {
+    return ['公司全称', ...slots];
+  }
+  return slots;
 }

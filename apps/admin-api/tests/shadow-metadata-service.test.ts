@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import { ApprovalClient } from '../src/approval-client.js';
 import { DictionaryResolver } from '../src/dictionary-resolver.js';
 import { LightCloudClient } from '../src/lightcloud-client.js';
+import type { OrgSyncRepository } from '../src/org-sync-repository.js';
 import { ShadowMetadataRepository } from '../src/shadow-metadata-repository.js';
 import { ShadowMetadataService } from '../src/shadow-metadata-service.js';
 import type { ShadowInternalTemplateProvider } from '../src/shadow-template-providers.js';
@@ -147,6 +148,12 @@ const CUSTOMER_WIDGET_MAP = {
   Ps_1: {
     codeId: 'Ps_1',
     title: '售后服务代表',
+    type: 'personSelectWidget',
+    required: false,
+  },
+  Ps_0: {
+    codeId: 'Ps_0',
+    title: '负责人',
     type: 'personSelectWidget',
     required: false,
   },
@@ -1513,6 +1520,48 @@ class StubSearchFormInstLightCloudClient extends StubLightCloudClient {
   }
 }
 
+class StubWidgetValueOnlyLightCloudClient extends StubLightCloudClient {
+  override async searchList(params: {
+    accessToken: string;
+    body: Record<string, unknown>;
+  }): Promise<{
+    pageNumber: number;
+    totalPages: number;
+    pageSize: number;
+    totalElements: number;
+    content: Array<Record<string, unknown>>;
+  }> {
+    return {
+      pageNumber: 1,
+      totalPages: 1,
+      pageSize: 5,
+      totalElements: 1,
+      content: [
+        {
+          title: '联系人姓名：陈晨联系人手机：13612952103启用状态：启用客户类型：普通客户客户状态：销售线索阶段客户是否分配：已分配负责人：69e75eb5e4b0e65b61c014da',
+          formInstId: '69f150a897fc79000112488c',
+          important: {},
+          formInstance: {
+            id: '69f150a897fc79000112488c',
+            widgetValue: {
+              Nu_1: '13612952103',
+              Ps_0: ['69e75eb5e4b0e65b61c014da'],
+              Pw_0: [{ dicId: 'd-province-js', title: '江苏' }],
+              Pw_1: [{ dicId: 'd-city-nt', title: '南通市' }],
+              Ra_0: 'customer-active',
+              Ra_3: 'EeFfGgHh',
+              Te_5: '陈晨',
+              _S_NAME: '联系人姓名：陈晨联系人手机：13612952103启用状态：启用客户类型：普通客户客户状态：销售线索阶段客户是否分配：已分配负责人：69e75eb5e4b0e65b61c014da',
+              _S_TITLE: '联系人姓名：陈晨联系人手机：13612952103启用状态：启用客户类型：普通客户客户状态：销售线索阶段客户是否分配：已分配负责人：69e75eb5e4b0e65b61c014da',
+              _S_DISABLE: '1',
+            },
+          },
+        },
+      ],
+    };
+  }
+}
+
 function createNowSequence() {
   let current = 0;
   return () => new Date(`2026-04-23T09:00:${String(current++).padStart(2, '0')}.000Z`);
@@ -1544,6 +1593,7 @@ function createService(
   dictionaryJsonPath: string,
   skillOutputDir: string,
   lightCloudClient: LightCloudClient = new StubLightCloudClient(),
+  orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>,
 ) {
   const config = createTestConfig({
     dictionarySource: 'manual_json',
@@ -1564,6 +1614,7 @@ function createService(
     repository,
     approvalClient,
     lightCloudClient,
+    orgSyncRepository,
     dictionaryResolver: new DictionaryResolver({
       source: config.shadow.dictionarySource,
       jsonPath: config.shadow.dictionaryJsonPath,
@@ -2563,6 +2614,58 @@ test('ShadowMetadataService maps searchList formInstId when upstream omits top-l
     assert.equal(search.mode, 'live');
     assert.equal(search.records.length, 1);
     assert.equal(search.records[0]?.formInstId, CUSTOMER_FORM_INST_ID);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ShadowMetadataService synthesizes live fields from formInstance.widgetValue when summaries are empty', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-widget-value-'));
+  const dictionaryPath = join(tempDir, 'shadow-dictionaries.json');
+  const service = createService(
+    dictionaryPath,
+    join(tempDir, 'skills'),
+    new StubWidgetValueOnlyLightCloudClient(),
+    {
+      findEmployees: async (input) => input.keyword === '69e75eb5e4b0e65b61c014da'
+        ? [{
+            eid: '21024647',
+            appId: '501037729',
+            openId: '69e75eb5e4b0e65b61c014da',
+            uid: null,
+            name: '陈伟棠',
+            phone: null,
+            email: null,
+            jobTitle: null,
+            status: '1',
+            syncedAt: new Date().toISOString(),
+          }]
+        : [],
+    },
+  );
+
+  try {
+    await service.refreshObject('customer');
+
+    const search = await service.executeSearch('customer', {
+      operatorOpenId: 'oid-live-1',
+      pageNumber: 1,
+      pageSize: 5,
+    });
+    const record = search.records[0];
+
+    assert.equal(search.mode, 'live');
+    assert.equal(search.records.length, 1);
+    assert.equal(record?.formInstId, '69f150a897fc79000112488c');
+    assert.equal(record?.fieldMap.Ra_0?.title, '客户状态');
+    assert.equal(record?.fieldMap.Ra_0?.value, '活跃');
+    assert.equal(record?.fieldMap.Ra_3?.title, '客户类型');
+    assert.equal(record?.fieldMap.Ra_3?.value, 'VIP客户');
+    assert.equal(record?.fieldMap.Pw_0?.title, '省');
+    assert.deepEqual(record?.fieldMap.Pw_0?.value, ['江苏']);
+    assert.equal(record?.fieldMap.Ps_0?.title, '负责人');
+    assert.equal(record?.fieldMap.Ps_0?.value, '陈伟棠');
+    assert.equal(record?.fieldMap._S_DISABLE?.value, '启用');
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

@@ -80,6 +80,29 @@ const recordObjectTitles: Record<ShadowObjectKey, string> = {
   followup: '商机跟进记录',
 };
 
+const realCustomerShortNameCases = [
+  { shortName: '品宏', fullName: '上海品宏企业管理有限公司' },
+  { shortName: '晶镁光罩', fullName: '安徽晶镁光罩有限公司' },
+  { shortName: '翔运国际', fullName: '上海翔运国际货运有限公司' },
+  { shortName: '海力风电', fullName: '江苏海力风电设备科技股份有限公司' },
+  { shortName: '伯恩医疗', fullName: '上海伯恩医疗器械有限公司' },
+  { shortName: '星火时空', fullName: '星火时空（成都）科技有限公司' },
+  { shortName: '黑崎机械', fullName: '无锡黑崎机械有限公司' },
+  { shortName: '爱朋医疗', fullName: '江苏爱朋医疗科技股份有限公司' },
+  { shortName: '扬州锻压', fullName: '扬州锻压机床有限公司' },
+  { shortName: '太訸控股', fullName: '太仓市太訸控股集团有限公司' },
+  { shortName: '中科离子', fullName: '合肥中科离子医学技术装备有限公司' },
+  { shortName: '优格生物', fullName: '江苏优格生物科技有限公司' },
+  { shortName: '比迩泽', fullName: '苏州比迩泽信息技术有限公司' },
+  { shortName: '奥特佳', fullName: '奥特佳新能源科技股份有限公司' },
+  { shortName: '火星河谷', fullName: '深圳市火星河谷科技有限公司' },
+  { shortName: '友升', fullName: '江苏友升汽车科技有限公司' },
+  { shortName: '实极机器人', fullName: '上海实极机器人自动化有限公司' },
+  { shortName: '鑫黄产业', fullName: '江苏鑫黄产业投资有限公司' },
+  { shortName: '星瑞包装', fullName: '安徽星瑞包装材料有限公司' },
+  { shortName: '布朗克斯', fullName: '江苏布朗克斯机械有限公司' },
+];
+
 class AgentScenarioHarness {
   readonly repository = new AgentRunRepository(createInMemoryDatabase());
   readonly calls: LoggedCall[] = [];
@@ -87,6 +110,7 @@ class AgentScenarioHarness {
   readonly service: AgentService;
   readonly registryCodes: string[];
   activeMock: HarnessMock = {};
+  private currentCompanyResearchName = '苏州金蝶软件有限公司';
 
   constructor() {
     const config = createTestConfig();
@@ -101,7 +125,8 @@ class AgentScenarioHarness {
       shadowMetadataService: {
         executeSearch: async (objectKey: ShadowObjectKey, input: unknown) => {
           this.calls.push({ tool: `record.${objectKey}.search`, objectKey, input });
-          return { records: this.activeMock.searchRecords ?? [] };
+          const records = this.activeMock.searchRecords ?? [];
+          return { records, totalElements: records.length };
         },
         executeGet: async (objectKey: ShadowObjectKey, input: unknown) => {
           this.calls.push({ tool: `record.${objectKey}.get`, objectKey, input });
@@ -140,8 +165,11 @@ class AgentScenarioHarness {
         })),
       } as any,
       externalSkillService: {
-        createSkillJob: async () => {
+        createSkillJob: async (_toolCode: string, payload: any) => {
           this.calls.push({ tool: 'external.company_research' });
+          this.currentCompanyResearchName =
+            String(payload?.requestText ?? '').match(/研究这家公司：([^。]+)/)?.[1]?.trim()
+            || this.currentCompanyResearchName;
           if (this.activeMock.companyResearchFailure) {
             throw new Error('mock company research failed');
           }
@@ -152,12 +180,12 @@ class AgentScenarioHarness {
           skillName: 'ext.company_research_pm',
           status: 'succeeded',
           artifacts: [{ artifactId: 'skill-artifact-001', name: 'research.md', mimeType: 'text/markdown', size: 128 }],
-          finalText: '# 公司研究\n\n销售切入点：关注预算、组织变化和数字化项目。',
+          finalText: `# ${this.currentCompanyResearchName} 公司研究\n\n## 公司概览\n${this.currentCompanyResearchName} 是本次公司研究目标。\n\n## 业务定位\n公开资料显示其业务需要结合行业与经营范围继续核实。\n\n## 核心风险\n关注公开披露完整性、行业周期和经营信息更新。`,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         }),
         getSkillJobArtifact: async () => ({
-          content: Buffer.from('# 公司研究\n\n销售切入点：关注预算、组织变化和数字化项目。'),
+          content: Buffer.from(`# ${this.currentCompanyResearchName} 公司研究\n\n## 公司概览\n${this.currentCompanyResearchName} 是本次公司研究目标。\n\n## 业务定位\n公开资料显示其业务需要结合行业与经营范围继续核实。\n\n## 核心风险\n关注公开披露完整性、行业周期和经营信息更新。`),
           mimeType: 'text/markdown',
         }),
       } as any,
@@ -881,7 +909,7 @@ const scenarios: AgentScenario[] = [
   },
   {
     id: '15-company-research-failure-no-artifact',
-    title: '公司研究失败时不生成降级 Artifact',
+    title: '公司研究失败时不生成降级资料',
     turns: [
       {
         query: '研究这家公司 苏州金蝶软件有限公司',
@@ -890,7 +918,7 @@ const scenarios: AgentScenario[] = [
           status: 'tool_unavailable',
           selectedTool: 'external.company_research',
           policyCode: 'external.company_research.no_degraded_artifact',
-          contentIncludes: ['未生成降级 Artifact'],
+          contentIncludes: ['未生成降级资料'],
           assert: (_response, harness) => {
             assert.equal(harness.calls.some((item) => item.tool === 'artifact.company_research'), false);
           },
@@ -900,15 +928,15 @@ const scenarios: AgentScenario[] = [
   },
   {
     id: '16-artifact-followup-after-research',
-    title: '公司研究后追问值得关注，走 artifact.search',
+    title: '公司研究后追问上下文问题，走 artifact.search',
     turns: [
       { query: '研究这家公司 苏州金蝶软件有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
       {
-        query: '这个客户最近有什么值得关注',
+        query: '苏州金蝶 核心竞争优势是什么',
         expect: {
           status: 'completed',
           selectedTool: 'artifact.search',
-          contentIncludes: ['基于已有 Artifact 的回答'],
+          contentIncludes: ['外部信息'],
         },
       },
     ],
@@ -927,6 +955,196 @@ const scenarios: AgentScenario[] = [
         },
       },
     ],
+  },
+  {
+    id: '17a-external-info-business-followup',
+    title: '公司研究后问业务介绍，消费外部信息而不是澄清',
+    turns: [
+      { query: '研究这家公司 苏州金蝶软件有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      {
+        query: '介绍苏州金蝶的业务',
+        expect: {
+          status: 'completed',
+          selectedTool: 'artifact.search',
+          contentIncludes: ['外部信息'],
+          contentExcludes: ['我还需要你补充'],
+          noToolPrefix: 'record.',
+        },
+      },
+    ],
+  },
+  {
+    id: '17b-external-info-explicit-scope',
+    title: '只看外部信息时不触发记录系统',
+    turns: [
+      { query: '研究这家公司 苏州金蝶软件有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      {
+        query: '只看外部信息，苏州金蝶有什么业务？',
+        expect: {
+          status: 'completed',
+          selectedTool: 'artifact.search',
+          contentIncludes: ['外部信息'],
+          noToolPrefix: 'record.',
+        },
+      },
+    ],
+  },
+  {
+    id: '17c-external-info-new-conversation-abbreviation',
+    title: '新会话用公司简称问业务，仍路由外部信息检索',
+    turns: [
+      {
+        query: '介绍江苏友升的业务',
+        expect: {
+          status: 'completed',
+          selectedTool: 'artifact.search',
+          contentIncludes: ['外部信息'],
+          contentExcludes: ['暂无可用外部信息', '我还需要你补充'],
+          noToolPrefix: 'record.',
+          assert: (_response, harness) => {
+            const call = harness.calls.findLast((item) => item.tool === 'artifact.search');
+            const input = call?.input as { anchors?: Array<{ id?: string }> };
+            assert.equal(input.anchors?.[0]?.id, '江苏友升');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '17d-external-info-new-conversation-question',
+    title: '新会话问公司有什么业务，命中外部信息检索',
+    turns: [
+      {
+        query: '江苏友升有什么业务',
+        expect: {
+          status: 'completed',
+          selectedTool: 'artifact.search',
+          contentIncludes: ['外部信息'],
+          contentExcludes: ['暂无可用外部信息', '我还需要你补充'],
+          noToolPrefix: 'record.',
+          assert: (_response, harness) => {
+            const call = harness.calls.findLast((item) => item.tool === 'artifact.search');
+            const input = call?.input as { anchors?: Array<{ id?: string }> };
+            assert.equal(input.anchors?.[0]?.id, '江苏友升');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '17e-internal-records-opportunity-progress',
+    title: '问当前客户商机进展，消费系统内记录',
+    turns: [
+      {
+        query: '查客户 苏州金蝶软件有限公司',
+        mock: { searchRecords: [recordFixture('customer', 'customer-szjd-001', '苏州金蝶软件有限公司')] },
+        expect: { status: 'completed', selectedTool: 'record.customer.search' },
+      },
+      {
+        query: '这个客户的商机进展',
+        mock: { searchRecords: [recordFixture('opportunity', 'opportunity-szjd-001', '苏州金蝶 ERP 项目')] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'meta.context_summary',
+          contentIncludes: ['系统内记录', '商机进展'],
+          noToolPrefix: 'artifact.',
+        },
+      },
+    ],
+  },
+  {
+    id: '17f-internal-records-explicit-scope',
+    title: '只看系统内记录时不检索外部信息',
+    turns: [
+      { query: '研究这家公司 苏州金蝶软件有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      {
+        query: '只看系统内记录，苏州金蝶客户状态是什么？',
+        mock: { searchRecords: [recordFixture('customer', 'customer-szjd-001', '苏州金蝶软件有限公司')] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'meta.context_summary',
+          contentIncludes: ['系统内记录'],
+          noToolPrefix: 'artifact.',
+        },
+      },
+    ],
+  },
+  {
+    id: '17g-combined-external-and-internal',
+    title: '结合外部信息和系统记录时输出三段式融合回答',
+    turns: [
+      { query: '研究这家公司 苏州金蝶软件有限公司', expect: { status: 'completed', selectedTool: 'external.company_research' } },
+      {
+        query: '结合外部信息和系统记录，给我拜访前摘要',
+        mock: { searchRecords: [recordFixture('customer', 'customer-szjd-001', '苏州金蝶软件有限公司')] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'meta.context_summary',
+          contentIncludes: ['系统内记录', '外部信息', '判断建议'],
+          assert: (_response, harness) => {
+            assert.equal(harness.calls.some((item) => item.tool === 'record.customer.search'), true);
+            assert.equal(harness.calls.some((item) => item.tool === 'artifact.search'), true);
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '17h-customer-short-name-read-queries',
+    title: '客户简称查询和客户状态问法不进入澄清',
+    turns: [
+      {
+        query: '查询江苏友升',
+        mock: { searchRecords: [recordFixture('customer', 'customer-jsys-001', '江苏友升汽车科技有限公司')] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          contentExcludes: ['我还需要你补充'],
+          assert: (_response, harness) => assertSearchFilterContainsValue(harness, 'record.customer.search', '江苏友升'),
+        },
+      },
+      {
+        query: '查看江苏友升',
+        mock: { searchRecords: [recordFixture('customer', 'customer-jsys-001', '江苏友升汽车科技有限公司')] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          contentExcludes: ['我还需要你补充'],
+          assert: (_response, harness) => assertSearchFilterContainsValue(harness, 'record.customer.search', '江苏友升'),
+        },
+      },
+      {
+        query: '江苏友升客户情况',
+        mock: { searchRecords: [recordFixture('customer', 'customer-jsys-001', '江苏友升汽车科技有限公司')] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          contentExcludes: ['我还需要你补充'],
+          assert: (_response, harness) => {
+            assertSearchFilterContainsValue(harness, 'record.customer.search', '江苏友升');
+            assertNoSearchFilterValue(harness, 'record.customer.search', '江苏友升客户情况');
+          },
+        },
+      },
+      {
+        query: '江苏友升客户处于什么状态',
+        mock: { searchRecords: [recordFixture('customer', 'customer-jsys-001', '江苏友升汽车科技有限公司')] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          contentExcludes: ['我还需要你补充'],
+          assert: (_response, harness) => {
+            assertSearchFilterContainsValue(harness, 'record.customer.search', '江苏友升');
+            assertNoSearchFilterValue(harness, 'record.customer.search', '江苏友升客户处于什么状态');
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: '17i-real-customer-short-name-read-queries',
+    title: '真实客户简称输入可查询客户记录',
+    turns: buildRealCustomerShortNameTurns(),
   },
   {
     id: '18-new-contact-preview',
@@ -1121,7 +1339,7 @@ const complexScenarios: AgentScenario[] = [
         expect: {
           status: 'completed',
           selectedTool: 'artifact.search',
-          contentIncludes: ['当前没有检索到可引用 Artifact'],
+          contentIncludes: ['当前没有检索到可引用外部信息'],
           noToolPrefix: 'record.',
         },
       },
@@ -2447,6 +2665,41 @@ function assertCollectionQueryClean(tool: string, staleValue: string): HarnessTu
     assert.equal(response.message.extraInfo.agentTrace.resolvedContext?.usedContext, false);
     assertNoSearchFilterValue(harness, tool, staleValue);
   };
+}
+
+function buildRealCustomerShortNameTurns(): HarnessTurn[] {
+  return realCustomerShortNameCases.flatMap((item, index) => {
+    const formInstId = `customer-real-${String(index + 1).padStart(2, '0')}`;
+    const record = recordFixture('customer', formInstId, item.fullName);
+    return [
+      {
+        query: `查询${item.shortName}`,
+        mock: { searchRecords: [record] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          contentExcludes: ['我还需要你补充'],
+          assert: (_response, harness) => {
+            assertSearchFilterContainsValue(harness, 'record.customer.search', item.shortName);
+            assertNoSearchFilterValue(harness, 'record.customer.search', `查询${item.shortName}`);
+          },
+        },
+      },
+      {
+        query: `${item.shortName}客户状态`,
+        mock: { searchRecords: [record] },
+        expect: {
+          status: 'completed',
+          selectedTool: 'record.customer.search',
+          contentExcludes: ['我还需要你补充'],
+          assert: (_response, harness) => {
+            assertSearchFilterContainsValue(harness, 'record.customer.search', item.shortName);
+            assertNoSearchFilterValue(harness, 'record.customer.search', `${item.shortName}客户状态`);
+          },
+        },
+      },
+    ];
+  });
 }
 
 function qaUpdateParamScenario(

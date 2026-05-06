@@ -12,6 +12,7 @@ import type {
   AgentUiSurface,
   AppConfig,
   ArtifactAnchor,
+  ArtifactDetailResponse,
   ExternalSkillJobResponse,
   IntentFrame,
   ShadowExecuteGetResponse,
@@ -56,7 +57,13 @@ import {
   readToolArbitrationProbeControl,
   type ToolArbitrationRule,
 } from './agent-tool-semantic-arbitrator.js';
-import { cleanupCompanyName, extractCompanyName, inferFallbackIntent } from './agent-utils.js';
+import {
+  cleanupCompanyName,
+  extractCompanyName,
+  inferFallbackIntent,
+  isContextualQuestionQuery,
+  isUsableCompanyName,
+} from './agent-utils.js';
 import type { ArtifactService } from './artifact-service.js';
 import type { ExternalSkillService } from './external-skill-service.js';
 import type { IntentFrameService } from './intent-frame-service.js';
@@ -68,7 +75,11 @@ import { getErrorMessage } from './errors.js';
 const CRM_RECORD_OBJECTS: ShadowObjectKey[] = ['customer', 'contact', 'opportunity', 'followup'];
 const COMPANY_RESEARCH_TOOL = 'external.company_research';
 const COMPANY_RESEARCH_RUNTIME_TOOL = 'ext.company_research_pm';
+const COMPANY_RESEARCH_SERVICE_LABEL = '公司研究服务';
+const COMPANY_RESEARCH_MATERIAL_LABEL = '公司研究资料';
 const CONTEXT_SUMMARY_TOOL = 'meta.context_summary';
+const EXTERNAL_INFO_SOURCE_LABEL = '外部信息';
+const INTERNAL_RECORDS_SOURCE_LABEL = '系统内记录';
 const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1' as const;
 const RECORD_RESULT_PAGE_ENDPOINT = '/api/agent/record-search-page' as const;
 const META_QUESTION_OPTIONS_ENDPOINT = '/api/agent/meta-question-options' as const;
@@ -93,6 +104,14 @@ const SEARCH_EXTRACTOR_WIDGET_TYPES = new Set([
   'switchWidget',
   'serialNumWidget',
 ]);
+
+type DataSourceScope = 'auto' | 'external_info' | 'internal_records' | 'combined';
+
+interface DataSourceScopeResolution {
+  scope: DataSourceScope;
+  normalizedQuery: string;
+  explicit: boolean;
+}
 
 const CRM_RECORD_CAPABILITIES: Record<ShadowObjectKey, RecordToolCapability> = {
   customer: {
@@ -638,6 +657,237 @@ function inferExplicitRecordObject(query: string): string | null {
   return query.match(/(?:录入|创建|新增|新建|补录|写入|查询|查一下|查|搜索|找一下|查看|看下|帮我查|帮我搜|更新|修改|打开)\s*(?:一个|一条|一位|一名|这?个|该|当前|所有|全部|全量|全体)?\s*(?:的)?\s*(客户|公司|联系人|商机|机会|跟进记录|拜访记录|回访记录|跟进|拜访|回访)/)?.[1] ?? null;
 }
 
+function resolveDataSourceScope(query: string): DataSourceScopeResolution {
+  const normalized = query.replace(/\s+/g, '').trim();
+  const hasExternalInfo = /(外部信息|系统外信息|系统外资料|公开资料|公开信息)/.test(normalized);
+  const hasInternalRecords = /(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录)/i.test(normalized);
+
+  if (
+    (/(结合|综合|融合|同时看|一起看)/.test(normalized) && hasExternalInfo && hasInternalRecords)
+    || /外部信息(?:和|与|及|以及|、)系统(?:内)?记录/.test(normalized)
+    || /系统(?:内)?记录(?:和|与|及|以及|、)外部信息/.test(normalized)
+  ) {
+    return {
+      scope: 'combined',
+      normalizedQuery: stripDataSourceScopePhrases(query),
+      explicit: true,
+    };
+  }
+
+  if (/(只看|仅看|只用|仅用|基于|使用|从|根据).*(外部信息|系统外信息|系统外资料|公开资料|公开信息)/.test(normalized)) {
+    return {
+      scope: 'external_info',
+      normalizedQuery: stripDataSourceScopePhrases(query),
+      explicit: true,
+    };
+  }
+
+  if (/(只看|仅看|只用|仅用|基于|使用|从|根据).*(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录)/i.test(normalized)) {
+    return {
+      scope: 'internal_records',
+      normalizedQuery: stripDataSourceScopePhrases(query),
+      explicit: true,
+    };
+  }
+
+  return {
+    scope: 'auto',
+    normalizedQuery: query.trim(),
+    explicit: false,
+  };
+}
+
+function normalizeDataSourceScope(value: unknown): DataSourceScope {
+  return value === 'external_info' || value === 'internal_records' || value === 'combined'
+    ? value
+    : 'auto';
+}
+
+function stripDataSourceScopePhrases(query: string): string {
+  return query
+    .replace(/(?:请)?(?:结合|综合|融合|同时看|一起看)?\s*(?:外部信息|系统外信息|系统外资料|公开资料|公开信息)\s*(?:和|与|及|以及|、|,|，)?\s*(?:系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录)?/gi, '')
+    .replace(/(?:请)?(?:结合|综合|融合|同时看|一起看)?\s*(?:系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录)\s*(?:和|与|及|以及|、|,|，)?\s*(?:外部信息|系统外信息|系统外资料|公开资料|公开信息)?/gi, '')
+    .replace(/(?:只看|仅看|只用|仅用|基于|使用|从|根据|请|帮我|麻烦)\s*/g, '')
+    .replace(/^[，,、：:\s]+/g, '')
+    .trim();
+}
+
+function shouldRouteToExternalInfo(input: AgentPlannerInput, scopeResolution: DataSourceScopeResolution): boolean {
+  const query = scopeResolution.normalizedQuery || input.request.query;
+  if (isWriteLikeRecordMutationQuery(query, input.intentFrame.actionType)) {
+    return false;
+  }
+  if (scopeResolution.scope === 'external_info') {
+    return true;
+  }
+  if (scopeResolution.scope !== 'auto') {
+    return false;
+  }
+  if (resolveExplicitCustomerRecordInfoName(query, input.intentFrame.target)) {
+    return false;
+  }
+  if (isDirectRecordLookupQuery(query) && inferExplicitRecordObject(query)) {
+    return false;
+  }
+  if (input.intentFrame.target.kind === 'artifact' || isArtifactFollowupQuestion(input)) {
+    return true;
+  }
+  return Boolean(resolveExternalInfoAnchorName(input, scopeResolution))
+    && isExternalInfoConsumptionQuery(query)
+    && !isInternalRecordsConsumptionQuery(query);
+}
+
+function shouldRouteToContextSummary(input: AgentPlannerInput, scopeResolution: DataSourceScopeResolution): boolean {
+  const query = scopeResolution.normalizedQuery || input.request.query;
+  if (isWriteLikeRecordMutationQuery(query, input.intentFrame.actionType)) {
+    return false;
+  }
+
+  if (scopeResolution.scope === 'combined') {
+    return true;
+  }
+
+  if (scopeResolution.scope === 'internal_records') {
+    if (isDirectRecordLookupQuery(query) && !isCustomerRecordSummaryQuery(query)) {
+      return false;
+    }
+    return true;
+  }
+
+  return hasContextSummarySubject(input)
+    && (isContextSummaryQuery(query) || isInternalRecordsSummaryQuery(query));
+}
+
+function isExternalInfoConsumptionQuery(query: string): boolean {
+  const normalized = query.trim();
+  if (!normalized) {
+    return false;
+  }
+  return isContextualQuestionQuery(normalized)
+    || /(?:介绍|说明|讲一下|说说|了解一下|概览|概况|信息|资料|详情|业务|主营|产品|服务|经营范围|优势|竞争优势|核心能力|做什么|风险|值得关注)/.test(normalized);
+}
+
+function isInternalRecordsConsumptionQuery(query: string): boolean {
+  return /(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|商机进展|机会进展|商机阶段|联系人|跟进记录|拜访记录|回访记录)/i.test(query);
+}
+
+function isInternalRecordsSummaryQuery(query: string): boolean {
+  return isContextSummaryQuery(query)
+    || /(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|商机进展|机会进展|商机阶段|拜访前摘要)/i.test(query);
+}
+
+function isCustomerRecordSummaryQuery(query: string): boolean {
+  return /(客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录|商机进展|机会进展|商机阶段|拜访前摘要)/i.test(query);
+}
+
+function isDirectRecordLookupQuery(query: string): boolean {
+  return /^(?:查询|查一下|查|搜索|找一下|查看|看下|打开|帮我查|帮我搜)\s*/.test(query.trim());
+}
+
+function isWriteLikeRecordMutationQuery(query: string, actionType: IntentFrame['actionType']): boolean {
+  const isReadQuestion = /(?:是什么|有什么|有哪些|多少|谁|吗|呢|[？?])/.test(query);
+  return actionType === 'write'
+    || /(?:录入|创建|新增|新建|补录|写入|修改|更新|改成|改为|变更|调整|设置|设为|关联|绑定|选择)/.test(query)
+    || (isRecordFieldAssignmentQuery(query) && !isReadQuestion);
+}
+
+function resolveCustomerRecordLookupName(query: string): string {
+  const normalized = query.trim();
+  if (!normalized || isWriteLikeRecordMutationQuery(normalized, 'query')) {
+    return '';
+  }
+
+  const explicitObject = mapExplicitRecordObjectToKey(inferExplicitRecordObject(normalized));
+  if (explicitObject) {
+    return '';
+  }
+
+  if (isReadOnlyRecordQuery(normalized) && /(客户信息|客户资料|客户详情|公司信息|公司资料|公司详情)/.test(normalized)) {
+    return '';
+  }
+
+  const internalSubject = extractInternalRecordsSubjectName(normalized);
+  if (internalSubject) {
+    return internalSubject;
+  }
+
+  if (!isReadOnlyRecordQuery(normalized)) {
+    return '';
+  }
+
+  const withoutVerb = normalized
+    .replace(/^\/\S+\s*/, '')
+    .replace(/^(?:查询|查一下|查|搜索|找一下|查看|看下|打开|看看|先查|帮我查|帮我搜)\s*/, '')
+    .trim();
+  const cleaned = cleanupCustomerRecordLookupName(withoutVerb);
+  return isUsableCompanyName(cleaned) ? cleaned : '';
+}
+
+function resolveExternalInfoAnchorName(input: AgentPlannerInput, scopeResolution?: DataSourceScopeResolution): string | undefined {
+  const query = scopeResolution?.normalizedQuery || input.request.query;
+  const explicitName = extractExternalInfoSubjectName(query);
+  if (explicitName) {
+    return explicitName;
+  }
+  return resolveArtifactAnchorName(input);
+}
+
+function extractExternalInfoSubjectName(query: string): string {
+  const normalized = stripDataSourceScopePhrases(query);
+  const patterns = [
+    /(?:介绍|说明|讲一下|说说|了解一下)\s*([^，。！？\n]+?)(?:的)?(?:业务|主营业务|产品|服务|经营范围|优势|竞争优势|核心能力|公司信息|客户信息|公司资料|客户资料|信息|资料|详情)?(?:[？?。！!]|$)/,
+    /([^，。！？\n]+?)(?:的)?(?:公司信息|客户信息|公司资料|客户资料|信息|资料|详情|有什么业务|有哪些业务|主营业务|业务是什么|做什么|经营范围|产品|服务|优势是什么|竞争优势|核心优势)/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const candidate = cleanupExternalInfoSubjectName(match?.[1] ?? '');
+    if (isUsableCompanyName(candidate)) {
+      return candidate;
+    }
+  }
+
+  const companyName = extractCompanyName(normalized);
+  if (isUsableCompanyName(companyName)) {
+    return companyName;
+  }
+
+  return '';
+}
+
+function extractInternalRecordsSubjectName(query: string): string {
+  const normalized = stripDataSourceScopePhrases(query);
+  const patterns = [
+    /([^，。！？\n]+?)(?:的)?(?:客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|客户资料|商机进展|机会进展|商机阶段|联系人|跟进记录|拜访记录|回访记录|系统内记录|系统记录|内部记录|记录系统)/,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const candidate = cleanupCustomerRecordLookupName(match?.[1] ?? '');
+    if (isUsableCompanyName(candidate)) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+function cleanupCustomerRecordLookupName(value: string): string {
+  return cleanupCompanyName(value)
+    .replace(/(?:的)?(?:客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|客户资料|客户信息|客户详情)$/g, '')
+    .replace(/(?:处于什么状态|是什么状态|状态是什么|状态)$/g, '')
+    .replace(/^(?:这个|该|当前)(?:客户|公司)$/g, '')
+    .replace(/[？?。！!]+$/g, '')
+    .trim();
+}
+
+function cleanupExternalInfoSubjectName(value: string): string {
+  return cleanupCompanyName(value)
+    .replace(/^(?:介绍|说明|讲一下|说说|了解一下)/, '')
+    .replace(/(?:的)?(?:业务|主营业务|产品|服务|经营范围|优势|竞争优势|核心能力)$/g, '')
+    .replace(/^(?:这个|该|当前)(?:客户|公司)$/g, '')
+    .replace(/[？?。！!]+$/g, '')
+    .trim();
+}
+
 interface CrmToolSelectionResult {
   selectedTool: AgentToolSelection | null;
   toolArbitration?: ToolArbitrationTrace | null;
@@ -649,6 +899,8 @@ function selectTool(
   shadowMetadataService: ShadowMetadataService,
 ): CrmToolSelectionResult {
   const query = input.request.query.trim();
+  const dataSourceScope = resolveDataSourceScope(query);
+  const scopedQuery = dataSourceScope.normalizedQuery || query;
   const target = input.intentFrame.target;
   const recordOpenAction = readRecordOpenClientAction(input.request.clientAction);
 
@@ -675,15 +927,79 @@ function selectTool(
     });
   }
 
-  if (target.kind === 'artifact' || isArtifactFollowupQuestion(query)) {
+  const customerLookupName = resolveCustomerRecordLookupName(scopedQuery);
+  if (dataSourceScope.scope === 'auto' && customerLookupName) {
+    const objectKey: ShadowObjectKey = 'customer';
+    const toolCode = 'record.customer.search';
+    const tool = input.availableTools.find((item) => item.code === toolCode);
+    return wrapSelectedTool({
+      toolCode,
+      reason: '用户以简称查询客户或客户状态，选择系统内客户记录查询。',
+      input: buildRecordToolInput({
+        query: scopedQuery,
+        objectKey,
+        operation: 'search',
+        operatorOpenId: input.request.tenantContext?.operatorOpenId,
+        targetName: customerLookupName,
+        tool,
+        fields: readRecordFields({ shadowMetadataService }, objectKey),
+        contextFrame: input.contextFrame ?? null,
+        resolvedContext: input.resolvedContext ?? null,
+      }),
+      confidence: 0.8,
+    });
+  }
+
+  if (shouldRouteToContextSummary(input, dataSourceScope)) {
+    const summaryType = inferContextSummaryType(scopedQuery);
+    return wrapSelectedTool({
+      toolCode: CONTEXT_SUMMARY_TOOL,
+      reason: dataSourceScope.scope === 'combined'
+        ? '用户要求融合外部信息和系统内记录，选择通用上下文摘要工具。'
+        : '用户要求消费系统内记录，选择通用上下文摘要工具。',
+      input: {
+        query: scopedQuery,
+        dataSourceScope: dataSourceScope.scope,
+        summaryType,
+      },
+      confidence: dataSourceScope.explicit ? 0.88 : 0.82,
+    });
+  }
+
+  if (shouldRouteToExternalInfo(input, dataSourceScope)) {
     return wrapSelectedTool({
       toolCode: 'artifact.search',
-      reason: '用户正在追问已有研究或资产证据。',
+      reason: dataSourceScope.scope === 'external_info'
+        ? '用户明确要求只消费外部信息。'
+        : '用户正在追问已有外部信息或上下文证据。',
       input: {
-        query,
-        anchorName: resolveArtifactAnchorName(input),
+        query: scopedQuery,
+        anchorName: resolveExternalInfoAnchorName(input, dataSourceScope),
+        dataSourceScope: dataSourceScope.scope,
       },
-      confidence: 0.78,
+      confidence: dataSourceScope.explicit ? 0.88 : 0.78,
+    });
+  }
+
+  if (customerLookupName) {
+    const objectKey: ShadowObjectKey = 'customer';
+    const toolCode = 'record.customer.search';
+    const tool = input.availableTools.find((item) => item.code === toolCode);
+    return wrapSelectedTool({
+      toolCode,
+      reason: '用户以简称查询客户或客户状态，选择系统内客户记录查询。',
+      input: buildRecordToolInput({
+        query: scopedQuery,
+        objectKey,
+        operation: 'search',
+        operatorOpenId: input.request.tenantContext?.operatorOpenId,
+        targetName: customerLookupName,
+        tool,
+        fields: readRecordFields({ shadowMetadataService }, objectKey),
+        contextFrame: input.contextFrame ?? null,
+        resolvedContext: input.resolvedContext ?? null,
+      }),
+      confidence: 0.8,
     });
   }
 
@@ -717,7 +1033,11 @@ function selectTool(
     });
   }
 
-  if (isContextSummaryQuery(query) && hasContextSummarySubject(input)) {
+  if (
+    isContextSummaryQuery(query)
+    && hasContextSummarySubject(input)
+    && !isWriteLikeRecordMutationQuery(query, input.intentFrame.actionType)
+  ) {
     const summaryType = inferContextSummaryType(query);
     return wrapSelectedTool({
       toolCode: CONTEXT_SUMMARY_TOOL,
@@ -726,6 +1046,7 @@ function selectTool(
         : '用户要求基于当前主体给出推进建议，选择通用上下文摘要工具。',
       input: {
         query,
+        dataSourceScope: 'internal_records',
         summaryType,
       },
       confidence: 0.81,
@@ -956,7 +1277,7 @@ function resolveExplicitCustomerRecordInfoName(
 }
 
 function isExplicitCompanyResearchQuery(query: string): boolean {
-  return /\/客户分析|公司研究|客户分析|研究|分析一下|分析\s*(?:这家|这个)?(?:公司|客户)/.test(query);
+  return /\/公司研究|\/客户分析|公司研究|客户分析|研究|分析一下|分析\s*(?:这家|这个)?(?:公司|客户)/.test(query);
 }
 
 function isAmbiguousCompanyInfoQuery(query: string): boolean {
@@ -2473,12 +2794,22 @@ function extractFormInstId(query: string): string | undefined {
   return query.match(/formInstId[:：=]?\s*([A-Za-z0-9_-]+)/)?.[1];
 }
 
-function isArtifactFollowupQuestion(query: string): boolean {
+function isArtifactFollowupQuestion(input: AgentPlannerInput): boolean {
+  const query = input.request.query;
   const normalized = query.trim();
-  const asksForExistingEvidence = ['最近', '关注', '值得关注', '有什么', '卡在哪里', '风险'].some((token) => normalized.includes(token));
-  const startsNewResearch = /^(?:研究|分析一下|分析|公司分析|客户分析|\/客户分析)/.test(normalized);
-  const startsRecordWrite = /^(?:新增|新建|创建|录入|写入|补录|更新|修改)/.test(normalized);
-  return asksForExistingEvidence && !startsNewResearch && !startsRecordWrite;
+  const startsNewResearch = /^(?:研究|分析一下|分析|公司分析|公司研究|客户分析|\/公司研究|\/客户分析)/.test(normalized);
+  const startsRecordTask = /^(?:新增|新建|创建|录入|写入|补录|更新|修改|删除|查询|查一下|查|搜索|找一下|查看|打开|看下|帮我查|帮我搜)/.test(normalized);
+  const hasContextEvidence = Boolean(
+    input.resolvedContext?.usedContext
+    || input.contextFrame?.subject
+    || input.focusedName
+  );
+  return hasContextEvidence
+    && isExternalInfoConsumptionQuery(normalized)
+    && !startsNewResearch
+    && !startsRecordTask
+    && !isInternalRecordsConsumptionQuery(normalized)
+    && !inferExplicitRecordObject(normalized);
 }
 
 function resolveArtifactAnchorName(input: AgentPlannerInput): string | undefined {
@@ -2487,6 +2818,9 @@ function resolveArtifactAnchorName(input: AgentPlannerInput): string | undefined
     return resolvedName;
   }
   const targetName = input.intentFrame.target.name;
+  if (targetName && input.intentFrame.target.kind !== 'unknown') {
+    return targetName;
+  }
   if (targetName && isLikelyEntityAnchorName(targetName)) {
     return targetName;
   }
@@ -3142,6 +3476,9 @@ function buildRecordResultViewModel(input: {
       objectKey: input.objectKey,
       record,
       capability: input.capability,
+      fallbackTitle: records.length === 1
+        ? readRecordQueryDisplayFallbackName(input.queryText, input.objectKey)
+        : undefined,
     }),
   );
   const objectLabel = mapRecordObjectLabel(input.objectKey);
@@ -3176,17 +3513,20 @@ function buildRecordResultRecordView(input: {
   objectKey: ShadowObjectKey;
   record: ShadowLiveRecord;
   capability: RecordToolCapability;
+  fallbackTitle?: string;
 }): RecordResultRecordView {
   const record = input.record;
-  const title = readLiveRecordDisplayName(record, input.capability) || record.formInstId || '未命名记录';
+  const title = readLiveRecordDisplayName(record, input.capability) || input.fallbackTitle || `${mapRecordObjectLabel(input.objectKey)}记录`;
   const primaryFields = buildRecordResultFields(record, getPrimaryRecordFieldTitles(input.objectKey));
   const relationFields = buildRecordResultFields(record, getRelationRecordFieldTitles(input.objectKey));
   const usedLabels = new Set(primaryFields.map((field) => field.label));
-  const secondaryFields = (record.fields ?? [])
-    .map((field) => ({
+  const secondaryFields = [
+    ...(record.fields ?? []).map((field) => ({
       label: field.title ?? field.codeId,
-      value: stringifyPreviewValue(field.value ?? field.rawValue),
-    }))
+      value: stringifyRecordDisplayCandidate(field.value ?? field.rawValue, record.formInstId),
+    })),
+    ...readImportantRecordFields(record),
+  ]
     .filter((field) => field.label && field.value && field.value !== title && !usedLabels.has(field.label))
     .slice(0, 8);
   const tags = buildRecordResultTags(record, input.objectKey);
@@ -3259,7 +3599,7 @@ function buildRecordResultSubtitle(record: ShadowLiveRecord, objectKey: ShadowOb
 
 function getPrimaryRecordFieldTitles(objectKey: ShadowObjectKey): string[] {
   if (objectKey === 'customer') {
-    return ['客户状态', '客户类型', '启用状态', '行业', '省', '市', '区', '联系人姓名', '联系人手机', '公司电话', '办公电话', '负责人', '售后服务代表'];
+    return ['客户状态', '客户类型', '启用状态', '行业', '省', '市', '区', '联系人姓名', '联系人手机', '公司电话', '办公电话', '负责人', '销售负责人', '售后服务代表'];
   }
   if (objectKey === 'contact') {
     return ['联系人姓名', '手机', '启用状态', ...getRelationRecordFieldTitles(objectKey), '省', '市', '区', '办公电话'];
@@ -3380,7 +3720,7 @@ function buildCrmToolArbitrationProbeResult(input: {
         companyName,
       },
       reason: '用户选择进行外部公司研究。',
-      aliases: ['公司研究', '进行公司研究', '外部公司研究', '重新研究', '重新进行公司研究'],
+      aliases: ['/公司研究', '公司研究', '进行公司研究', '外部公司研究', '重新研究', '重新进行公司研究'],
     };
     options.push({
       label: '进行公司研究',
@@ -3402,7 +3742,7 @@ function buildCrmToolArbitrationProbeResult(input: {
           matched_customer: {
             label: '匹配客户',
             value: records.slice(0, 3)
-              .map((record) => readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.customer) ?? record.formInstId)
+              .map((record) => readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.customer) ?? '客户记录')
               .filter(Boolean)
               .join('、'),
           },
@@ -3424,7 +3764,7 @@ function buildCrmToolArbitrationProbeResult(input: {
         options,
         reason: records.length
           ? '该表达既可能是查看系统客户信息，也可能是进行外部公司研究。'
-          : '未查到已有客户，外部公司研究会生成新的研究 Artifact。',
+          : '未查到已有客户，外部公司研究会生成新的公司研究资料。',
       },
     ],
   };
@@ -3543,10 +3883,12 @@ function isSubjectBoundSearch(
 
 function readLiveRecordDisplayName(record: {
   formInstId?: string;
-  fields?: Array<{ title?: string | null; value?: unknown; rawValue?: unknown }>;
+  important?: Record<string, unknown>;
+  fields?: Array<{ codeId?: string | null; title?: string | null; value?: unknown; rawValue?: unknown }>;
   rawRecord?: Record<string, unknown>;
 }, capability: RecordToolCapability): string | undefined {
   const fields = Array.isArray(record.fields) ? record.fields : [];
+  const formInstId = typeof record.formInstId === 'string' ? record.formInstId.trim() : '';
   const preferredTitles = new Set(
     (capability.identityFields ?? [])
       .flatMap((paramKey) => [capability.fieldLabels?.[paramKey], capability.fieldLabels?._S_NAME, capability.fieldLabels?._S_TITLE])
@@ -3554,21 +3896,192 @@ function readLiveRecordDisplayName(record: {
   );
 
   for (const field of fields) {
-    if (!field?.title || !preferredTitles.has(field.title)) {
+    const isPreferredField =
+      Boolean(field?.title && preferredTitles.has(field.title))
+      || field?.codeId === '_S_NAME'
+      || field?.codeId === '_S_TITLE';
+    if (!isPreferredField) {
       continue;
     }
-    const value = stringifyPreviewValue(field.value ?? field.rawValue);
+    const value = stringifyRecordDisplayCandidate(field.value ?? field.rawValue, formInstId);
     if (value) {
       return value;
     }
   }
 
-  const rawTitle = record.rawRecord && typeof record.rawRecord._S_TITLE === 'string' ? record.rawRecord._S_TITLE : null;
-  if (rawTitle?.trim()) {
-    return rawTitle.trim();
+  const important = isRecordLike(record.important) ? record.important : null;
+  const rawImportant = isRecordLike(record.rawRecord?.important) ? record.rawRecord.important : null;
+  const importantKeys = [
+    ...preferredTitles,
+    '客户名称',
+    '联系人姓名',
+    '机会名称',
+    '商机名称',
+    '跟进记录',
+    '标题',
+    '_S_NAME',
+    '_S_TITLE',
+    'showName',
+    'displayName',
+    'title',
+    'name',
+    '_name_',
+  ];
+
+  for (const source of [important, rawImportant, record.rawRecord]) {
+    if (!source) {
+      continue;
+    }
+    for (const key of importantKeys) {
+      const value = stringifyRecordDisplayCandidate(source[key], formInstId);
+      if (value) {
+        return value;
+      }
+    }
   }
 
-  return typeof record.formInstId === 'string' ? record.formInstId : undefined;
+  return undefined;
+}
+
+function readRecordQueryDisplayFallbackName(query: string | undefined, objectKey: ShadowObjectKey): string | undefined {
+  if (!query?.trim()) {
+    return undefined;
+  }
+  const objectLabels = objectKey === 'customer'
+    ? '(?:客户|公司)'
+    : objectKey === 'contact'
+      ? '(?:联系人|人员)'
+      : objectKey === 'opportunity'
+        ? '(?:商机|机会)'
+        : '(?:跟进记录|拜访记录|回访记录|跟进|拜访|回访)';
+  const cleaned = query
+    .trim()
+    .replace(/^\/\S+\s*/, '')
+    .replace(/^(?:查询|查一下|查|搜索|找一下|查看|看下|打开|帮我查|帮我搜)\s*/, '')
+    .replace(new RegExp(`^${objectLabels}\\s*[：:,，]?\\s*`), '')
+    .replace(/(?:客户情况|客户状态|客户处于什么状态|客户是什么状态|详情|信息|资料|列表|结果)$/g, '')
+    .replace(/^[：:，。！？、\s]+/g, '')
+    .replace(/[：:，。！？、\s]+$/g, '')
+    .trim();
+  const value = objectKey === 'customer' ? cleanupCustomerRecordLookupName(cleaned) : cleaned;
+  return isUsableCompanyName(value) && !isLikelyInternalRecordIdentifier(value)
+    ? value
+    : undefined;
+}
+
+function stringifyRecordDisplayCandidate(value: unknown, formInstId?: string): string {
+  const candidate = sanitizeRecordDisplayText(stringifyPreviewValue(value).trim());
+  return candidate && !isLikelyInternalRecordIdentifier(candidate, formInstId)
+    ? candidate
+    : '';
+}
+
+function sanitizeRecordDisplayText(value: string): string {
+  if (!value) {
+    return '';
+  }
+  return value.replace(
+    /((?:负责人|销售负责人|所有者|所属人|跟进人|跟进负责人|服务代表|售后服务代表|申请人|创建人|openId|open_id)\s*[：:]\s*)[0-9a-f]{16,64}/gi,
+    '$1已绑定人员',
+  );
+}
+
+function isLikelyInternalRecordIdentifier(value: string, formInstId?: string): boolean {
+  const normalized = value.replace(/\s+/g, '').trim();
+  if (!normalized) {
+    return false;
+  }
+  if (formInstId && normalized === formInstId.replace(/\s+/g, '').trim()) {
+    return true;
+  }
+  return /^[0-9a-f]{16,64}$/i.test(normalized)
+    || /^(?:customer|contact|opportunity|followup|form|record)[-_][A-Za-z0-9_-]+$/i.test(normalized);
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+const IMPORTANT_FIELD_ALIASES: Record<string, string[]> = {
+  客户名称: ['客户名称', '客户名', '公司名称', '公司名', '名称', '_S_NAME'],
+  联系人姓名: ['联系人姓名', '联系人', '姓名', '_S_NAME'],
+  机会名称: ['机会名称', '商机名称', '名称', '_S_NAME'],
+  商机名称: ['商机名称', '机会名称', '名称', '_S_NAME'],
+  跟进记录: ['跟进记录', '拜访记录', '回访记录'],
+  客户状态: ['客户状态', '状态'],
+  客户类型: ['客户类型', '类型'],
+  启用状态: ['启用状态', '状态'],
+  行业: ['行业', '所属行业'],
+  省: ['省', '省份', '所在省', '所属省份'],
+  市: ['市', '城市', '所在市', '所在城市'],
+  区: ['区', '区县', '县区', '所在区'],
+  联系人手机: ['联系人手机', '手机', '手机号', '联系电话'],
+  手机: ['手机', '手机号', '联系人手机', '联系电话'],
+  公司电话: ['公司电话', '企业电话', '电话'],
+  办公电话: ['办公电话', '座机', '电话'],
+  负责人: ['负责人', '销售负责人', '所有者', 'ownerName'],
+  销售负责人: ['销售负责人', '负责人', '所有者', 'ownerName'],
+  售后服务代表: ['售后服务代表', '服务代表'],
+  销售阶段: ['销售阶段', '商机阶段', '阶段'],
+  商机状态: ['商机状态', '状态'],
+  预计成交时间: ['预计成交时间', '预计成交日期'],
+  '商机预算（元）': ['商机预算（元）', '商机预算', '预算'],
+  跟进方式: ['跟进方式', '拜访方式'],
+  跟进时间: ['跟进时间', '拜访时间', '回访时间'],
+  下次回访日期: ['下次回访日期', '下次跟进日期'],
+  跟进负责人: ['跟进负责人', '负责人'],
+};
+
+function readImportantRecordFields(record: {
+  formInstId?: string;
+  important?: Record<string, unknown>;
+  rawRecord?: Record<string, unknown>;
+}): RecordResultFieldView[] {
+  const fields: RecordResultFieldView[] = [];
+  const seen = new Set<string>();
+  for (const source of readImportantSources(record)) {
+    for (const [label, rawValue] of Object.entries(source)) {
+      if (!label || isInternalRecordIdentityParam(label) || /^(?:id|_id_|formInstId|form_inst_id)$/i.test(label)) {
+        continue;
+      }
+      const value = stringifyRecordDisplayCandidate(rawValue, record.formInstId);
+      if (!value) {
+        continue;
+      }
+      const key = `${label}:${value}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      fields.push({ label, value });
+    }
+  }
+  return fields;
+}
+
+function readImportantValueByTitles(record: {
+  formInstId?: string;
+  important?: Record<string, unknown>;
+  rawRecord?: Record<string, unknown>;
+}, titles: string[]): string {
+  const lookupKeys = titles.flatMap((title) => IMPORTANT_FIELD_ALIASES[title] ?? [title]);
+  for (const source of [...readImportantSources(record), record.rawRecord].filter(isRecordLike)) {
+    for (const key of lookupKeys) {
+      const value = stringifyRecordDisplayCandidate(source[key], record.formInstId);
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return '';
+}
+
+function readImportantSources(record: {
+  important?: Record<string, unknown>;
+  rawRecord?: Record<string, unknown>;
+}): Array<Record<string, unknown>> {
+  return [record.important, record.rawRecord?.important]
+    .filter(isRecordLike);
 }
 
 function readFilterFallbackName(selectedToolInput: Record<string, unknown>): string | undefined {
@@ -5741,7 +6254,7 @@ function registerCompanyResearchTool(registry: AgentToolRegistry, options: CrmAg
     code: COMPANY_RESEARCH_TOOL,
     type: 'external',
     provider: 'skill-runtime',
-    description: '对目标公司进行外部研究并沉淀 Artifact',
+    description: '对目标公司进行外部研究并沉淀公司研究资料',
     whenToUse: '用户要求公司研究、客户分析或研究某家公司时使用。',
     inputSchema: { type: 'object', properties: { companyName: { type: 'string' } } },
     outputSchema: { type: 'object' },
@@ -5757,7 +6270,7 @@ function registerCompanyResearchTool(registry: AgentToolRegistry, options: CrmAg
       priority: 60,
       risk: 'high_cost',
       clarifyLabel: '进行公司研究',
-      aliases: ['公司研究', '进行公司研究', '外部公司研究', '重新研究', '重新进行公司研究', '客户分析'],
+      aliases: ['/公司研究', '公司研究', '进行公司研究', '外部公司研究', '重新研究', '重新进行公司研究', '客户分析'],
     },
     execute: (input, context) => executeCompanyResearch(options, input, context),
   });
@@ -5768,33 +6281,64 @@ async function executeCompanyResearch(
   input: AgentToolExecuteInput,
   context: AgentToolExecuteContext,
 ): Promise<AgentToolExecutionResult> {
-  const companyName = String(input.selectedTool.input.companyName || input.intentFrame.target.name || '').trim();
-  if (!companyName) {
-    throw new Error('缺少公司名称，无法执行公司研究');
+  const rawCompanyName = String(
+    input.selectedTool.input.companyName
+      || input.intentFrame.target.name
+      || extractCompanyName(input.request.query)
+      || '',
+  ).trim();
+  const companyName = cleanupCompanyName(rawCompanyName);
+  if (!isUsableCompanyName(companyName)) {
+    return buildCompanyResearchInputRequiredResult(rawCompanyName, input.taskPlan);
   }
+
+  const lookupCall = createToolCall(context.runId, 'artifact.company_research.lookup', companyName);
+  let reusableArtifact: ArtifactDetailResponse | null = null;
+  try {
+    reusableArtifact = await findReusableCompanyResearchArtifact(options, {
+      eid: context.eid,
+      appId: context.appId,
+      companyName,
+    });
+  } catch (error) {
+    finishToolCall(lookupCall, 'failed', '已有公司研究资料查询失败，未触发外部服务', error);
+    return buildCompanyResearchLookupUnavailableResult(companyName, error, [lookupCall]);
+  }
+  if (reusableArtifact) {
+    finishToolCall(
+      lookupCall,
+      'succeeded',
+      `reused artifact=${reusableArtifact.artifact.artifactId}, version=${reusableArtifact.artifact.version}`,
+    );
+    return buildCompanyResearchReusedResult(companyName, reusableArtifact, [lookupCall], input.taskPlan);
+  }
+  finishToolCall(lookupCall, 'skipped', '未找到已有有效公司研究资料，继续调用外部服务');
 
   const skillCall = createToolCall(context.runId, COMPANY_RESEARCH_RUNTIME_TOOL, companyName);
   let markdown: string;
-  let skillReference = 'company-research';
 
   try {
     const job = await options.externalSkillService.createSkillJob(COMPANY_RESEARCH_RUNTIME_TOOL, {
-      requestText: `研究这家公司：${companyName}。输出业务定位、成长驱动、核心风险、销售切入点和来源引用，使用结构化 Markdown。`,
+      requestText: `研究这家公司：${companyName}。输出公司概览、业务定位、成长驱动、核心风险和来源引用，使用结构化 Markdown。`,
       model: options.config.deepseek.defaultModel,
     });
     const waitResult = await waitForSkillJob(options, job.jobId);
     if (waitResult.status === 'still_running') {
       finishToolCall(skillCall, 'running', `job=${waitResult.job.jobId}, status=${waitResult.job.status}, 已超过同步等待窗口`);
-      return buildCompanyResearchRunningResult(companyName, waitResult.job, options.companyResearchMaxWaitMs ?? COMPANY_RESEARCH_MAX_WAIT_MS, [skillCall]);
+      return buildCompanyResearchRunningResult(companyName, waitResult.job, options.companyResearchMaxWaitMs ?? COMPANY_RESEARCH_MAX_WAIT_MS, [lookupCall, skillCall]);
     }
 
     const finishedJob = waitResult.job;
     markdown = await resolveMarkdownFromJob(options, finishedJob);
-    skillReference = finishedJob.jobId;
     finishToolCall(skillCall, 'succeeded', `job=${finishedJob.jobId}, artifacts=${finishedJob.artifacts.length}`);
   } catch (error) {
-    finishToolCall(skillCall, 'failed', '公司研究 Skill 执行失败，未生成降级 Artifact', error);
-    return buildCompanyResearchUnavailableResult(companyName, error, [skillCall]);
+    finishToolCall(skillCall, 'failed', '公司研究服务执行失败，未生成降级资料', error);
+    return buildCompanyResearchUnavailableResult(companyName, error, [lookupCall, skillCall]);
+  }
+
+  const evaluation = evaluateCompanyResearchResult(companyName, markdown);
+  if (!evaluation.usable) {
+    return buildCompanyResearchInvalidResult(companyName, evaluation, [lookupCall, skillCall]);
   }
 
   const artifactCall = createToolCall(context.runId, 'artifact.company_research', companyName);
@@ -5809,7 +6353,8 @@ async function executeCompanyResearch(
     summary: summarizeMarkdown(markdown),
     sourceRefs: extractSourceRefs(markdown),
   });
-  finishToolCall(artifactCall, 'succeeded', `${artifact.artifact.vectorStatus}, chunks=${artifact.artifact.chunkCount}`);
+  finishToolCall(artifactCall, 'succeeded', `公司研究资料已保存为第 ${artifact.artifact.version} 版`);
+  const researchSummary = summarizeMarkdown(markdown);
 
   const evidence = [
     {
@@ -5819,26 +6364,20 @@ async function executeCompanyResearch(
       version: artifact.artifact.version,
       sourceToolCode: artifact.artifact.sourceToolCode,
       anchorLabel: companyName,
-      snippet: summarizeMarkdown(markdown),
+      snippet: researchSummary,
       vectorStatus: artifact.artifact.vectorStatus,
     },
   ];
 
   return {
     status: 'completed',
-    content: `## 公司研究已完成\n- 公司：**${companyName}**\n- Artifact：${artifact.artifact.title} v${artifact.artifact.version}\n- 向量状态：${artifact.artifact.vectorStatus}\n\n## 研究摘要\n${summarizeMarkdown(markdown)}\n\n## 下一步\n1. 可以继续问“这个客户最近有什么值得关注”。\n2. 如需写入客户或跟进记录，后续必须先生成 preview，再由你确认。`,
-    headline: '已通过 Agent 调用公司研究 Skill，并沉淀 Artifact',
-    references: [skillReference, artifact.artifact.title],
+    content: `## 公司研究已完成\n- 公司：**${companyName}**\n- 资料：${artifact.artifact.title} 第 ${artifact.artifact.version} 版\n\n## 研究摘要\n${researchSummary}`,
+    headline: '已生成公司研究资料',
+    references: [COMPANY_RESEARCH_SERVICE_LABEL, artifact.artifact.title],
     evidence,
-    attachments: [
-      {
-        name: `${companyName}-公司研究.md`,
-        url: '#agent-company-research',
-        type: 'markdown',
-      },
-    ],
+    attachments: [],
     contextFrame: buildCompanyContextFrame(companyName, context.runId),
-    toolCalls: [skillCall, artifactCall],
+    toolCalls: [lookupCall, skillCall, artifactCall],
   };
 }
 
@@ -5847,9 +6386,9 @@ function registerArtifactSearchTool(registry: AgentToolRegistry, options: CrmAge
     code: 'artifact.search',
     type: 'artifact',
     provider: 'ai-crm-native-data',
-    description: '检索已有 Artifact 证据并返回 Evidence Card',
-    whenToUse: '用户追问已有研究、资产或上下文证据时使用。',
-    inputSchema: { type: 'object', properties: { query: { type: 'string' }, anchorName: { type: 'string' } } },
+    description: '检索已有外部信息资料并返回可引用资料卡',
+    whenToUse: '用户追问已有外部信息、资产或上下文证据时使用。当前外部信息来源包括公司研究资料。',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, anchorName: { type: 'string' }, dataSourceScope: { type: 'string' } } },
     outputSchema: { type: 'object' },
     riskLevel: 'low',
     confirmationPolicy: 'read_only',
@@ -5875,14 +6414,14 @@ function registerArtifactSearchTool(registry: AgentToolRegistry, options: CrmAge
         anchors: anchorName ? [buildCompanyAnchor(anchorName)] : undefined,
         limit: 5,
       });
-      finishToolCall(call, 'succeeded', `${search.vectorStatus}, evidence=${search.evidence.length}`);
+      finishToolCall(call, 'succeeded', `找到 ${search.evidence.length} 条可引用资料`);
       const evidence: AgentEvidenceCard[] = search.evidence.map((item) => ({
         artifactId: item.artifactId,
         versionId: item.versionId,
         title: item.title,
         version: item.version,
         sourceToolCode: item.sourceToolCode,
-        anchorLabel: item.anchorIds[0] ?? anchorName ?? 'Artifact',
+        anchorLabel: item.anchorIds[0] ?? anchorName ?? '公司研究资料',
         snippet: item.snippet,
         score: item.score,
         vectorStatus: search.vectorStatus,
@@ -5890,10 +6429,14 @@ function registerArtifactSearchTool(registry: AgentToolRegistry, options: CrmAge
       return {
         status: 'completed',
         content: evidence.length
-          ? `## 基于已有 Artifact 的回答\n- 客户 / 公司：**${anchorName || '当前会话对象'}**\n- 可引用证据：${evidence.length} 条\n\n${evidence.slice(0, 2).map((item) => `- ${item.snippet}`).join('\n')}`
-          : '当前没有检索到可引用 Artifact。你可以先说“研究这家公司 XX有限公司”，生成公司研究 Artifact 后再继续追问。',
-        headline: evidence.length ? '已从 Artifact 检索到可引用证据' : '暂无可用 Artifact 证据',
-        references: evidence.map((item) => item.title),
+          ? buildExternalInfoContent({
+              anchorName,
+              evidence,
+              headingLevel: 2,
+            })
+          : '当前没有检索到可引用外部信息。你可以先通过“/公司研究 XX有限公司”生成一份外部信息资料。',
+        headline: evidence.length ? '已找到可引用外部信息' : '暂无可用外部信息',
+        references: [EXTERNAL_INFO_SOURCE_LABEL, ...evidence.map((item) => item.title)],
         evidence,
         qdrantFilter: search.qdrantFilter,
         toolCalls: [call],
@@ -5944,7 +6487,7 @@ function registerMetaTools(registry: AgentToolRegistry, options: CrmAgentPackOpt
 }
 
 function isContextSummaryQuery(query: string): boolean {
-  return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下)/.test(query);
+  return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下|拜访前摘要|商机进展|机会进展|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统)/.test(query);
 }
 
 function inferContextSummaryType(query: string): 'journey' | 'next_step' {
@@ -5971,6 +6514,7 @@ async function executeContextSummaryTool(
 ): Promise<AgentToolExecutionResult> {
   const query = String(input.selectedTool.input.query || input.request.query).trim();
   const summaryType = String(input.selectedTool.input.summaryType || 'journey') === 'next_step' ? 'next_step' : 'journey';
+  const dataSourceScope = normalizeDataSourceScope(input.selectedTool.input.dataSourceScope);
   const toolCalls = [createToolCall(context.runId, CONTEXT_SUMMARY_TOOL, JSON.stringify(input.selectedTool.input))];
   const rootSubject = context.resolvedContext?.usedContext
     ? context.resolvedContext.subject ?? null
@@ -6021,24 +6565,59 @@ async function executeContextSummaryTool(
     toolCalls,
   });
 
+  const externalInfo = dataSourceScope === 'combined'
+    ? await loadExternalInfoEvidenceForSummary({
+        options,
+        context,
+        query,
+        anchorName: resolvedSubject.name,
+        rootSubject,
+        toolCalls,
+      })
+    : null;
+
   finishToolCall(
     toolCalls[0],
     'succeeded',
-    `summaryType=${summaryType}, contacts=${relationResults.contact.totalElements}, opportunities=${relationResults.opportunity.totalElements}, followups=${relationResults.followup.totalElements}`,
+    `scope=${dataSourceScope}, summaryType=${summaryType}, contacts=${readSearchTotal(relationResults.contact)}, opportunities=${readSearchTotal(relationResults.opportunity)}, followups=${readSearchTotal(relationResults.followup)}`,
   );
 
-  const content = buildCustomerSummaryContent({
+  const internalContent = buildCustomerSummaryContent({
     query,
     summaryType,
     customerRecord: customerDetail.record,
     relations: relationResults,
+    includeSourceLabel: dataSourceScope !== 'combined',
   });
+  const content = dataSourceScope === 'combined'
+    ? buildCombinedDataSourceContent({
+        internalContent,
+        externalEvidence: externalInfo?.evidence ?? [],
+        externalAnchorName: externalInfo?.anchorName || resolvedSubject.name,
+        relations: relationResults,
+      })
+    : internalContent;
 
   return {
     status: 'completed',
     content,
-    headline: summaryType === 'journey' ? '客户旅程摘要已生成' : '推进建议已生成',
-    references: [CONTEXT_SUMMARY_TOOL, 'record.customer.get', 'record.contact.search', 'record.opportunity.search', 'record.followup.search'],
+    headline: dataSourceScope === 'combined'
+      ? '已融合外部信息与系统内记录'
+      : summaryType === 'journey' ? '客户旅程摘要已生成' : '推进建议已生成',
+    references: dataSourceScope === 'combined'
+      ? [
+          INTERNAL_RECORDS_SOURCE_LABEL,
+          EXTERNAL_INFO_SOURCE_LABEL,
+          CONTEXT_SUMMARY_TOOL,
+          'record.customer.get',
+          'record.contact.search',
+          'record.opportunity.search',
+          'record.followup.search',
+          'artifact.search',
+          ...(externalInfo?.evidence.map((item) => item.title) ?? []),
+        ]
+      : [INTERNAL_RECORDS_SOURCE_LABEL, CONTEXT_SUMMARY_TOOL, 'record.customer.get', 'record.contact.search', 'record.opportunity.search', 'record.followup.search'],
+    evidence: externalInfo?.evidence ?? [],
     toolCalls,
     contextFrame: {
       subject: {
@@ -6068,7 +6647,12 @@ async function resolveSummaryCustomerSubject(input: {
     return { id: subject.id, name: subject.name };
   }
 
-  const targetName = input.input.intentFrame.target.name?.trim() || extractCompanyName(input.query) || subject?.name?.trim() || '';
+  const intentTargetName = cleanupCompanyName(input.input.intentFrame.target.name?.trim() ?? '');
+  const targetName = extractInternalRecordsSubjectName(input.query)
+    || extractExternalInfoSubjectName(input.query)
+    || extractCompanyName(input.query)
+    || subject?.name?.trim()
+    || (isUsableCompanyName(intentTargetName) ? intentTargetName : '');
   if (!targetName) {
     return null;
   }
@@ -6135,6 +6719,41 @@ async function loadRelatedRecordSummaries(input: {
   };
 }
 
+async function loadExternalInfoEvidenceForSummary(input: {
+  options: CrmAgentPackOptions;
+  context: AgentToolExecuteContext;
+  query: string;
+  anchorName: string;
+  rootSubject: ContextFrame['subject'] | null;
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+}): Promise<{ anchorName: string; evidence: AgentEvidenceCard[] }> {
+  const anchorName = input.anchorName || input.rootSubject?.name || extractExternalInfoSubjectName(input.query);
+  const call = createToolCall(input.context.runId, 'artifact.search', input.query);
+  const search = await input.options.artifactService.search({
+    eid: input.context.eid,
+    appId: input.context.appId,
+    query: input.query,
+    anchors: anchorName ? [buildCompanyAnchor(anchorName)] : undefined,
+    limit: 5,
+  });
+  finishToolCall(call, 'succeeded', `找到 ${search.evidence.length} 条外部信息`);
+  input.toolCalls.push(call);
+  return {
+    anchorName,
+    evidence: search.evidence.map((item) => ({
+      artifactId: item.artifactId,
+      versionId: item.versionId,
+      title: item.title,
+      version: item.version,
+      sourceToolCode: item.sourceToolCode,
+      anchorLabel: item.anchorIds[0] ?? anchorName ?? EXTERNAL_INFO_SOURCE_LABEL,
+      snippet: item.snippet,
+      score: item.score,
+      vectorStatus: search.vectorStatus,
+    })),
+  };
+}
+
 async function executeSummarySearchWithRetry(
   service: ShadowMetadataService,
   objectKey: 'contact' | 'opportunity' | 'followup',
@@ -6193,9 +6812,98 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildExternalInfoContent(input: {
+  anchorName?: string;
+  evidence: AgentEvidenceCard[];
+  headingLevel: 2 | 3;
+}): string {
+  const heading = '#'.repeat(input.headingLevel);
+  const targetLabel = input.anchorName || '当前会话对象';
+  const snippets = input.evidence.slice(0, 2).map((item) => `- ${item.snippet}`);
+  return [
+    `${heading} ${EXTERNAL_INFO_SOURCE_LABEL}`,
+    `- 对象：**${targetLabel}**`,
+    `- 可引用资料：${input.evidence.length} 条`,
+    '',
+    ...snippets,
+  ].join('\n');
+}
+
+function buildCombinedDataSourceContent(input: {
+  internalContent: string;
+  externalEvidence: AgentEvidenceCard[];
+  externalAnchorName: string;
+  relations: Record<'contact' | 'opportunity' | 'followup', {
+    totalElements: number;
+    records: Array<unknown>;
+  }>;
+}): string {
+  const externalContent = input.externalEvidence.length
+    ? buildExternalInfoContent({
+        anchorName: input.externalAnchorName,
+        evidence: input.externalEvidence,
+        headingLevel: 3,
+      })
+    : [
+        `### ${EXTERNAL_INFO_SOURCE_LABEL}`,
+        `- 对象：**${input.externalAnchorName || '当前会话对象'}**`,
+        '- 当前没有检索到可引用外部信息。',
+      ].join('\n');
+
+  return [
+    `## ${INTERNAL_RECORDS_SOURCE_LABEL}`,
+    demoteMarkdownHeadings(input.internalContent).trim(),
+    '',
+    externalContent,
+    '',
+    '## 判断建议',
+    ...buildCombinedDataSourceAdvice({
+      hasExternalInfo: input.externalEvidence.length > 0,
+      relations: input.relations,
+    }).map((item) => `- ${item}`),
+  ].join('\n');
+}
+
+function demoteMarkdownHeadings(content: string): string {
+  return content.replace(/^## /gm, '### ');
+}
+
+function buildCombinedDataSourceAdvice(input: {
+  hasExternalInfo: boolean;
+  relations: Record<'contact' | 'opportunity' | 'followup', { totalElements: number; records: Array<unknown> }>;
+}): string[] {
+  const suggestions: string[] = [];
+  const opportunityTotal = readSearchTotal(input.relations.opportunity);
+  const followupTotal = readSearchTotal(input.relations.followup);
+  const contactTotal = readSearchTotal(input.relations.contact);
+
+  if (!input.hasExternalInfo) {
+    suggestions.push('缺少外部信息，建议先通过公司研究或后续外部资料入口补齐公开背景，再做综合判断。');
+  }
+  if (opportunityTotal === 0) {
+    suggestions.push('系统内记录未看到商机，若客户已进入销售推进，应先补齐商机阶段、金额和预计成交时间。');
+  }
+  if (followupTotal === 0) {
+    suggestions.push('系统内记录未看到跟进沉淀，拜访前需要补充最近互动和客户反馈，避免只依据外部信息判断。');
+  }
+  if (contactTotal === 0) {
+    suggestions.push('系统内记录未看到联系人，建议先确认关键人和影响人，再安排下一步动作。');
+  }
+  if (suggestions.length === 0) {
+    suggestions.push('优先核对系统内商机阶段与外部公开业务方向是否一致，再把差异点转成拜访问题。');
+  }
+
+  return suggestions;
+}
+
+function readSearchTotal(search: { totalElements?: number; records?: Array<unknown> }): number {
+  return Number.isFinite(search.totalElements) ? Number(search.totalElements) : search.records?.length ?? 0;
+}
+
 function buildCustomerSummaryContent(input: {
   query: string;
   summaryType: 'journey' | 'next_step';
+  includeSourceLabel?: boolean;
   customerRecord: {
     formInstId?: string;
     fields?: Array<{ title?: string | null; value?: unknown; rawValue?: unknown }>;
@@ -6221,13 +6929,18 @@ function buildCustomerSummaryContent(input: {
   const contactPreview = summarizeRelationRecords('contact', input.relations.contact.records);
   const opportunityPreview = summarizeRelationRecords('opportunity', input.relations.opportunity.records);
   const followupPreview = summarizeRelationRecords('followup', input.relations.followup.records);
+  const contactTotal = readSearchTotal(input.relations.contact);
+  const opportunityTotal = readSearchTotal(input.relations.opportunity);
+  const followupTotal = readSearchTotal(input.relations.followup);
   const suggestions = buildCustomerSuggestions({
     customer,
     relations: input.relations,
   });
+  const heading = input.includeSourceLabel ? '###' : '##';
 
   const lines = [
-    input.summaryType === 'journey' ? '## 客户旅程摘要' : '## 推进建议摘要',
+    ...(input.includeSourceLabel ? [`## ${INTERNAL_RECORDS_SOURCE_LABEL}`] : []),
+    input.summaryType === 'journey' ? `${heading} 客户旅程摘要` : `${heading} 推进建议摘要`,
     `- 客户：${customerName}`,
     `- 客户编码：${customerCode}`,
     `- 客户状态：${customerStatus}`,
@@ -6236,23 +6949,23 @@ function buildCustomerSummaryContent(input: {
     `- 最后跟进：${lastFollowupDate}`,
     `- 下次回访：${nextVisitDate}`,
     '',
-    '## 当前客户画像',
-    `- 联系人：${input.relations.contact.totalElements} 条`,
-    `- 商机：${input.relations.opportunity.totalElements} 条`,
-    `- 跟进记录：${input.relations.followup.totalElements} 条`,
+    `${heading} 当前客户画像`,
+    `- 联系人：${contactTotal} 条`,
+    `- 商机：${opportunityTotal} 条`,
+    `- 跟进记录：${followupTotal} 条`,
   ];
 
   if (contactPreview.length) {
-    lines.push('', '## 代表性联系人', ...contactPreview.map((item) => `- ${item}`));
+    lines.push('', `${heading} 代表性联系人`, ...contactPreview.map((item) => `- ${item}`));
   }
   if (opportunityPreview.length) {
-    lines.push('', '## 商机进展', ...opportunityPreview.map((item) => `- ${item}`));
+    lines.push('', `${heading} 商机进展`, ...opportunityPreview.map((item) => `- ${item}`));
   }
   if (followupPreview.length) {
-    lines.push('', '## 最近跟进', ...followupPreview.map((item) => `- ${item}`));
+    lines.push('', `${heading} 最近跟进`, ...followupPreview.map((item) => `- ${item}`));
   }
   if (suggestions.length) {
-    lines.push('', input.summaryType === 'journey' ? '## 建议下一步' : '## 下一步建议', ...suggestions.map((item) => `- ${item}`));
+    lines.push('', input.summaryType === 'journey' ? `${heading} 建议下一步` : `${heading} 下一步建议`, ...suggestions.map((item) => `- ${item}`));
   }
 
   return lines.join('\n');
@@ -6268,17 +6981,20 @@ function buildCustomerSuggestions(input: {
   const province = readFieldByTitles(input.customer, ['省']) || '';
   const city = readFieldByTitles(input.customer, ['市']) || '';
   const district = readFieldByTitles(input.customer, ['区']) || '';
+  const contactTotal = readSearchTotal(input.relations.contact);
+  const opportunityTotal = readSearchTotal(input.relations.opportunity);
+  const followupTotal = readSearchTotal(input.relations.followup);
 
-  if (input.relations.followup.totalElements === 0) {
+  if (followupTotal === 0) {
     suggestions.push('尽快补一条跟进记录，避免客户状态只有静态资料没有过程沉淀。');
   }
-  if (input.relations.opportunity.totalElements === 0) {
+  if (opportunityTotal === 0) {
     suggestions.push('如果这家客户已进入商机阶段，建议补录商机并明确销售阶段、预算、预计成交时间。');
   }
   if (!province || !city || !district) {
     suggestions.push('建议继续补充省、市、区，方便后续做区域经营和拜访路线安排。');
   }
-  if (input.relations.contact.totalElements > 0 && input.relations.followup.totalElements < input.relations.contact.totalElements) {
+  if (contactTotal > 0 && followupTotal < contactTotal) {
     suggestions.push('联系人数量多于跟进沉淀数量，建议梳理关键联系人分工并补齐最近互动。');
   }
 
@@ -6295,17 +7011,17 @@ function summarizeRelationRecords(
 ): string[] {
   return records.slice(0, 3).map((record) => {
     if (objectKey === 'contact') {
-      const name = readFieldByTitles(record, ['联系人姓名', '姓名']) || readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.contact) || record.formInstId;
+      const name = readFieldByTitles(record, ['联系人姓名', '姓名']) || readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.contact) || '联系人记录';
       const mobile = readFieldByTitles(record, ['手机', '联系电话']) || '-';
       return `${name} / 手机：${mobile}`;
     }
     if (objectKey === 'opportunity') {
-      const name = readFieldByTitles(record, ['机会名称', '商机名称']) || readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.opportunity) || record.formInstId;
+      const name = readFieldByTitles(record, ['机会名称', '商机名称']) || readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.opportunity) || '商机记录';
       const stage = readFieldByTitles(record, ['销售阶段']) || '-';
       const closeDate = readFieldByTitles(record, ['预计成交时间']) || '-';
       return `${name} / 阶段：${stage} / 预计成交：${closeDate}`;
     }
-    const title = readFieldByTitles(record, ['跟进记录']) || readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.followup) || record.formInstId;
+    const title = readFieldByTitles(record, ['跟进记录']) || readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.followup) || '跟进记录';
     const method = readFieldByTitles(record, ['跟进方式']) || '-';
     return `${title} / 跟进方式：${method}`;
   });
@@ -6313,19 +7029,27 @@ function summarizeRelationRecords(
 
 function readFieldByTitles(
   record: {
-    fields?: Array<{ title?: string | null; value?: unknown; rawValue?: unknown }>;
+    formInstId?: string;
+    important?: Record<string, unknown>;
+    fields?: Array<{ codeId?: string | null; title?: string | null; value?: unknown; rawValue?: unknown }>;
+    rawRecord?: Record<string, unknown>;
   },
   titles: string[],
 ): string {
   const fields = record.fields ?? [];
+  const lookupKeys = new Set(titles.flatMap((title) => IMPORTANT_FIELD_ALIASES[title] ?? [title]));
   for (const title of titles) {
-    const field = fields.find((item) => item.title === title);
-    const value = field ? stringifyPreviewValue(field.value ?? field.rawValue) : '';
+    const field = fields.find((item) =>
+      item.title === title
+      || Boolean(item.title && lookupKeys.has(item.title))
+      || Boolean(item.codeId && lookupKeys.has(item.codeId))
+    );
+    const value = field ? stringifyRecordDisplayCandidate(field.value ?? field.rawValue, record.formInstId) : '';
     if (value) {
       return value;
     }
   }
-  return '';
+  return readImportantValueByTitles(record, titles);
 }
 
 async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Promise<SkillJobWaitResult> {
@@ -6337,7 +7061,7 @@ async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Pro
       return { status: 'succeeded', job };
     }
     if (job.status === 'failed') {
-      throw new Error(job.error?.message ?? '公司研究 Skill 执行失败');
+      throw new Error(job.error?.message ?? '公司研究服务执行失败');
     }
     await new Promise((resolve) => setTimeout(resolve, COMPANY_RESEARCH_POLL_INTERVAL_MS));
     job = await options.externalSkillService.getSkillJob(jobId);
@@ -6346,7 +7070,7 @@ async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Pro
     return { status: 'succeeded', job };
   }
   if (job.status === 'failed') {
-    throw new Error(job.error?.message ?? '公司研究 Skill 执行失败');
+    throw new Error(job.error?.message ?? '公司研究服务执行失败');
   }
   return { status: 'still_running', job };
 }
@@ -6365,7 +7089,219 @@ async function resolveMarkdownFromJob(options: CrmAgentPackOptions, job: Externa
     return job.finalText.trim();
   }
 
-  throw new Error('公司研究 Skill 未返回 Markdown 内容');
+  throw new Error('公司研究服务未返回可用研究资料');
+}
+
+async function findReusableCompanyResearchArtifact(
+  options: CrmAgentPackOptions,
+  input: { eid: string; appId: string; companyName: string },
+): Promise<ArtifactDetailResponse | null> {
+  const artifactService = options.artifactService as ArtifactService & {
+    findLatestCompanyResearchArtifact?: ArtifactService['findLatestCompanyResearchArtifact'];
+  };
+  if (typeof artifactService.findLatestCompanyResearchArtifact !== 'function') {
+    return null;
+  }
+
+  return artifactService.findLatestCompanyResearchArtifact(input);
+}
+
+function buildCompanyResearchReusedResult(
+  companyName: string,
+  detail: ArtifactDetailResponse,
+  toolCalls: AgentToolExecutionResult['toolCalls'],
+  taskPlan?: TaskPlan,
+): AgentToolExecutionResult {
+  const snippet = summarizeMarkdown(detail.markdown) || detail.summary?.trim() || '已有公司研究资料可供参考。';
+  const anchorLabel = detail.artifact.anchors.find((item) => item.type === 'company')?.name
+    || detail.artifact.anchors.find((item) => item.type === 'company')?.id
+    || companyName;
+  const evidence: AgentEvidenceCard[] = [
+    {
+      artifactId: detail.artifact.artifactId,
+      versionId: detail.artifact.versionId,
+      title: detail.artifact.title,
+      version: detail.artifact.version,
+      sourceToolCode: detail.artifact.sourceToolCode,
+      anchorLabel,
+      snippet,
+      vectorStatus: detail.artifact.vectorStatus,
+    },
+  ];
+
+  return {
+    status: 'completed',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 已使用已有公司研究资料',
+      `- 公司：**${companyName}**`,
+      `- 资料：${detail.artifact.title} 第 ${detail.artifact.version} 版`,
+      '',
+      '## 研究摘要',
+      snippet,
+    ].join('\n'),
+    headline: '已使用已有公司研究资料',
+    references: [COMPANY_RESEARCH_MATERIAL_LABEL, COMPANY_RESEARCH_SERVICE_LABEL],
+    evidence,
+    attachments: [],
+    contextFrame: buildCompanyContextFrame(companyName),
+    toolCalls,
+    taskPlan: markCompanyResearchReusedPlan(taskPlan),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.company_research.reuse_existing_artifact',
+        action: 'allow',
+        toolCode: COMPANY_RESEARCH_TOOL,
+        reason: '已有有效公司研究资料，直接复用，不重复调用外部研究服务。',
+      }),
+    ],
+  };
+}
+
+function buildCompanyResearchLookupUnavailableResult(
+  companyName: string,
+  error: unknown,
+  toolCalls: AgentToolExecutionResult['toolCalls'],
+): AgentToolExecutionResult {
+  const message = sanitizeCompanyResearchUserError(getErrorMessage(error));
+  return {
+    status: 'tool_unavailable',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 公司研究资料查询失败',
+      `- 公司：**${companyName}**`,
+      `- 失败原因：${message}`,
+      '',
+      '## 当前处理',
+      '- 未调用外部公司研究服务。',
+      '- 未生成降级资料。',
+      '- 请检查研究资料存储后重试。',
+    ].join('\n'),
+    headline: '公司研究资料查询失败，未触发外部服务',
+    references: [COMPANY_RESEARCH_MATERIAL_LABEL, COMPANY_RESEARCH_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    contextFrame: buildCompanyContextFrame(companyName),
+    toolCalls,
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.company_research.lookup_required',
+        action: 'block',
+        toolCode: COMPANY_RESEARCH_TOOL,
+        reason: `公司研究复用查询失败，为避免重复研究已阻止外部服务调用：${message}`,
+      }),
+    ],
+  };
+}
+
+function markCompanyResearchReusedPlan(taskPlan?: TaskPlan): TaskPlan | undefined {
+  if (!taskPlan) {
+    return undefined;
+  }
+
+  return {
+    ...taskPlan,
+    status: 'completed',
+    steps: taskPlan.steps.map((item) => {
+      if (item.key === 'lookup-company-research') {
+        return { ...item, status: 'succeeded' };
+      }
+      if (item.key === 'run-company-research' || item.key === 'persist-artifact') {
+        return { ...item, status: 'skipped' };
+      }
+      return item;
+    }),
+  };
+}
+
+function buildCompanyResearchInputRequiredResult(
+  rawCompanyName: string,
+  taskPlan?: TaskPlan,
+): AgentToolExecutionResult {
+  const hint = cleanupCompanyName(rawCompanyName);
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 需要公司全称',
+      '请在 `/公司研究` 后输入要研究的公司全称，例如：上海松井机械有限公司。',
+      '',
+      '## 当前处理',
+      '- 未调用公司研究服务。',
+      '- 未查询或保存公司研究资料。',
+      hint ? `- 已忽略占位或无效输入：${hint}` : '',
+    ].filter(Boolean).join('\n'),
+    headline: '请补充公司全称',
+    references: [COMPANY_RESEARCH_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    toolCalls: [],
+    taskPlan: markCompanyResearchInputRequiredPlan(taskPlan),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.company_research.input_required',
+        action: 'block',
+        toolCode: COMPANY_RESEARCH_TOOL,
+        reason: '公司研究缺少有效公司全称，已阻止外部服务调用和资料落库。',
+      }),
+    ],
+  };
+}
+
+function markCompanyResearchInputRequiredPlan(taskPlan?: TaskPlan): TaskPlan | undefined {
+  if (!taskPlan) {
+    return undefined;
+  }
+
+  return {
+    ...taskPlan,
+    status: 'waiting_input',
+    steps: taskPlan.steps.map((item) => {
+      if (item.key === 'lookup-company-research' || item.key === 'run-company-research' || item.key === 'persist-artifact') {
+        return { ...item, status: 'skipped' };
+      }
+      return item;
+    }),
+  };
+}
+
+interface CompanyResearchEvaluation {
+  usable: boolean;
+  reason: string;
+}
+
+function buildCompanyResearchInvalidResult(
+  companyName: string,
+  evaluation: CompanyResearchEvaluation,
+  toolCalls: AgentToolExecutionResult['toolCalls'],
+): AgentToolExecutionResult {
+  return {
+    status: 'tool_unavailable',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 未生成公司研究资料',
+      `- 公司：**${companyName}**`,
+      `- 原因：${evaluation.reason}`,
+      '',
+      '## 当前处理',
+      '- 已完成一次真实公司研究服务调用。',
+      '- 返回内容不足以确认目标公司或缺少有效研究信息。',
+      '- 本次结果不会进入可引用资料库，也不会显示公司研究资料卡。',
+    ].join('\n'),
+    headline: '未生成公司研究资料',
+    references: [COMPANY_RESEARCH_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    toolCalls,
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.company_research.invalid_result_no_artifact',
+        action: 'block',
+        toolCode: COMPANY_RESEARCH_TOOL,
+        reason: `真实公司研究结果不可用，已阻止资料落库：${evaluation.reason}`,
+      }),
+    ],
+  };
 }
 
 function buildCompanyResearchRunningResult(
@@ -6381,17 +7317,16 @@ function buildCompanyResearchRunningResult(
     content: [
       '## 公司研究仍在运行',
       `- 公司：**${companyName}**`,
-      `- Skill Job：\`${job.jobId}\``,
-      `- 当前状态：${job.status}`,
-      `- 同步等待：已等待约 ${waitedSeconds} 秒，真实联网研究仍在 skill-runtime 中继续执行。`,
+      '- 当前状态：研究任务仍在处理中。',
+      `- 同步等待：已等待约 ${waitedSeconds} 秒，真实联网研究仍在继续执行。`,
       '',
       '## 当前说明',
-      '- Agent 已成功触发 company-research。',
+      '- 系统已成功触发公司研究服务。',
       '- 本次响应先保留运行中状态，避免把长耗时研究误判成失败。',
-      '- 任务完成后，可通过外部技能任务记录查看 Markdown 产物；后续再接入异步回填 Artifact。',
+      '- 任务完成后，可通过外部技能任务记录查看研究资料；后续再接入异步回填。',
     ].join('\n'),
     headline: '公司研究任务仍在运行，可稍后查看产物',
-    references: [job.jobId, 'company-research'],
+    references: [COMPANY_RESEARCH_SERVICE_LABEL],
     evidence: [],
     attachments: [],
     contextFrame: buildCompanyContextFrame(companyName),
@@ -6404,23 +7339,24 @@ function buildCompanyResearchUnavailableResult(
   error: unknown,
   toolCalls: AgentToolExecutionResult['toolCalls'],
 ): AgentToolExecutionResult {
-  const message = getErrorMessage(error);
+  const rawMessage = getErrorMessage(error);
+  const message = sanitizeCompanyResearchUserError(rawMessage);
   return {
     status: 'tool_unavailable',
     currentStepKey: 'execute-tool',
     content: [
-      '## 公司研究 Skill 执行失败',
+      '## 公司研究服务执行失败',
       `- 公司：**${companyName}**`,
-      `- 工具：\`${COMPANY_RESEARCH_RUNTIME_TOOL}\``,
+      `- 服务：${COMPANY_RESEARCH_SERVICE_LABEL}`,
       `- 失败原因：${message}`,
       '',
       '## 当前处理',
-      '- 未生成降级 Artifact。',
+      '- 未生成降级资料。',
       '- 未写入客户、联系人、商机或跟进记录。',
-      '- 请处理外部 Skill / 模型额度 / skill-runtime 可用性后重试。',
+      '- 请处理外部服务、模型额度或运行时可用性后重试。',
     ].join('\n'),
-    headline: '公司研究 Skill 执行失败，未生成 Artifact',
-    references: [COMPANY_RESEARCH_RUNTIME_TOOL, 'company-research'],
+    headline: '公司研究服务执行失败，未生成资料',
+    references: [COMPANY_RESEARCH_SERVICE_LABEL],
     evidence: [],
     attachments: [],
     contextFrame: buildCompanyContextFrame(companyName),
@@ -6430,10 +7366,20 @@ function buildCompanyResearchUnavailableResult(
         policyCode: 'external.company_research.no_degraded_artifact',
         action: 'block',
         toolCode: COMPANY_RESEARCH_TOOL,
-        reason: `外部公司研究失败时不得生成降级 Artifact：${message}`,
+        reason: `外部公司研究失败时不得生成降级资料：${rawMessage}`,
       }),
     ],
   };
+}
+
+function sanitizeCompanyResearchUserError(value: string): string {
+  return value
+    .replace(/skill/gi, '服务')
+    .replace(/company-research/g, '公司研究服务')
+    .replace(/ext\.company_research_pm/g, COMPANY_RESEARCH_SERVICE_LABEL)
+    .replace(/Artifact/g, '资料')
+    .replace(/Markdown/g, '研究资料')
+    .replace(/服务\s+依赖/g, '服务依赖');
 }
 
 function buildCompanyContextFrame(companyName: string, sourceRunId?: string): ContextFrame {
@@ -6462,13 +7408,116 @@ function buildCompanyAnchor(companyName: string): ArtifactAnchor {
   };
 }
 
+function evaluateCompanyResearchResult(companyName: string, markdown: string): CompanyResearchEvaluation {
+  const normalizedMarkdown = markdown.replace(/\s+/g, '');
+  const visibleText = markdown.replace(/\s+/g, ' ').trim();
+  if (!visibleText) {
+    return { usable: false, reason: '公司研究服务没有返回有效内容。' };
+  }
+
+  const invalidPatterns = [
+    /未(?:检索|搜索|查询|找到|发现)(?:到)?.{0,24}(?:对应|有效|可靠|公开|目标)?.{0,12}(?:公司|资料|信息|主体|结果)/,
+    /没有(?:检索|搜索|查询|找到|发现)(?:到)?.{0,24}(?:对应|有效|可靠|公开|目标)?.{0,12}(?:公司|资料|信息|主体|结果)/,
+    /(?:未能|无法|不能).{0,16}(?:确认|核实|验证|识别).{0,16}(?:公司|主体|企业|目标)/,
+    /(?:无|缺少).{0,12}(?:有效|可靠|公开).{0,12}(?:资料|信息|来源|数据)/,
+    /请(?:提供|补充|确认).{0,12}(?:公司全称|公司名称|准确名称|目标公司)/,
+    /(?:疑似)?不存在(?:该|这个|目标)?(?:公司|企业)?/,
+    /未生成公司研究资料/,
+  ];
+  if (invalidPatterns.some((pattern) => pattern.test(visibleText) || pattern.test(normalizedMarkdown))) {
+    return { usable: false, reason: '未检索到可确认的目标公司有效公开资料。' };
+  }
+
+  if (!mentionsTargetCompany(companyName, markdown)) {
+    return { usable: false, reason: '返回内容没有明确指向目标公司主体。' };
+  }
+
+  const researchSignals = [
+    '公司概览',
+    '企业概览',
+    '公司概况',
+    '企业概况',
+    '业务定位',
+    '主营业务',
+    '主要产品',
+    '产品',
+    '服务',
+    '经营范围',
+    '行业',
+    '市场',
+    '客户',
+    '竞争',
+    '成长驱动',
+    '增长驱动',
+    '核心风险',
+    '风险',
+    '机会',
+    '来源',
+    '引用',
+    '官网',
+    '公开资料',
+  ];
+  if (!researchSignals.some((token) => visibleText.includes(token) || normalizedMarkdown.includes(token))) {
+    return { usable: false, reason: '返回内容缺少公司概览、业务定位、风险或来源等有效研究信息。' };
+  }
+
+  return { usable: true, reason: '已确认目标公司主体且包含有效研究内容。' };
+}
+
+function mentionsTargetCompany(companyName: string, markdown: string): boolean {
+  const normalizedMarkdown = normalizeCompanyResearchText(markdown);
+  const aliases = buildCompanyNameAliases(companyName);
+  return aliases.some((alias) => normalizedMarkdown.includes(alias));
+}
+
+function buildCompanyNameAliases(companyName: string): string[] {
+  const normalized = normalizeCompanyResearchText(companyName);
+  const suffixStripped = normalized.replace(/(?:有限责任公司|股份有限公司|集团有限公司|有限公司|集团|公司|股份)$/g, '');
+  const aliases = [normalized, suffixStripped]
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 4);
+  return Array.from(new Set(aliases));
+}
+
+function normalizeCompanyResearchText(value: string): string {
+  return value
+    .replace(/\s+/g, '')
+    .replace(/[^\p{L}\p{N}]/gu, '')
+    .trim();
+}
+
 function summarizeMarkdown(markdown: string): string {
-  const lines = markdown
-    .split('\n')
-    .map(cleanMarkdownLine)
-    .filter(Boolean)
-    .filter((line) => !isMarkdownNoiseLine(line));
-  return lines.slice(0, 4).map((line) => `- ${line}`).join('\n') || '公司研究 Markdown 已生成。';
+  const preferredSectionPattern = /(公司概览|企业概览|业务定位|主营业务|成长驱动|增长驱动|核心风险|风险|机会|竞争|客户画像|价值|建议)/;
+  const allItems: string[] = [];
+  const preferredItems: string[] = [];
+  let currentHeading = '';
+
+  for (const rawLine of markdown.split('\n')) {
+    const heading = rawLine.match(/^#{1,6}\s+(.+)$/)?.[1];
+    if (heading) {
+      currentHeading = cleanMarkdownLine(heading);
+      continue;
+    }
+
+    const text = cleanMarkdownLine(rawLine);
+    if (!text || isMarkdownNoiseLine(text)) {
+      continue;
+    }
+    const item = currentHeading && !text.includes(currentHeading)
+      ? `${currentHeading}：${text}`
+      : text;
+    const normalized = trimSummaryItem(item);
+    if (!normalized || allItems.includes(normalized)) {
+      continue;
+    }
+    allItems.push(normalized);
+    if (preferredSectionPattern.test(currentHeading) || preferredSectionPattern.test(text)) {
+      preferredItems.push(normalized);
+    }
+  }
+
+  const merged = [...preferredItems, ...allItems.filter((item) => !preferredItems.includes(item))];
+  return merged.slice(0, 8).map((line) => `- ${line}`).join('\n') || '已有公司研究资料可供参考。';
 }
 
 function cleanMarkdownLine(line: string): string {
@@ -6490,6 +7539,11 @@ function isMarkdownNoiseLine(line: string): boolean {
     || /^[:\-\s|]+$/.test(line)
     || ['项目', '内容', '公司名称', '英文名', '成立时间', '注册资本'].some((token) => line === token)
     || ['生成时间', '研究目的', '研究方法', '方法：', '公开信息检索'].some((token) => line.includes(token));
+}
+
+function trimSummaryItem(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > 180 ? `${normalized.slice(0, 180)}...` : normalized;
 }
 
 function extractSourceRefs(markdown: string) {

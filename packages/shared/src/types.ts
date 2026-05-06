@@ -1083,6 +1083,22 @@ export interface AgentConversationUpsertRequest {
   conversation: ConversationSession;
 }
 
+export interface AgentPersonalSettingsResponse {
+  eid: string;
+  appId: string;
+  operatorOpenId: string;
+  displayName: string;
+  roleLabel: string;
+  soulPrompt: string;
+  isDefaultSoulPrompt: boolean;
+  updatedAt: string | null;
+}
+
+export interface AgentPersonalSettingsUpdateRequest {
+  operatorOpenId?: string;
+  soulPrompt?: string;
+}
+
 export interface SceneTask {
   id: string;
   title: string;

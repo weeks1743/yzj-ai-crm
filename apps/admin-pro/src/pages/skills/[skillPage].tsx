@@ -14,10 +14,13 @@ import {
   Form,
   Image,
   Input,
+  Radio,
   Result,
   Select,
   Space,
+  Switch,
   Tag,
+  Tabs,
   Timeline,
   Typography,
 } from 'antd';
@@ -188,6 +191,209 @@ interface SkillJobFormValues {
   model?: SkillRuntimeModelName;
   attachmentsText?: string;
   workingDirectory?: string;
+}
+
+interface CompanyResearchConversationStep {
+  key: string;
+  title: string;
+  description: string;
+}
+
+const companyResearchUsageDefaults = {
+  chatEnabled: true,
+  reuseMode: 'reuse_valid',
+  saveMode: 'one_company_one_profile',
+  relationMode: 'safe_customer_match',
+  invalidMode: 'task_record_only',
+};
+
+const companyResearchConversationSteps: CompanyResearchConversationStep[] = [
+  {
+    key: 'resolve-customer',
+    title: '先确认客户',
+    description: '用户说“这个客户”时，先确定是哪一条客户资料。',
+  },
+  {
+    key: 'read-records',
+    title: '读取系统内资料',
+    description: '读取客户资料、联系人、商机和跟进记录，作为系统内事实。',
+  },
+  {
+    key: 'find-research',
+    title: '查找公司研究',
+    description: '优先使用已关联的公司研究；找不到时，再按公司名称查已有有效资料。',
+  },
+  {
+    key: 'compose-answer',
+    title: '组合回答',
+    description: '把系统内资料、公司研究和建议判断分开说明，方便销售判断来源。',
+  },
+  {
+    key: 'ask-before-research',
+    title: '没有资料先询问',
+    description: '没有有效公司研究时，只询问是否需要研究，不编造外部背景。',
+  },
+];
+
+const companyResearchConversationColumns: ProColumns<CompanyResearchConversationStep>[] = [
+  {
+    title: '聊天步骤',
+    dataIndex: 'title',
+    width: 150,
+  },
+  {
+    title: '系统怎么做',
+    dataIndex: 'description',
+  },
+];
+
+function CompanyResearchUsageConfigPreview() {
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <div>
+        <Typography.Title level={5}>使用配置</Typography.Title>
+        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          这里是面向普通管理员的配置设计稿，当前只展示推荐规则，不会保存到后台规则引擎。
+        </Paragraph>
+      </div>
+
+      <Alert
+        type="info"
+        showIcon
+        message="推荐规则"
+        description="已有有效公司研究时直接复用；查不到有效资料时只保留任务记录，不进入聊天可引用资料。"
+      />
+
+      <Form
+        disabled
+        layout="vertical"
+        initialValues={companyResearchUsageDefaults}
+        style={{ maxWidth: 720 }}
+      >
+        <Form.Item
+          label="聊天里可以使用公司研究"
+          name="chatEnabled"
+          valuePropName="checked"
+          extra="开启后，客户聊天可以引用已经保存的有效公司研究。"
+        >
+          <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+        </Form.Item>
+
+        <Form.Item
+          label="已有公司研究时"
+          name="reuseMode"
+          extra="避免同一家公司反复研究，减少重复资料。"
+        >
+          <Radio.Group>
+            <Radio value="reuse_valid">直接使用已有有效结果，不重新研究</Radio>
+          </Radio.Group>
+        </Form.Item>
+
+        <Form.Item
+          label="研究结果怎么保存"
+          name="saveMode"
+          extra="同一家公司只保留一份可用资料；后续有效研究会进入历史版本。"
+        >
+          <Radio.Group>
+            <Radio value="one_company_one_profile">同一家公司保存为一份资料</Radio>
+          </Radio.Group>
+        </Form.Item>
+
+        <Form.Item
+          label="怎么和客户资料关联"
+          name="relationMode"
+          extra="只有明确知道是哪一个客户时才自动关联，匹配到多个客户时交给用户选择。"
+        >
+          <Radio.Group>
+            <Radio value="safe_customer_match">唯一客户自动关联，多个客户让用户选择</Radio>
+          </Radio.Group>
+        </Form.Item>
+
+        <Form.Item
+          label="没查到有效资料时"
+          name="invalidMode"
+          extra="不会让聊天引用这类结果，也不需要管理员额外标记。"
+        >
+          <Radio.Group>
+            <Radio value="task_record_only">只保留任务记录，不作为可用资料</Radio>
+          </Radio.Group>
+        </Form.Item>
+      </Form>
+
+      <div>
+        <Typography.Title level={5}>聊天如何组合使用</Typography.Title>
+        <ProTable<CompanyResearchConversationStep>
+          rowKey="key"
+          columns={companyResearchConversationColumns}
+          dataSource={companyResearchConversationSteps}
+          search={false}
+          options={false}
+          pagination={false}
+          size="small"
+        />
+      </div>
+    </Space>
+  );
+}
+
+function ExternalSkillBasicInfo({ skill }: { skill: ExternalSkillCatalogItem }) {
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type={getStatusAlertType(skill.status)}
+        showIcon
+        message={
+          skill.status === '运行中'
+            ? '能力运行正常'
+            : skill.status === '告警中'
+              ? '能力已注册，但当前存在配置或 provider 风险'
+              : '能力仍为占位展示'
+        }
+        description={skill.summary}
+      />
+      <ProDescriptions<ExternalSkillCatalogItem> column={1} dataSource={skill}>
+        <ProDescriptions.Item label="技能名称">{skill.label}</ProDescriptions.Item>
+        <ProDescriptions.Item label="技能编码">{skill.skillCode}</ProDescriptions.Item>
+        <ProDescriptions.Item label="实现方式">
+          {implementationTypeLabels[skill.implementationType]}
+        </ProDescriptions.Item>
+        <ProDescriptions.Item label="是否可调用">
+          <Tag color={skill.supportsInvoke ? 'success' : 'default'}>
+            {skill.supportsInvoke ? '可调用' : '仅占位'}
+          </Tag>
+        </ProDescriptions.Item>
+        <ProDescriptions.Item label="状态">
+          <Tag color={getStatusColor(skill.status)}>{skill.status}</Tag>
+        </ProDescriptions.Item>
+        <ProDescriptions.Item label="模型">{skill.model ?? '—'}</ProDescriptions.Item>
+        <ProDescriptions.Item label="服务提供方">{skill.provider ?? '—'}</ProDescriptions.Item>
+        <ProDescriptions.Item label="触发方式">{skill.trigger}</ProDescriptions.Item>
+        <ProDescriptions.Item label="路由">{skill.route ?? '—'}</ProDescriptions.Item>
+        <ProDescriptions.Item label="负责人">{skill.owner}</ProDescriptions.Item>
+        <ProDescriptions.Item label="SLA">{skill.sla}</ProDescriptions.Item>
+        <ProDescriptions.Item label="依赖">
+          <Space wrap>
+            {skill.dependencies.map((dependency) => (
+              <Tag key={dependency}>{dependency}</Tag>
+            ))}
+          </Space>
+        </ProDescriptions.Item>
+        <ProDescriptions.Item label="缺失依赖">
+          {skill.missingDependencies && skill.missingDependencies.length > 0 ? (
+            <Space wrap>
+              {skill.missingDependencies.map((dependency) => (
+                <Tag color="warning" key={dependency}>
+                  {dependency}
+                </Tag>
+              ))}
+            </Space>
+          ) : (
+            '—'
+          )}
+        </ProDescriptions.Item>
+      </ProDescriptions>
+    </Space>
+  );
 }
 
 function parseLineSeparatedPaths(value?: string): string[] | undefined {
@@ -438,6 +644,271 @@ const SkillsCatalogPage = () => {
     };
   }, [current, skillJobResult]);
 
+  const renderSkillJobDebugger = (skill: ExternalSkillCatalogItem) => (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type={skill.status === '运行中' ? 'success' : 'warning'}
+        showIcon
+        message="统一 Job 调试台"
+        description={
+          skill.status === '运行中'
+            ? '当前能力走独立 skill-runtime，支持提交调试请求、查看事件和下载 markdown 产物。'
+            : '当前能力已挂到统一调试台，但底层 runtime 或依赖存在风险，提交时会返回可读错误。'
+        }
+      />
+
+      {skill.skillCode === 'ext.super_ppt' ? (
+        pptTemplateError ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="企业模板状态暂不可读"
+            description={pptTemplateError}
+          />
+        ) : activePptTemplate ? (
+          <Alert
+            type="success"
+            showIcon
+            message={`当前企业默认模板：${activePptTemplate.name}`}
+            description={`templateId: ${activePptTemplate.templateId}。super-ppt 会始终使用该企业默认模板生成，本次调试不支持临时覆盖。当前保存提示词：${pptTemplateInfo?.defaultPrompt ?? '未读取到'}；实际生效提示词：${pptTemplateInfo?.effectivePrompt ?? '未读取到'}${pptTemplateInfo?.isFallbackApplied ? `。${pptTemplateInfo.fallbackReason ?? ''}` : ''}`}
+          />
+        ) : (
+          <Alert
+            type="info"
+            showIcon
+            message="当前没有启用企业模板"
+            description={`本次 super-ppt 调试将回退到 Docmee 默认模板生成，不支持单次任务临时选模板。当前保存提示词：${pptTemplateInfo?.defaultPrompt ?? '未读取到'}；实际生效提示词：${pptTemplateInfo?.effectivePrompt ?? '未读取到'}${pptTemplateInfo?.isFallbackApplied ? `。${pptTemplateInfo.fallbackReason ?? ''}` : ''}`}
+          />
+        )
+      ) : null}
+
+      <Form<SkillJobFormValues>
+        form={skillJobForm}
+        layout="vertical"
+        onFinish={handleInvokeSkillJob}
+      >
+        <Form.Item
+          label="请求内容"
+          name="requestText"
+          rules={[{ required: true, message: '请输入调试请求内容' }]}
+        >
+          <TextArea
+            rows={6}
+            placeholder={
+              skill.debugConfig?.requestPlaceholder
+              || '请输入要交给该 skill 处理的内容或目标。'
+            }
+          />
+        </Form.Item>
+
+        {(skill.debugConfig?.supportedModels ?? []).length > 0 ? (
+          <Form.Item label="模型" name="model">
+            <Select
+              options={(skill.debugConfig?.supportedModels ?? []).map((model) => ({
+                label: model,
+                value: model,
+              }))}
+              placeholder="使用默认模型"
+            />
+          </Form.Item>
+        ) : null}
+
+        <Form.Item label="附件路径（可选，一行一个绝对路径）" name="attachmentsText">
+          <TextArea
+            rows={4}
+            placeholder={
+              skill.skillCode === 'ext.super_ppt'
+                ? '例如：\n/Users/weeks/Desktop/workspaces-yzj/yzj-ai-crm/tmp/绍兴贝斯美化工企业研究报告.md'
+                : '例如：\n/abs/path/input.md\n/abs/path/context.txt'
+            }
+          />
+        </Form.Item>
+
+        <Form.Item label="工作目录（可选，绝对路径）" name="workingDirectory">
+          <Input placeholder="/abs/path/working-directory" />
+        </Form.Item>
+
+        <Space>
+          <Button type="primary" htmlType="submit" loading={skillJobLoading}>
+            提交调试
+          </Button>
+          {lastSkillJobRequest ? (
+            <Button
+              disabled={skillJobLoading}
+              onClick={() => {
+                void runSkillJob(lastSkillJobRequest);
+              }}
+            >
+              重试上次请求
+            </Button>
+          ) : null}
+        </Space>
+      </Form>
+
+      {skillJobError ? (
+        <Alert type="error" showIcon message="调试执行失败" description={skillJobError} />
+      ) : null}
+
+      {skillJobResult ? (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Alert
+            type={
+              skillJobResult.status === 'succeeded'
+                ? 'success'
+                : skillJobResult.status === 'failed'
+                  ? 'error'
+                  : 'info'
+            }
+            showIcon
+            message={`Job 状态：${skillJobResult.status}`}
+            description={`任务编号: ${skillJobResult.jobId}`}
+          />
+
+          <ProDescriptions<ExternalSkillJobResponse> column={1} dataSource={skillJobResult}>
+            <ProDescriptions.Item label="技能编码">{skillJobResult.skillCode}</ProDescriptions.Item>
+            <ProDescriptions.Item label="运行时技能">
+              {skillJobResult.runtimeSkillName}
+            </ProDescriptions.Item>
+            <ProDescriptions.Item label="模型">
+              {skillJobResult.model ?? '无需模型'}
+            </ProDescriptions.Item>
+            <ProDescriptions.Item label="创建时间">{skillJobResult.createdAt}</ProDescriptions.Item>
+            <ProDescriptions.Item label="更新时间">{skillJobResult.updatedAt}</ProDescriptions.Item>
+          </ProDescriptions>
+
+          <div>
+            <Typography.Title level={5}>最终文本</Typography.Title>
+            {skillJobResult.finalText ? (
+              <div
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  background: '#fafafa',
+                  border: '1px solid #f0f0f0',
+                  borderRadius: 8,
+                  padding: 12,
+                }}
+              >
+                {skillJobResult.finalText}
+              </div>
+            ) : (
+              <Empty description="当前尚未产出 finalText。" />
+            )}
+          </div>
+
+          <div>
+            <Typography.Title level={5}>产物</Typography.Title>
+            {skillJobResult.artifacts.length > 0 ? (
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {presentationReadyEvent?.pptId ? (
+                  <Alert
+                    type="success"
+                    showIcon
+                    message={`PPT 已就绪：${presentationReadyEvent.subject || presentationReadyEvent.pptId}`}
+                    description={
+                      <Space wrap>
+                        <Typography.Text type="secondary">
+                          pptId: {presentationReadyEvent.pptId}
+                        </Typography.Text>
+                        <Button
+                          type="primary"
+                          onClick={() => {
+                            window.open(
+                              getSuperPptEditorUrl(skillJobResult.jobId),
+                              '_blank',
+                              'noopener,noreferrer',
+                            );
+                          }}
+                        >
+                          独立打开编辑器
+                        </Button>
+                      </Space>
+                    }
+                  />
+                ) : null}
+                {skillJobResult.artifacts.map((artifact) => (
+                  <Space key={artifact.artifactId} wrap>
+                    <Typography.Text>{artifact.fileName}</Typography.Text>
+                    <Tag>{artifact.mimeType}</Tag>
+                    <Typography.Text type="secondary">
+                      {artifact.byteSize} bytes
+                    </Typography.Text>
+                    <Button type="link" href={artifact.downloadPath} target="_blank">
+                      下载
+                    </Button>
+                  </Space>
+                ))}
+              </Space>
+            ) : (
+              <Empty description="当前没有产物。" />
+            )}
+          </div>
+
+          <Divider style={{ margin: '8px 0' }} />
+
+          <div>
+            <Typography.Title level={5}>事件时间线</Typography.Title>
+            {skillJobResult.events.length > 0 ? (
+              <Timeline
+                items={skillJobResult.events.map((event) => ({
+                  color:
+                    event.type === 'error'
+                      ? 'red'
+                      : event.type === 'artifact' || event.type === 'presentation_ready'
+                        ? 'green'
+                        : 'blue',
+                  children: (
+                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                      <Typography.Text>{event.message}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {event.createdAt} · {event.type}
+                      </Typography.Text>
+                    </Space>
+                  ),
+                }))}
+              />
+            ) : (
+              <Empty description="当前没有事件日志。" />
+            )}
+          </div>
+        </Space>
+      ) : (
+        <Empty description="尚未提交调试请求，执行后会在这里展示状态、事件和产物。" />
+      )}
+    </Space>
+  );
+
+  const shouldUseDetailTabs = (skill: ExternalSkillCatalogItem) =>
+    skill.skillCode === 'ext.company_research_pm'
+    || (skill.debugMode === 'skill_job' && skill.supportsInvoke);
+
+  const buildExternalSkillDetailTabs = (skill: ExternalSkillCatalogItem) => {
+    const items = [
+      {
+        key: 'basic',
+        label: '普通信息',
+        children: <ExternalSkillBasicInfo skill={skill} />,
+      },
+    ];
+
+    if (skill.skillCode === 'ext.company_research_pm') {
+      items.push({
+        key: 'usage',
+        label: '使用配置',
+        children: <CompanyResearchUsageConfigPreview />,
+      });
+    }
+
+    if (skill.debugMode === 'skill_job' && skill.supportsInvoke) {
+      items.push({
+        key: 'job-debug',
+        label: '统一 Job 调试台',
+        children: renderSkillJobDebugger(skill),
+      });
+    }
+
+    return items;
+  };
+
   return (
     <PageContainer title={config.title} subTitle={config.summary}>
       <Alert
@@ -513,59 +984,14 @@ const SkillsCatalogPage = () => {
             </Space>
           ) : (
             <Space direction="vertical" size={16} style={{ width: '100%' }}>
-              <Alert
-                type={getStatusAlertType(current.status)}
-                showIcon
-                message={
-                  current.status === '运行中'
-                    ? '能力运行正常'
-                    : current.status === '告警中'
-                      ? '能力已注册，但当前存在配置或 provider 风险'
-                      : '能力仍为占位展示'
-                }
-                description={current.summary}
-              />
-              <ProDescriptions<ExternalSkillCatalogItem> column={1} dataSource={current}>
-                <ProDescriptions.Item label="技能名称">{current.label}</ProDescriptions.Item>
-                <ProDescriptions.Item label="技能编码">{current.skillCode}</ProDescriptions.Item>
-                <ProDescriptions.Item label="实现方式">
-                  {implementationTypeLabels[current.implementationType]}
-                </ProDescriptions.Item>
-                <ProDescriptions.Item label="是否可调用">
-                  <Tag color={current.supportsInvoke ? 'success' : 'default'}>
-                    {current.supportsInvoke ? '可调用' : '仅占位'}
-                  </Tag>
-                </ProDescriptions.Item>
-                <ProDescriptions.Item label="状态">
-                  <Tag color={getStatusColor(current.status)}>{current.status}</Tag>
-                </ProDescriptions.Item>
-                <ProDescriptions.Item label="模型">{current.model ?? '—'}</ProDescriptions.Item>
-                <ProDescriptions.Item label="服务提供方">{current.provider ?? '—'}</ProDescriptions.Item>
-                <ProDescriptions.Item label="触发方式">{current.trigger}</ProDescriptions.Item>
-                <ProDescriptions.Item label="路由">{current.route ?? '—'}</ProDescriptions.Item>
-                <ProDescriptions.Item label="负责人">{current.owner}</ProDescriptions.Item>
-                <ProDescriptions.Item label="SLA">{current.sla}</ProDescriptions.Item>
-                <ProDescriptions.Item label="依赖">
-                  <Space wrap>
-                    {current.dependencies.map((dependency) => (
-                      <Tag key={dependency}>{dependency}</Tag>
-                    ))}
-                  </Space>
-                </ProDescriptions.Item>
-                <ProDescriptions.Item label="缺失依赖">
-                  {current.missingDependencies && current.missingDependencies.length > 0 ? (
-                    <Space wrap>
-                      {current.missingDependencies.map((dependency) => (
-                        <Tag color="warning" key={dependency}>
-                          {dependency}
-                        </Tag>
-                      ))}
-                    </Space>
-                  ) : (
-                    '—'
-                  )}
-                </ProDescriptions.Item>
-              </ProDescriptions>
+              {shouldUseDetailTabs(current) ? (
+                <Tabs
+                  defaultActiveKey="basic"
+                  items={buildExternalSkillDetailTabs(current)}
+                />
+              ) : (
+                <ExternalSkillBasicInfo skill={current} />
+              )}
 
               {current.skillCode === 'ext.image_generate' && current.supportsInvoke ? (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -655,238 +1081,7 @@ const SkillsCatalogPage = () => {
                     <Empty description={loading ? '正在加载目录...' : '尚未生成图片，填写 Prompt 后可在这里预览结果。'} />
                   )}
                 </Space>
-              ) : current.debugMode === 'skill_job' && current.supportsInvoke ? (
-                <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  <Alert
-                    type={current.status === '运行中' ? 'success' : 'warning'}
-                    showIcon
-                    message="统一 Job 调试台"
-                    description={
-                      current.status === '运行中'
-                        ? '当前能力走独立 skill-runtime，支持提交调试请求、查看事件和下载 markdown 产物。'
-                        : '当前能力已挂到统一调试台，但底层 runtime 或依赖存在风险，提交时会返回可读错误。'
-                    }
-                  />
-
-                  {current.skillCode === 'ext.super_ppt' ? (
-                    pptTemplateError ? (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        message="企业模板状态暂不可读"
-                        description={pptTemplateError}
-                      />
-                    ) : activePptTemplate ? (
-                      <Alert
-                        type="success"
-                        showIcon
-                        message={`当前企业默认模板：${activePptTemplate.name}`}
-                        description={`templateId: ${activePptTemplate.templateId}。super-ppt 会始终使用该企业默认模板生成，本次调试不支持临时覆盖。当前保存提示词：${pptTemplateInfo?.defaultPrompt ?? '未读取到'}；实际生效提示词：${pptTemplateInfo?.effectivePrompt ?? '未读取到'}${pptTemplateInfo?.isFallbackApplied ? `。${pptTemplateInfo.fallbackReason ?? ''}` : ''}`}
-                      />
-                    ) : (
-                      <Alert
-                        type="info"
-                        showIcon
-                        message="当前没有启用企业模板"
-                        description={`本次 super-ppt 调试将回退到 Docmee 默认模板生成，不支持单次任务临时选模板。当前保存提示词：${pptTemplateInfo?.defaultPrompt ?? '未读取到'}；实际生效提示词：${pptTemplateInfo?.effectivePrompt ?? '未读取到'}${pptTemplateInfo?.isFallbackApplied ? `。${pptTemplateInfo.fallbackReason ?? ''}` : ''}`}
-                      />
-                    )
-                  ) : null}
-
-                  <Form<SkillJobFormValues>
-                    form={skillJobForm}
-                    layout="vertical"
-                    onFinish={handleInvokeSkillJob}
-                  >
-                    <Form.Item
-                      label="请求内容"
-                      name="requestText"
-                      rules={[{ required: true, message: '请输入调试请求内容' }]}
-                    >
-                      <TextArea
-                        rows={6}
-                        placeholder={
-                          current.debugConfig?.requestPlaceholder
-                          || '请输入要交给该 skill 处理的内容或目标。'
-                        }
-                      />
-                    </Form.Item>
-
-                    {(current.debugConfig?.supportedModels ?? []).length > 0 ? (
-                      <Form.Item label="模型" name="model">
-                        <Select
-                          options={(current.debugConfig?.supportedModels ?? []).map((model) => ({
-                            label: model,
-                            value: model,
-                          }))}
-                          placeholder="使用默认模型"
-                        />
-                      </Form.Item>
-                    ) : null}
-
-                    <Form.Item label="附件路径（可选，一行一个绝对路径）" name="attachmentsText">
-                      <TextArea
-                        rows={4}
-                        placeholder={
-                          current.skillCode === 'ext.super_ppt'
-                            ? '例如：\n/Users/weeks/Desktop/workspaces-yzj/yzj-ai-crm/tmp/绍兴贝斯美化工企业研究报告.md'
-                            : '例如：\n/abs/path/input.md\n/abs/path/context.txt'
-                        }
-                      />
-                    </Form.Item>
-
-                    <Form.Item label="工作目录（可选，绝对路径）" name="workingDirectory">
-                      <Input placeholder="/abs/path/working-directory" />
-                    </Form.Item>
-
-                    <Space>
-                      <Button type="primary" htmlType="submit" loading={skillJobLoading}>
-                        提交调试
-                      </Button>
-                      {lastSkillJobRequest ? (
-                        <Button
-                          disabled={skillJobLoading}
-                          onClick={() => {
-                            void runSkillJob(lastSkillJobRequest);
-                          }}
-                        >
-                          重试上次请求
-                        </Button>
-                      ) : null}
-                    </Space>
-                  </Form>
-
-                  {skillJobError ? (
-                    <Alert type="error" showIcon message="调试执行失败" description={skillJobError} />
-                  ) : null}
-
-                  {skillJobResult ? (
-                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                      <Alert
-                        type={
-                          skillJobResult.status === 'succeeded'
-                            ? 'success'
-                            : skillJobResult.status === 'failed'
-                              ? 'error'
-                              : 'info'
-                        }
-                        showIcon
-                        message={`Job 状态：${skillJobResult.status}`}
-                        description={`任务编号: ${skillJobResult.jobId}`}
-                      />
-
-                      <ProDescriptions<ExternalSkillJobResponse> column={1} dataSource={skillJobResult}>
-                        <ProDescriptions.Item label="技能编码">{skillJobResult.skillCode}</ProDescriptions.Item>
-                        <ProDescriptions.Item label="运行时技能">
-                          {skillJobResult.runtimeSkillName}
-                        </ProDescriptions.Item>
-                        <ProDescriptions.Item label="模型">
-                          {skillJobResult.model ?? '无需模型'}
-                        </ProDescriptions.Item>
-                        <ProDescriptions.Item label="创建时间">{skillJobResult.createdAt}</ProDescriptions.Item>
-                        <ProDescriptions.Item label="更新时间">{skillJobResult.updatedAt}</ProDescriptions.Item>
-                      </ProDescriptions>
-
-                      <div>
-                        <Typography.Title level={5}>最终文本</Typography.Title>
-                        {skillJobResult.finalText ? (
-                          <div
-                            style={{
-                              whiteSpace: 'pre-wrap',
-                              background: '#fafafa',
-                              border: '1px solid #f0f0f0',
-                              borderRadius: 8,
-                              padding: 12,
-                            }}
-                          >
-                            {skillJobResult.finalText}
-                          </div>
-                        ) : (
-                          <Empty description="当前尚未产出 finalText。" />
-                        )}
-                      </div>
-
-                      <div>
-                        <Typography.Title level={5}>产物</Typography.Title>
-                        {skillJobResult.artifacts.length > 0 ? (
-                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                            {presentationReadyEvent?.pptId ? (
-                              <Alert
-                                type="success"
-                                showIcon
-                                message={`PPT 已就绪：${presentationReadyEvent.subject || presentationReadyEvent.pptId}`}
-                                description={
-                                  <Space wrap>
-                                    <Typography.Text type="secondary">
-                                      pptId: {presentationReadyEvent.pptId}
-                                    </Typography.Text>
-                                    <Button
-                                      type="primary"
-                                      onClick={() => {
-                                        window.open(
-                                          getSuperPptEditorUrl(skillJobResult.jobId),
-                                          '_blank',
-                                          'noopener,noreferrer',
-                                        );
-                                      }}
-                                    >
-                                      独立打开编辑器
-                                    </Button>
-                                  </Space>
-                                }
-                              />
-                            ) : null}
-                            {skillJobResult.artifacts.map((artifact) => (
-                              <Space key={artifact.artifactId} wrap>
-                                <Typography.Text>{artifact.fileName}</Typography.Text>
-                                <Tag>{artifact.mimeType}</Tag>
-                                <Typography.Text type="secondary">
-                                  {artifact.byteSize} bytes
-                                </Typography.Text>
-                                <Button type="link" href={artifact.downloadPath} target="_blank">
-                                  下载
-                                </Button>
-                              </Space>
-                            ))}
-                          </Space>
-                        ) : (
-                          <Empty description="当前没有产物。" />
-                        )}
-                      </div>
-
-                      <Divider style={{ margin: '8px 0' }} />
-
-                      <div>
-                        <Typography.Title level={5}>事件时间线</Typography.Title>
-                        {skillJobResult.events.length > 0 ? (
-                          <Timeline
-                            items={skillJobResult.events.map((event) => ({
-                              color:
-                                event.type === 'error'
-                                  ? 'red'
-                                  : event.type === 'artifact' || event.type === 'presentation_ready'
-                                    ? 'green'
-                                    : 'blue',
-                              children: (
-                                <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                                  <Typography.Text>{event.message}</Typography.Text>
-                                  <Typography.Text type="secondary">
-                                    {event.createdAt} · {event.type}
-                                  </Typography.Text>
-                                </Space>
-                              ),
-                            }))}
-                          />
-                        ) : (
-                          <Empty description="当前没有事件日志。" />
-                        )}
-                      </div>
-                    </Space>
-                  ) : (
-                    <Empty description="尚未提交调试请求，执行后会在这里展示状态、事件和产物。" />
-                  )}
-                </Space>
-              ) : (
+              ) : shouldUseDetailTabs(current) ? null : (
                 <Paragraph style={{ marginBottom: 0 }}>
                   当前能力仍保留为目录治理视图。后续接入真实 provider 后，再在这里补执行入口和结果卡片。
                 </Paragraph>

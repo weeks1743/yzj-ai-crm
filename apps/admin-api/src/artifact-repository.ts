@@ -53,6 +53,19 @@ export interface SavedArtifactVersion {
   appId: string;
 }
 
+export interface CompanyResearchArtifactLookupInput {
+  eid: string;
+  appId: string;
+  companyName: string;
+}
+
+export interface CompanyResearchArtifactMetadataSearchInput {
+  eid: string;
+  appId: string;
+  terms: string[];
+  limit: number;
+}
+
 export class ArtifactRepository {
   private readonly client: MongoClient;
   private db: Db | null = null;
@@ -175,6 +188,90 @@ export class ArtifactRepository {
     return toSummary(artifact);
   }
 
+  async findLatestCompanyResearchArtifactByAnchor(
+    input: CompanyResearchArtifactLookupInput,
+  ): Promise<ArtifactDetailResponse | null> {
+    await this.ensureIndexes();
+    const artifacts = await this.artifacts();
+    const versions = await this.versions();
+    const anchorIdentity = buildAnchorIdentity([
+      { type: 'company', id: input.companyName, role: 'primary' },
+    ]);
+    const artifact = await artifacts.findOne({
+      eid: input.eid,
+      appId: input.appId,
+      kind: 'company_research',
+      anchorIdentity,
+    });
+    if (!artifact) {
+      return null;
+    }
+
+    const version = await versions.findOne({
+      artifactId: artifact.artifactId,
+      versionId: artifact.currentVersionId,
+    });
+    if (!version?.markdown?.trim()) {
+      return null;
+    }
+
+    return {
+      artifact: toSummary(artifact),
+      markdown: version.markdown,
+      summary: version.summary,
+    };
+  }
+
+  async findCompanyResearchArtifactsByMetadata(
+    input: CompanyResearchArtifactMetadataSearchInput,
+  ): Promise<ArtifactDetailResponse[]> {
+    await this.ensureIndexes();
+    const terms = normalizeMetadataTerms(input.terms);
+    if (!terms.length) {
+      return [];
+    }
+
+    const artifacts = await this.artifacts();
+    const versions = await this.versions();
+    const regexClauses = terms.flatMap((term) => {
+      const pattern = new RegExp(escapeRegExp(term), 'i');
+      return [
+        { title: pattern },
+        { anchorIdentity: pattern },
+        { 'anchors.id': pattern },
+        { 'anchors.name': pattern },
+      ];
+    });
+    const artifactDocs = await artifacts.find({
+      eid: input.eid,
+      appId: input.appId,
+      kind: 'company_research',
+      $or: regexClauses,
+    }).sort({ updatedAt: -1 }).limit(Math.min(Math.max(input.limit, 1), 10)).toArray();
+    if (!artifactDocs.length) {
+      return [];
+    }
+
+    const versionDocs = await versions.find({
+      versionId: { $in: artifactDocs.map((item) => item.currentVersionId) },
+    }).toArray();
+    const versionsById = new Map(versionDocs.map((item) => [item.versionId, item]));
+
+    const details: ArtifactDetailResponse[] = [];
+    for (const artifact of artifactDocs) {
+      const version = versionsById.get(artifact.currentVersionId);
+      if (!version?.markdown?.trim()) {
+        continue;
+      }
+      details.push({
+        artifact: toSummary(artifact),
+        markdown: version.markdown,
+        summary: version.summary,
+      });
+    }
+    return details;
+  }
+
   async getArtifact(artifactId: string): Promise<ArtifactDetailResponse> {
     const artifacts = await this.artifacts();
     const versions = await this.versions();
@@ -241,6 +338,24 @@ export class ArtifactRepository {
     ]);
     this.indexesReady = true;
   }
+}
+
+function normalizeMetadataTerms(terms: string[]): string[] {
+  const seen = new Set<string>();
+  const normalizedTerms: string[] = [];
+  for (const term of terms) {
+    const normalized = term.replace(/\s+/g, '').trim();
+    if (normalized.length < 2 || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    normalizedTerms.push(normalized);
+  }
+  return normalizedTerms;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function buildAnchorIdentity(anchors: ArtifactAnchor[]): string {

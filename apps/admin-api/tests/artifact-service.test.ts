@@ -146,3 +146,271 @@ test('createCompanyResearchArtifact upserts qdrant payload with tenant and ancho
   assert.deepEqual(upsertInput.anchors, artifact.anchors);
   assert.equal(upsertInput.chunks.length, 1);
 });
+
+test('findLatestCompanyResearchArtifact returns latest valid markdown by company anchor', async () => {
+  const config = createTestConfig({ embeddingApiKey: null });
+  let lookupInput: any = null;
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findLatestCompanyResearchArtifactByAnchor: async (input: any) => {
+        lookupInput = input;
+        return {
+          artifact: {
+            artifactId: 'artifact-songjing-001',
+            versionId: 'version-songjing-002',
+            version: 2,
+            title: '上海松井机械有限公司 公司研究',
+            sourceToolCode: 'ext.company_research_pm',
+            vectorStatus: 'indexed',
+            anchors: [{ type: 'company', id: '上海松井机械有限公司', role: 'primary' }],
+            chunkCount: 3,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          markdown: '# 上海松井机械有限公司\n\n## 研究摘要\n已有有效研究。',
+        };
+      },
+    } as any,
+    embeddingService: {
+      isConfigured: () => false,
+      embedTexts: async () => {
+        throw new Error('should not embed during lookup');
+      },
+    } as any,
+    vectorService: {
+      buildFilter: () => ({ must: [] }),
+      upsertChunks: async () => {
+        throw new Error('should not upsert during lookup');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.findLatestCompanyResearchArtifact({
+    companyName: ' 上海松井机械有限公司 ',
+  });
+
+  assert.equal(lookupInput.eid, config.yzj.eid);
+  assert.equal(lookupInput.appId, config.yzj.appId);
+  assert.equal(lookupInput.companyName, '上海松井机械有限公司');
+  assert.equal(result?.artifact.artifactId, 'artifact-songjing-001');
+});
+
+test('findLatestCompanyResearchArtifact ignores empty markdown result', async () => {
+  const config = createTestConfig({ embeddingApiKey: null });
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findLatestCompanyResearchArtifactByAnchor: async () => ({
+        artifact: {
+          artifactId: 'artifact-empty-001',
+          versionId: 'version-empty-001',
+          version: 1,
+          title: '空结果 公司研究',
+          sourceToolCode: 'ext.company_research_pm',
+          vectorStatus: 'indexed',
+          anchors: [{ type: 'company', id: '空结果', role: 'primary' }],
+          chunkCount: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        markdown: '   ',
+      }),
+    } as any,
+    embeddingService: {
+      isConfigured: () => false,
+      embedTexts: async () => {
+        throw new Error('should not embed during lookup');
+      },
+    } as any,
+    vectorService: {
+      buildFilter: () => ({ must: [] }),
+      upsertChunks: async () => {
+        throw new Error('should not upsert during lookup');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.findLatestCompanyResearchArtifact({
+    companyName: '空结果',
+  });
+
+  assert.equal(result, null);
+});
+
+test('search keeps vector evidence when exact anchor search returns results', async () => {
+  const config = createTestConfig({ embeddingApiKey: 'test-key', embeddingDimensions: 3 });
+  let metadataFallbackCalled = false;
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findCompanyResearchArtifactsByMetadata: async () => {
+        metadataFallbackCalled = true;
+        return [];
+      },
+    } as any,
+    embeddingService: {
+      isConfigured: () => true,
+      embedTexts: async () => [[0.1, 0.2, 0.3]],
+    } as any,
+    vectorService: {
+      buildFilter: () => ({ must: ['anchor-filter'] }),
+      upsertChunks: async () => {
+        throw new Error('should not upsert during search');
+      },
+      search: async () => [{
+        artifactId: 'artifact-vector-001',
+        versionId: 'version-vector-001',
+        title: '江苏友升汽车科技有限公司 公司研究',
+        version: 1,
+        sourceToolCode: 'ext.company_research_pm',
+        anchorTypes: ['company'],
+        anchorIds: ['江苏友升汽车科技有限公司'],
+        snippet: '向量检索命中的公开资料片段。',
+        score: 0.91,
+      }],
+    } as any,
+  });
+
+  const result = await service.search({
+    query: '江苏友升有什么业务',
+    anchors: [{ type: 'company', id: '江苏友升汽车科技有限公司', role: 'primary' }],
+  });
+
+  assert.equal(result.vectorStatus, 'searched');
+  assert.equal(result.evidence[0]?.artifactId, 'artifact-vector-001');
+  assert.equal(metadataFallbackCalled, false);
+});
+
+test('search falls back to metadata artifact when abbreviation anchor has no vector result', async () => {
+  const config = createTestConfig({ embeddingApiKey: 'test-key', embeddingDimensions: 3 });
+  let metadataInput: any = null;
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findCompanyResearchArtifactsByMetadata: async (input: any) => {
+        metadataInput = input;
+        return [buildArtifactDetail('江苏友升汽车科技有限公司', '001')];
+      },
+    } as any,
+    embeddingService: {
+      isConfigured: () => true,
+      embedTexts: async () => [[0.1, 0.2, 0.3]],
+    } as any,
+    vectorService: {
+      buildFilter: () => ({ must: ['anchor-filter'] }),
+      upsertChunks: async () => {
+        throw new Error('should not upsert during search');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.search({
+    query: '介绍江苏友升的业务',
+    anchors: [{ type: 'company', id: '江苏友升', role: 'primary' }],
+  });
+
+  assert.equal(metadataInput.eid, config.yzj.eid);
+  assert.equal(metadataInput.appId, config.yzj.appId);
+  assert.deepEqual(metadataInput.terms, ['江苏友升']);
+  assert.equal(result.vectorStatus, 'searched');
+  assert.equal(result.evidence[0]?.title, '江苏友升汽车科技有限公司 公司研究');
+  assert.equal(result.evidence[0]?.anchorIds[0], '江苏友升汽车科技有限公司');
+  assert.match(result.evidence[0]?.snippet ?? '', /汽车零部件|轻量化/);
+});
+
+test('search returns metadata fallback when embedding is not configured', async () => {
+  const config = createTestConfig({ embeddingApiKey: null });
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findCompanyResearchArtifactsByMetadata: async () => [buildArtifactDetail('江苏友升汽车科技有限公司', '002')],
+    } as any,
+    embeddingService: {
+      isConfigured: () => false,
+      embedTexts: async () => {
+        throw new Error('should not embed without config');
+      },
+    } as any,
+    vectorService: {
+      buildFilter: () => ({ must: ['tenant-filter'] }),
+      upsertChunks: async () => {
+        throw new Error('should not upsert during search');
+      },
+      search: async () => {
+        throw new Error('should not vector search without embedding');
+      },
+    } as any,
+  });
+
+  const result = await service.search({
+    query: '江苏友升有什么业务',
+    anchors: [{ type: 'company', id: '江苏友升', role: 'primary' }],
+  });
+
+  assert.equal(result.vectorStatus, 'pending_config');
+  assert.equal(result.evidence.length, 1);
+  assert.equal(result.evidence[0]?.title, '江苏友升汽车科技有限公司 公司研究');
+});
+
+test('search returns multiple metadata fallback artifacts for ambiguous abbreviation', async () => {
+  const config = createTestConfig({ embeddingApiKey: 'test-key', embeddingDimensions: 3 });
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findCompanyResearchArtifactsByMetadata: async () => [
+        buildArtifactDetail('江苏友升汽车科技有限公司', '003'),
+        buildArtifactDetail('江苏友升装备有限公司', '004'),
+      ],
+    } as any,
+    embeddingService: {
+      isConfigured: () => true,
+      embedTexts: async () => [[0.1, 0.2, 0.3]],
+    } as any,
+    vectorService: {
+      buildFilter: () => ({ must: ['anchor-filter'] }),
+      upsertChunks: async () => {
+        throw new Error('should not upsert during search');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.search({
+    query: '江苏友升有什么业务',
+    anchors: [{ type: 'company', id: '江苏友升', role: 'primary' }],
+  });
+
+  assert.equal(result.evidence.length, 2);
+  assert.deepEqual(
+    result.evidence.map((item) => item.title),
+    ['江苏友升汽车科技有限公司 公司研究', '江苏友升装备有限公司 公司研究'],
+  );
+});
+
+function buildArtifactDetail(companyName: string, suffix: string) {
+  return {
+    artifact: {
+      artifactId: `artifact-${suffix}`,
+      versionId: `version-${suffix}`,
+      version: 1,
+      title: `${companyName} 公司研究`,
+      sourceToolCode: 'ext.company_research_pm',
+      vectorStatus: 'indexed' as ArtifactVectorStatus,
+      anchors: [{ type: 'company' as const, id: companyName, name: companyName, role: 'primary' as const }],
+      chunkCount: 3,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    markdown: `# ${companyName}
+
+## 公司概览
+${companyName} 公开资料显示，其业务围绕汽车零部件、轻量化制造和客户配套展开。
+
+## 业务定位
+重点关注轻量化材料、制造协同和供应链响应能力。`,
+  };
+}

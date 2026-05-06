@@ -262,6 +262,16 @@ export async function initializeDatabaseSchema(
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS ${table('agent_personal_settings')} (
+        eid TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        operator_open_id TEXT NOT NULL,
+        soul_prompt TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (eid, operator_open_id)
+      );
+
       CREATE TABLE IF NOT EXISTS ${table('agent_tool_calls')} (
         tool_call_id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
@@ -293,6 +303,9 @@ export async function initializeDatabaseSchema(
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_conversations_operator_recent`)}
       ON ${table('agent_conversations')}(operator_open_id, updated_at DESC, conversation_key DESC);
 
+      CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_personal_settings_user`)}
+      ON ${table('agent_personal_settings')}(eid, operator_open_id);
+
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_tool_calls_run`)}
       ON ${table('agent_tool_calls')}(run_id, started_at ASC, tool_call_id ASC);
 
@@ -314,6 +327,33 @@ export async function initializeDatabaseSchema(
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_artifact_ppt_generations_artifact`)}
       ON ${table('artifact_ppt_generations')}(artifact_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS ${table('artifact_image_generations')} (
+        generation_id TEXT PRIMARY KEY,
+        eid TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        version_id TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        prompt TEXT,
+        file_path TEXT,
+        file_name TEXT,
+        mime_type TEXT,
+        byte_size INTEGER,
+        model TEXT,
+        provider TEXT,
+        size TEXT,
+        quality TEXT,
+        latency_ms INTEGER,
+        error_message TEXT,
+        generated_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_artifact_image_generations_artifact`)}
+      ON ${table('artifact_image_generations')}(artifact_id, updated_at DESC);
     `);
   }
 
