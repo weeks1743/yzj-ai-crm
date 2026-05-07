@@ -5,6 +5,23 @@ export type AgentClientAction =
       objectKey: ShadowObjectKey;
       formInstId: string;
       title?: string;
+    }
+  | {
+      type: 'record.preview_create';
+      objectKey: ShadowObjectKey;
+      title?: string;
+      source?: {
+        kind: 'recording_material';
+        recordingTaskId?: string;
+        artifactId?: string;
+        fileName?: string;
+        sourceFileMd5?: string;
+        anchors?: {
+          customer?: string;
+          opportunity?: string;
+          followup?: string;
+        };
+      };
     };
 
 export type ShadowDictionarySource = 'manual_json' | 'approval_api' | 'hybrid';
@@ -140,6 +157,9 @@ export interface AppConfig {
     skillRuntime: {
       baseUrl: string;
     };
+    tongyiAudioService: {
+      baseUrl: string;
+    };
   };
   meta: {
     configSource: '.env';
@@ -154,6 +174,7 @@ export type ArtifactAnchorType =
   | 'followup'
   | 'company'
   | 'source_file';
+export type ArtifactKind = 'company_research' | 'recording_material' | 'analysis_material';
 
 export type ArtifactVectorStatus =
   | 'pending_embedding'
@@ -186,10 +207,50 @@ export interface CompanyResearchArtifactRequest {
   }>;
 }
 
+export interface RecordingMaterialArtifactRequest {
+  eid?: string;
+  appId?: string;
+  title: string;
+  markdown: string;
+  sourceToolCode: string;
+  anchors: ArtifactAnchor[];
+  createdBy?: string;
+  summary?: string;
+  recordingTaskId: string;
+  providerDataId?: string | null;
+  sourceFile?: {
+    name: string;
+    md5?: string;
+    mimeType?: string;
+    size?: number;
+  };
+}
+
+export interface AnalysisMaterialArtifactRequest {
+  eid?: string;
+  appId?: string;
+  title: string;
+  markdown: string;
+  sourceToolCode: string;
+  anchors: ArtifactAnchor[];
+  createdBy?: string;
+  summary?: string;
+  recordingTaskId: string;
+  skillCode: string;
+  sourceJobId?: string;
+  sourceFile?: {
+    name: string;
+    md5?: string;
+    mimeType?: string;
+    size?: number;
+  };
+}
+
 export interface ArtifactVersionSummary {
   artifactId: string;
   versionId: string;
   version: number;
+  kind: ArtifactKind;
   title: string;
   sourceToolCode: string;
   vectorStatus: ArtifactVectorStatus;
@@ -213,6 +274,7 @@ export interface ArtifactSearchRequest {
   eid?: string;
   appId?: string;
   query: string;
+  kinds?: ArtifactKind[];
   anchors?: ArtifactAnchor[];
   limit?: number;
 }
@@ -220,6 +282,7 @@ export interface ArtifactSearchRequest {
 export interface ArtifactEvidenceRef {
   artifactId: string;
   versionId: string;
+  kind?: ArtifactKind;
   title: string;
   version: number;
   sourceToolCode: string;
@@ -235,6 +298,83 @@ export interface ArtifactSearchResponse {
   vectorStatus: ArtifactVectorStatus | 'searched';
   qdrantFilter: unknown;
   evidence: ArtifactEvidenceRef[];
+}
+
+export type RecordingTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+export interface RecordingAnchorInput {
+  customer?: string;
+  opportunity?: string;
+  followup?: string;
+}
+
+export interface RecordingTaskResponse {
+  taskId: string;
+  eid: string;
+  appId: string;
+  status: RecordingTaskStatus;
+  serviceTaskId: string;
+  providerDataId?: string | null;
+  fixtureTaskId?: string | null;
+  file: {
+    fileName: string;
+    mimeType: string;
+    size: number;
+    md5: string;
+  };
+  anchors: RecordingAnchorInput;
+  stages: Array<{
+    key: string;
+    label: string;
+    status: string;
+  }>;
+  material?: {
+    available: boolean;
+    artifactId?: string;
+    path?: string | null;
+    source?: string | null;
+  };
+  archive?: {
+    status: 'unarchived' | 'archived';
+    artifactId?: string;
+    followupId?: string;
+    customerId?: string;
+    opportunityId?: string;
+    sourceFileMd5?: string;
+  };
+  playback?: {
+    available: boolean;
+    path?: string | null;
+  };
+  errorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecordingTaskCreateRequest {
+  eid?: string;
+  appId?: string;
+  fixtureTaskId?: string;
+  fileName?: string;
+  anchors?: RecordingAnchorInput;
+  createdBy?: string;
+}
+
+export interface RecordingTaskMaterializeRequest {
+  eid?: string;
+  appId?: string;
+  preferredSource?: 'auto' | 'generated' | 'profile_analysis';
+  anchors?: RecordingAnchorInput;
+  createdBy?: string;
+}
+
+export interface RecordingTaskMaterializeResponse extends RecordingTaskResponse {
+  material: NonNullable<RecordingTaskResponse['material']> & {
+    available: true;
+    artifactId?: string;
+    markdown: string;
+    excludedProcessFiles: string[];
+  };
 }
 
 export type ArtifactPresentationStatus =
@@ -293,6 +433,7 @@ export type AgentTaskPlanKind =
   | 'tool_clarify'
   | 'company_research'
   | 'artifact_search'
+  | 'recording_material'
   | 'audio_not_supported'
   | 'unknown_clarify';
 export type AgentExecutionStatus =
@@ -401,6 +542,11 @@ export type AgentChatResumeRequest =
       action: 'provide_input';
       interactionId: string;
       answers: Record<string, unknown>;
+    }
+  | {
+      runId: string;
+      action: 'cancel_interaction';
+      interactionId: string;
     };
 
 export type AgentMetaQuestionType = 'text' | 'phone' | 'single_select' | 'multi_select' | 'date' | 'reference';
@@ -461,6 +607,7 @@ export interface AgentMetaQuestionCard {
 export interface AgentEvidenceCard {
   artifactId: string;
   versionId: string;
+  kind?: ArtifactKind;
   title: string;
   version: number;
   sourceToolCode: string;
@@ -537,11 +684,12 @@ export interface AgentChatMessage {
       } | null;
       continuationResolution?: {
         usedContinuation: boolean;
-        action:
-          | 'resume_pending_interaction'
-          | 'start_new_task'
-          | 'confirm_writeback'
-          | 'reject_writeback'
+            action:
+              | 'resume_pending_interaction'
+              | 'start_new_task'
+              | 'cancel_interaction'
+              | 'confirm_writeback'
+              | 'reject_writeback'
           | 'select_candidate'
           | 'route_tool'
           | 'wait_for_input'

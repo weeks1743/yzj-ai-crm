@@ -72,6 +72,7 @@ import type {
   AgentRecordSearchPageResponse,
   AgentConversationListResponse,
   AgentConversationUpsertRequest,
+  AgentClientAction,
   AgentPersonalSettingsResponse,
   AgentPersonalSettingsUpdateRequest,
   AgentMetaQuestionOptionsResponse,
@@ -79,6 +80,8 @@ import type {
   AgentRunListResponse,
   AgentUiSurface,
   ConversationSession,
+  ExternalSkillJobResponse,
+  ExternalSkillJobStatus,
   ImageGenerationRequest,
   ShadowObjectKey,
 } from '@shared/types';
@@ -96,6 +99,16 @@ import {
 } from './agent-api-provider';
 import { assistantScenes, buildPromptGroups, getSceneByPath } from './scene-meta';
 import { RunInsightDrawer } from './RunInsightDrawer';
+import { buildRecordingTimeline, getLatestTimelineMessageId } from './recording-timeline';
+import {
+  chooseConversationMessages,
+  mergeAuthoritativeRemoteConversations,
+  mergeOfflineCachedConversations,
+  prunePersistedChatState as prunePersistedChatStateStores,
+  resolveSyncedActiveConversationKey,
+  type ConversationSyncPolicy,
+  type RemoteMessagesResult,
+} from './chat-sync';
 import { useMarkdownTheme } from './use-markdown-theme';
 import brandLogo from '@shared/assets/logo.png';
 
@@ -108,6 +121,8 @@ const CHAT_STORAGE_SCOPE = buildAssistantConversationKey('storage');
 const CHAT_MESSAGES_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.messages.v4`;
 const ACTIVE_CONVERSATION_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.activeConversation.v4`;
 const CHAT_CONVERSATIONS_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.conversations.v4`;
+const CHAT_RECORDING_TASKS_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.recordingTasks.v1`;
+const CHAT_RECORDING_TASKS_UPDATED_EVENT = 'yzj-ai-crm.assistant.recordingTasksUpdated';
 const LEGACY_CHAT_STORAGE_KEYS = [
   'yzj-ai-crm.assistant.messages.v3',
   'yzj-ai-crm.assistant.activeConversation.v3',
@@ -207,6 +222,37 @@ const slashCommands = [
 
 type SlashCommand = (typeof slashCommands)[number];
 
+const recordingSkillActions: Array<{
+  skillCode: RecordingSkillCode;
+  label: string;
+  icon: React.ReactNode;
+}> = [
+  {
+    skillCode: 'ext.visit_conversation_understanding',
+    label: '拜访会话理解',
+    icon: <FileSearchOutlined />,
+  },
+  {
+    skillCode: 'ext.customer_needs_todo_analysis',
+    label: '客户需求工作待办分析',
+    icon: <FileSearchOutlined />,
+  },
+  {
+    skillCode: 'ext.problem_statement_pm',
+    label: '问题陈述',
+    icon: <CompassOutlined />,
+  },
+  {
+    skillCode: 'ext.customer_value_positioning_pm',
+    label: '客户价值定位',
+    icon: <GlobalOutlined />,
+  },
+];
+
+const recordingSkillLabels = Object.fromEntries(
+  recordingSkillActions.map((item) => [item.skillCode, item.label]),
+) as Record<RecordingSkillCode, string>;
+
 type OpenArtifactHandler = (evidence: AssistantEvidenceCard) => void;
 type PresentationTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title'>;
 type GeneratePresentationHandler = (target: PresentationTarget) => void;
@@ -217,6 +263,10 @@ type MetaQuestionSubmitHandler = (input: {
   interactionId: string;
   answers: Record<string, unknown>;
   queryText: string;
+}) => void;
+type MetaQuestionCancelHandler = (input: {
+  runId: string;
+  interactionId: string;
 }) => void;
 type OpenRecordHandler = (input: {
   objectKey: string;
@@ -306,6 +356,7 @@ interface ArtifactDetailPayload {
     artifactId: string;
     versionId: string;
     version: number;
+    kind?: 'company_research' | 'recording_material' | 'analysis_material';
     title: string;
     sourceToolCode: string;
     vectorStatus: string;
@@ -326,6 +377,83 @@ interface ArtifactViewerState {
   artifact?: ArtifactDetailPayload['artifact'];
 }
 
+type RecordingTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+interface RecordingTaskPayload {
+  taskId: string;
+  status: RecordingTaskStatus;
+  serviceTaskId: string;
+  providerDataId?: string | null;
+  fixtureTaskId?: string | null;
+  file: {
+    fileName: string;
+    mimeType: string;
+    size: number;
+    md5: string;
+  };
+  anchors: {
+    customer?: string;
+    opportunity?: string;
+    followup?: string;
+  };
+  stages: Array<{
+    key: string;
+    label: string;
+    status: string;
+  }>;
+  material?: {
+    available: boolean;
+    artifactId?: string;
+    path?: string | null;
+    source?: string | null;
+    markdown?: string;
+    excludedProcessFiles?: string[];
+  };
+  archive?: {
+    status: 'unarchived' | 'archived';
+    artifactId?: string;
+    followupId?: string;
+    customerId?: string;
+    opportunityId?: string;
+    sourceFileMd5?: string;
+  };
+  playback?: {
+    available: boolean;
+    path?: string | null;
+  };
+  errorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type RecordingSkillCode =
+  | 'ext.visit_conversation_understanding'
+  | 'ext.customer_needs_todo_analysis'
+  | 'ext.problem_statement_pm'
+  | 'ext.customer_value_positioning_pm';
+
+interface RecordingSkillJobState {
+  skillCode: RecordingSkillCode;
+  label: string;
+  status: ExternalSkillJobStatus;
+  jobId?: string;
+  finalText?: string | null;
+  artifacts?: ExternalSkillJobResponse['artifacts'];
+  errorMessage?: string | null;
+  updatedAt?: string;
+}
+
+type RecordingTaskCardState = RecordingTaskPayload & {
+  localStatusText?: string;
+  sourceFile?: File;
+  timelineAnchorMessageId?: string | null;
+  skillJobs?: Partial<Record<RecordingSkillCode, RecordingSkillJobState>>;
+};
+
+type RecordingSkillArtifactTarget = NonNullable<RecordingSkillJobState['artifacts']>[number];
+
+type RecordingAnchorState = RecordingTaskPayload['anchors'];
+
 interface PersistedMessageStore {
   version: typeof CHAT_STORAGE_VERSION;
   messages: Record<string, MessageInfo<AssistantChatMessage>[]>;
@@ -334,6 +462,11 @@ interface PersistedMessageStore {
 interface PersistedConversationStore {
   version: typeof CHAT_STORAGE_VERSION;
   conversations: ConversationSession[];
+}
+
+interface PersistedRecordingTaskStore {
+  version: typeof CHAT_STORAGE_VERSION;
+  tasks: Record<string, RecordingTaskCardState[]>;
 }
 
 type AssistantMessageStatus = MessageInfo<AssistantChatMessage>['status'];
@@ -748,6 +881,97 @@ const useStyles = createStyles(({ token, css }) => ({
       white-space: nowrap;
     }
   `,
+  recordingPrepCard: css`
+    margin: 10px 12px 12px;
+    padding: 12px;
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    background: ${token.colorFillQuaternary};
+  `,
+  recordingPrepTitle: css`
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  `,
+  recordingTaskStack: css`
+    width: min(100%, 840px);
+    margin-top: 12px;
+    display: grid;
+    gap: 12px;
+  `,
+  recordingTaskCard: css`
+    border-radius: 8px;
+    border: 1px solid ${token.colorBorderSecondary};
+    background: ${token.colorBgContainer};
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+  `,
+  recordingTaskCardInteractive: css`
+    cursor: pointer;
+    transition: border-color ${token.motionDurationMid}, box-shadow ${token.motionDurationMid};
+
+    &:hover {
+      border-color: ${token.colorPrimaryBorder};
+      box-shadow: 0 12px 30px rgba(22, 119, 255, 0.1);
+    }
+  `,
+  recordingTaskBody: css`
+    padding: 14px 16px;
+  `,
+  recordingStageGrid: css`
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  `,
+  recordingStage: css`
+    min-height: 34px;
+    border-radius: 6px;
+    background: ${token.colorFillQuaternary};
+    color: ${token.colorTextSecondary};
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    font-size: 12px;
+  `,
+  recordingActions: css`
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  `,
+  recordingSkillJobs: css`
+    margin-top: 10px;
+    display: grid;
+    gap: 8px;
+  `,
+  recordingSkillJob: css`
+    min-height: 34px;
+    border-radius: 6px;
+    border: 1px solid ${token.colorBorderSecondary};
+    background: ${token.colorFillQuaternary};
+    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+
+    .job-main {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .job-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  `,
   inlineRefs: css`
     margin-top: 14px;
   `,
@@ -1071,6 +1295,119 @@ function groupEvidenceByArtifact(evidence: AssistantEvidenceCard[]): GroupedEvid
   return [...grouped.values()];
 }
 
+function isAudioAttachment(file: NonNullable<GetProp<typeof Attachments, 'items'>>[number]) {
+  const type = file.type || file.originFileObj?.type || '';
+  return type.includes('audio') || /\.(mp3|m4a|wav|aac|flac|ogg)$/i.test(file.name || '');
+}
+
+function getUploadFile(file: NonNullable<GetProp<typeof Attachments, 'items'>>[number]): File | null {
+  const originFile = file.originFileObj;
+  return originFile instanceof File ? originFile : null;
+}
+
+function formatFileSize(size?: number) {
+  if (!size) {
+    return '0 B';
+  }
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function buildSuggestedRecordingAnchors(
+  agentTrace?: NonNullable<NonNullable<AssistantChatMessage['extraInfo']>['agentTrace']> | null,
+): RecordingAnchorState {
+  const anchors: RecordingAnchorState = {};
+  const subjects = [
+    agentTrace?.resolvedContext?.subject,
+    agentTrace?.pendingInteraction?.contextSubject,
+    agentTrace?.semanticResolution?.selectedCandidate?.subject,
+    agentTrace?.intentFrame?.targets?.[0],
+  ];
+
+  for (const subject of subjects) {
+    if (!subject) {
+      continue;
+    }
+    const subjectType = String(subject.type || subject.kind || '');
+    if (subjectType !== 'customer' && subjectType !== 'opportunity' && subjectType !== 'followup') {
+      continue;
+    }
+    const anchorValue = String(subject.id || subject.name || '').trim();
+    if (anchorValue && !anchors[subjectType]) {
+      anchors[subjectType] = anchorValue;
+    }
+  }
+
+  return anchors;
+}
+
+function getRecordingStatusLabel(status: RecordingTaskStatus) {
+  if (status === 'queued') {
+    return '已上传';
+  }
+  if (status === 'running') {
+    return '正在生成';
+  }
+  if (status === 'succeeded') {
+    return '已完成';
+  }
+  return '处理失败';
+}
+
+function getRecordingTagColor(status: string) {
+  if (status === 'succeeded') {
+    return 'success';
+  }
+  if (status === 'running') {
+    return 'processing';
+  }
+  if (status === 'failed') {
+    return 'error';
+  }
+  return 'default';
+}
+
+function getRecordingSkillJobStatusLabel(status?: ExternalSkillJobStatus) {
+  if (status === 'queued') {
+    return '已提交';
+  }
+  if (status === 'running') {
+    return '生成中';
+  }
+  if (status === 'succeeded') {
+    return '已完成';
+  }
+  if (status === 'failed') {
+    return '失败';
+  }
+  return '未开始';
+}
+
+function isRecordingSkillJobRunning(status?: ExternalSkillJobStatus) {
+  return status === 'queued' || status === 'running';
+}
+
+function toRecordingSkillJobState(
+  skillCode: RecordingSkillCode,
+  job: ExternalSkillJobResponse,
+): RecordingSkillJobState {
+  return {
+    skillCode,
+    label: recordingSkillLabels[skillCode],
+    status: job.status,
+    jobId: job.jobId,
+    finalText: job.finalText,
+    artifacts: job.artifacts,
+    errorMessage: job.error?.message ?? null,
+    updatedAt: job.updatedAt,
+  };
+}
+
 function compactSnippet(value?: string) {
   const normalized = (value || '').replace(/\s+/g, ' ').trim();
   return normalized.length > 420 ? `${normalized.slice(0, 420)}…` : normalized;
@@ -1302,9 +1639,9 @@ function orderRemoteRunMessages(messages: AgentRunDetailResponse['messages']) {
   });
 }
 
-async function fetchRemoteConversationMessages(
+async function loadRemoteMessagesResult(
   conversationKey: string,
-): Promise<DefaultMessageInfo<AssistantChatMessage>[] | null> {
+): Promise<RemoteMessagesResult<DefaultMessageInfo<AssistantChatMessage>>> {
   try {
     const query = new URLSearchParams({
       conversationKey,
@@ -1315,11 +1652,11 @@ async function fetchRemoteConversationMessages(
       cache: 'no-store',
     });
     if (!runsResponse.ok) {
-      return null;
+      return { status: 'unavailable' };
     }
     const runsPayload = await runsResponse.json() as AgentRunListResponse;
     if (!runsPayload.items.length) {
-      return null;
+      return { status: 'available', messages: [] };
     }
 
     const details = await Promise.all(
@@ -1357,9 +1694,9 @@ async function fetchRemoteConversationMessages(
         });
     });
 
-    return messages.length > 0 ? messages : null;
+    return { status: 'available', messages };
   } catch {
-    return null;
+    return { status: 'unavailable' };
   }
 }
 
@@ -1370,8 +1707,8 @@ async function loadDefaultConversationMessages(
     return [];
   }
   const localMessages = loadPersistedMessages(conversationKey);
-  const remoteMessages = await fetchRemoteConversationMessages(conversationKey);
-  return remoteMessages ?? localMessages ?? [];
+  const remoteMessages = await loadRemoteMessagesResult(conversationKey);
+  return chooseConversationMessages(remoteMessages, localMessages);
 }
 
 function persistMessages(conversationKey: string, messages: MessageInfo<AssistantChatMessage>[]) {
@@ -1385,6 +1722,125 @@ function persistMessages(conversationKey: string, messages: MessageInfo<Assistan
     delete store.messages[conversationKey];
   }
   writePersistedMessageStore(store);
+}
+
+function readPersistedRecordingTaskStore(): PersistedRecordingTaskStore {
+  const storage = getBrowserStorage();
+  if (!storage) {
+    return { version: CHAT_STORAGE_VERSION, tasks: {} };
+  }
+
+  try {
+    const raw = storage.getItem(CHAT_RECORDING_TASKS_STORAGE_KEY);
+    if (!raw) {
+      return { version: CHAT_STORAGE_VERSION, tasks: {} };
+    }
+    const parsed = JSON.parse(raw) as PersistedRecordingTaskStore;
+    if (
+      parsed?.version !== CHAT_STORAGE_VERSION
+      || typeof parsed.tasks !== 'object'
+      || !parsed.tasks
+    ) {
+      return { version: CHAT_STORAGE_VERSION, tasks: {} };
+    }
+    return parsed;
+  } catch {
+    return { version: CHAT_STORAGE_VERSION, tasks: {} };
+  }
+}
+
+function writePersistedRecordingTaskStore(store: PersistedRecordingTaskStore) {
+  const storage = getBrowserStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    storage.setItem(CHAT_RECORDING_TASKS_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // Ignore storage quota or private-mode failures.
+  }
+}
+
+function notifyRecordingTasksUpdated(conversationKey: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(CHAT_RECORDING_TASKS_UPDATED_EVENT, {
+    detail: { conversationKey },
+  }));
+}
+
+function toPersistableRecordingTask(value: unknown): RecordingTaskCardState | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const candidate = value as RecordingTaskCardState;
+  if (
+    typeof candidate.taskId !== 'string'
+    || typeof candidate.status !== 'string'
+    || !candidate.file
+    || typeof candidate.file.fileName !== 'string'
+    || !Array.isArray(candidate.stages)
+  ) {
+    return null;
+  }
+
+  const { sourceFile: _sourceFile, material, skillJobs, ...rest } = candidate;
+  const sanitizedSkillJobs = Object.fromEntries(
+    Object.entries(skillJobs ?? {}).filter((entry): entry is [RecordingSkillCode, RecordingSkillJobState] => Boolean(entry[1])),
+  ) as Partial<Record<RecordingSkillCode, RecordingSkillJobState>>;
+
+  return {
+    ...rest,
+    ...(material
+      ? {
+          material: {
+            ...material,
+            markdown: undefined,
+          },
+        }
+      : {}),
+    ...(Object.keys(sanitizedSkillJobs).length ? { skillJobs: sanitizedSkillJobs } : {}),
+  };
+}
+
+function loadPersistedRecordingTasks(conversationKey: string): RecordingTaskCardState[] {
+  const tasks = readPersistedRecordingTaskStore().tasks[conversationKey];
+  if (!Array.isArray(tasks)) {
+    return [];
+  }
+  return tasks
+    .map(toPersistableRecordingTask)
+    .filter((item): item is RecordingTaskCardState => Boolean(item))
+    .slice(0, 6);
+}
+
+function persistRecordingTasks(
+  conversationKey: string,
+  tasks: RecordingTaskCardState[],
+  notify = true,
+) {
+  const store = readPersistedRecordingTaskStore();
+  const sanitized = tasks
+    .map(toPersistableRecordingTask)
+    .filter((item): item is RecordingTaskCardState => Boolean(item))
+    .slice(0, 6);
+  if (sanitized.length > 0) {
+    store.tasks[conversationKey] = sanitized;
+  } else {
+    delete store.tasks[conversationKey];
+  }
+  writePersistedRecordingTaskStore(store);
+  if (notify) {
+    notifyRecordingTasksUpdated(conversationKey);
+  }
+}
+
+function updatePersistedRecordingTasks(
+  conversationKey: string,
+  updater: (tasks: RecordingTaskCardState[]) => RecordingTaskCardState[],
+) {
+  persistRecordingTasks(conversationKey, updater(loadPersistedRecordingTasks(conversationKey)));
 }
 
 function isPersistableConversation(value: unknown): value is ConversationSession {
@@ -1473,6 +1929,13 @@ function buildConversationTitleFromQuery(query: string) {
   return normalized.length > 24 ? `${normalized.slice(0, 24)}…` : normalized;
 }
 
+const conversationSyncPolicy: ConversationSyncPolicy<ConversationSession> = {
+  isPersistableConversation,
+  normalizeConversationSession,
+  isDeprecatedConversation: isDeprecatedWorkbenchSceneConversation,
+  keepSingleBlankConversations: keepSingleBlankConversation,
+};
+
 function readPersistedConversationStore(): PersistedConversationStore {
   const storage = getBrowserStorage();
   if (!storage) {
@@ -1515,11 +1978,11 @@ function writePersistedConversationStore(store: PersistedConversationStore) {
 }
 
 function mergePersistedConversations(baseConversations: ConversationSession[]) {
-  const fixedKeys = new Set(baseConversations.map((item) => item.key));
-  const customConversations = readPersistedConversationStore().conversations
-    .filter((item) => !fixedKeys.has(item.key));
-
-  return [...keepSingleBlankConversation(customConversations), ...baseConversations];
+  return mergeOfflineCachedConversations(
+    baseConversations,
+    readPersistedConversationStore().conversations,
+    conversationSyncPolicy,
+  );
 }
 
 function persistCustomConversations(
@@ -1542,29 +2005,22 @@ function persistCustomConversations(
 function mergeRemoteConversations(
   baseConversations: ConversationSession[],
   remoteConversations: ConversationSession[],
-  localConversations: ConversationSession[] = [],
 ) {
-  const fixedKeys = new Set(baseConversations.map((item) => item.key));
-  const customConversations = remoteConversations
-    .filter(isPersistableConversation)
-    .map(normalizeConversationSession)
-    .filter((item) => !isDeprecatedWorkbenchSceneConversation(item))
-    .filter((item) => !fixedKeys.has(item.key));
-  const remoteKeys = new Set(customConversations.map((item) => item.key));
-  const pendingLocalConversations = localConversations
-    .filter(isPersistableConversation)
-    .map(normalizeConversationSession)
-    .filter((item) => !isDeprecatedWorkbenchSceneConversation(item))
-    .filter((item) =>
-      !fixedKeys.has(item.key)
-      && !remoteKeys.has(item.key)
-      && isBlankUserConversation(item),
-    );
+  return mergeAuthoritativeRemoteConversations(
+    baseConversations,
+    remoteConversations,
+    conversationSyncPolicy,
+  );
+}
 
-  return [
-    ...keepSingleBlankConversation([...pendingLocalConversations, ...customConversations]),
-    ...baseConversations,
-  ];
+function prunePersistedChatState(validConversationKeys: Iterable<string>) {
+  const next = prunePersistedChatStateStores({
+    messageStore: readPersistedMessageStore(),
+    recordingTaskStore: readPersistedRecordingTaskStore(),
+    validConversationKeys,
+  });
+  writePersistedMessageStore(next.messageStore);
+  writePersistedRecordingTaskStore(next.recordingTaskStore);
 }
 
 async function fetchRemoteConversations(): Promise<ConversationSession[] | null> {
@@ -1702,12 +2158,14 @@ function MetaQuestionCardPanel({
   submittedInteractionIds,
   styles,
   onSubmit,
+  onCancel,
 }: {
   pendingInteraction?: PendingInteractionView | null;
   activeInteractionId?: string;
   submittedInteractionIds?: Set<string>;
   styles: ReturnType<typeof useStyles>['styles'];
   onSubmit?: MetaQuestionSubmitHandler;
+  onCancel?: MetaQuestionCancelHandler;
 }) {
   const questionCard = pendingInteraction?.questionCard;
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
@@ -1731,6 +2189,7 @@ function MetaQuestionCardPanel({
   const questions = questionCard.questions ?? [];
   const answerCount = Object.values(answers).filter((value) => !isEmptyMetaAnswer(value)).length;
   const canSubmit = Boolean(onSubmit) && canInteract && answerCount > 0;
+  const canCancel = Boolean(onCancel) && canInteract;
   const statusTag = canInteract
     ? <Tag color="blue">需要补充</Tag>
     : isSubmitted
@@ -1816,6 +2275,21 @@ function MetaQuestionCardPanel({
           }}
         >
           {questionCard.submitLabel || '补充并继续'}
+        </Button>
+        <Button
+          size="small"
+          disabled={!canCancel}
+          onClick={() => {
+            if (!onCancel || !pendingInteraction) {
+              return;
+            }
+            onCancel({
+              runId: pendingInteraction.runId,
+              interactionId: pendingInteraction.interactionId,
+            });
+          }}
+        >
+          取消本次录入
         </Button>
         <Text type="secondary">{helperText}</Text>
       </Space>
@@ -2617,6 +3091,7 @@ function AssistantMessageContent({
   onGenerateImage,
   onOpenRecord,
   onSubmitQuestionCard,
+  onCancelQuestionCard,
   activeQuestionInteractionId,
   submittedQuestionInteractionIds,
   presentationByArtifactId,
@@ -2631,6 +3106,7 @@ function AssistantMessageContent({
   onGenerateImage: GenerateImageHandler;
   onOpenRecord?: OpenRecordHandler;
   onSubmitQuestionCard?: MetaQuestionSubmitHandler;
+  onCancelQuestionCard?: MetaQuestionCancelHandler;
   activeQuestionInteractionId?: string;
   submittedQuestionInteractionIds?: Set<string>;
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>;
@@ -2659,6 +3135,7 @@ function AssistantMessageContent({
         submittedInteractionIds={submittedQuestionInteractionIds}
         styles={styles}
         onSubmit={onSubmitQuestionCard}
+        onCancel={onCancelQuestionCard}
       />
       {uiSurfaces.length ? (
         <>
@@ -2853,6 +3330,153 @@ function mapPlanStepStatus(status?: string): ThoughtChainItemProps['status'] | u
   return undefined;
 }
 
+function RecordingTaskCard({
+  task,
+  styles,
+  onOpenViewer,
+  onRetry,
+  onRunSkill,
+  onOpenSkillArtifact,
+  onCreateFollowup,
+  followupBusy,
+}: {
+  task: RecordingTaskCardState;
+  styles: ReturnType<typeof useStyles>['styles'];
+  onOpenViewer: (task: RecordingTaskCardState) => void;
+  onRetry: (task: RecordingTaskCardState) => void;
+  onRunSkill: (task: RecordingTaskCardState, skillCode: RecordingSkillCode) => void;
+  onOpenSkillArtifact: (job: RecordingSkillJobState, artifact: RecordingSkillArtifactTarget) => void;
+  onCreateFollowup: (task: RecordingTaskCardState) => void;
+  followupBusy?: boolean;
+}) {
+  const completed = task.status === 'succeeded' && Boolean(task.material?.available || task.material?.path);
+  const skillJobs = Object.values(task.skillJobs ?? {}).filter(Boolean) as RecordingSkillJobState[];
+  const archived = task.archive?.status === 'archived' && Boolean(task.archive.followupId);
+  const followupButtonLabel = archived
+    ? '已新增拜访记录'
+    : followupBusy
+      ? '拜访记录补充中'
+      : '新增拜访记录';
+  return (
+    <div
+      className={`${styles.recordingTaskCard} ${completed ? styles.recordingTaskCardInteractive : ''}`}
+      role={completed ? 'button' : undefined}
+      tabIndex={completed ? 0 : undefined}
+      aria-label={completed ? `打开 ${task.file.fileName} 录音查看页` : undefined}
+      onClick={() => {
+        if (completed) {
+          onOpenViewer(task);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (!completed) {
+          return;
+        }
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpenViewer(task);
+        }
+      }}
+    >
+      <div className={styles.recordingTaskBody}>
+        <Flex justify="space-between" align="start" gap={12}>
+          <Space direction="vertical" size={2}>
+            <Space size={8} wrap>
+              <CloudUploadOutlined />
+              <Text strong>{task.file.fileName}</Text>
+              <Tag color={getRecordingTagColor(task.status)}>{task.localStatusText || getRecordingStatusLabel(task.status)}</Tag>
+            </Space>
+            <Text type="secondary">
+              {formatFileSize(task.file.size)} · {task.anchors.customer || task.anchors.opportunity ? '已带建议关联' : '可稍后关联客户/商机'}
+            </Text>
+          </Space>
+        </Flex>
+        <div className={styles.recordingStageGrid}>
+          {task.stages.map((stage) => (
+            <span key={stage.key} className={styles.recordingStage}>
+              <Tag color={getRecordingTagColor(stage.status)} style={{ marginInlineEnd: 0 }}>
+                {stage.status === 'running' ? '中' : stage.status === 'succeeded' ? '成' : stage.status === 'failed' ? '败' : '待'}
+              </Tag>
+              <span>{stage.label}</span>
+            </span>
+          ))}
+        </div>
+        {task.status === 'failed' ? (
+          <Alert
+            style={{ marginTop: 12 }}
+            type="error"
+            showIcon
+            message={task.errorMessage || '录音处理失败'}
+            action={task.sourceFile ? <Button size="small" onClick={(event) => {
+              event.stopPropagation();
+              onRetry(task);
+            }}>重试处理</Button> : undefined}
+          />
+        ) : null}
+        {completed ? (
+          <div className={styles.recordingActions} onClick={(event) => event.stopPropagation()}>
+            {recordingSkillActions.map((action) => {
+              const job = task.skillJobs?.[action.skillCode];
+              return (
+                <Button
+                  key={action.skillCode}
+                  size="small"
+                  icon={action.icon}
+                  loading={isRecordingSkillJobRunning(job?.status)}
+                  onClick={() => onRunSkill(task, action.skillCode)}
+                >
+                  {action.label}
+                </Button>
+              );
+            })}
+            <Button
+              size="small"
+              icon={archived ? <EyeOutlined /> : <PlusOutlined />}
+              disabled={!archived && followupBusy}
+              onClick={() => onCreateFollowup(task)}
+            >
+              {followupButtonLabel}
+            </Button>
+          </div>
+        ) : task.status !== 'failed' ? (
+          <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
+            正在生成摘要、章节、关键词、说话人与资料包；当前不展示逐字转写。
+          </Text>
+        ) : null}
+        {skillJobs.length ? (
+          <div className={styles.recordingSkillJobs} onClick={(event) => event.stopPropagation()}>
+            {skillJobs.map((job) => (
+              <div key={job.skillCode} className={styles.recordingSkillJob}>
+                <span className="job-main">
+                  <Tag color={getRecordingTagColor(job.status)} style={{ marginInlineEnd: 0 }}>
+                    {getRecordingSkillJobStatusLabel(job.status)}
+                  </Tag>
+                  <span className="job-label">{job.label}</span>
+                  {job.errorMessage ? <Text type="danger">{job.errorMessage}</Text> : null}
+                </span>
+                {job.status === 'succeeded' && job.artifacts?.length ? (
+                  <Space size={4}>
+                    {job.artifacts.slice(0, 2).map((artifact) => (
+                      <Button
+                        key={artifact.artifactId}
+                        size="small"
+                        type="link"
+                        onClick={() => onOpenSkillArtifact(job, artifact)}
+                      >
+                        {artifact.fileName}
+                      </Button>
+                    ))}
+                  </Space>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function buildThoughtItems(info: any): ThoughtChainItemType[] {
   const executionStatus = info.extraInfo?.agentTrace?.executionState?.status;
   const planSteps = info.extraInfo?.agentTrace?.taskPlan?.steps;
@@ -3019,6 +3643,75 @@ function findLatestPendingQuestionInteractionId(
     ?.message.extraInfo?.agentTrace?.pendingInteraction?.interactionId;
 }
 
+function findPendingRecordingFollowupTaskIds(
+  messages: MessageInfo<AssistantChatMessage>[],
+) {
+  const taskIds = new Set<string>();
+  for (const item of messages) {
+    if (item.message.role !== 'assistant') {
+      continue;
+    }
+    const trace = item.message.extraInfo?.agentTrace;
+    const pendingInteraction = trace?.pendingInteraction;
+    const pendingConfirmation = trace?.pendingConfirmation;
+    if (pendingInteraction?.status === 'pending') {
+      const taskId = readRecordingSourceTaskId(pendingInteraction.partialInput);
+      if (taskId) {
+        taskIds.add(taskId);
+      }
+    }
+    if (pendingConfirmation?.status === 'pending') {
+      const taskId = readRecordingSourceTaskId(pendingConfirmation.requestInput);
+      if (taskId) {
+        taskIds.add(taskId);
+      }
+    }
+  }
+  return taskIds;
+}
+
+function extractArchivedRecordingTaskIds(
+  agentTrace?: NonNullable<NonNullable<AssistantChatMessage['extraInfo']>['agentTrace']>,
+) {
+  const taskIds = new Set<string>();
+  for (const call of agentTrace?.toolCalls ?? []) {
+    if (call.toolCode !== 'artifact.recording_material.archive' || call.status !== 'succeeded') {
+      continue;
+    }
+    const input = parseJsonObject(call.inputSummary);
+    const taskId = typeof input.recordingTaskId === 'string' ? input.recordingTaskId.trim() : '';
+    if (taskId) {
+      taskIds.add(taskId);
+    }
+  }
+  return Array.from(taskIds);
+}
+
+function readRecordingSourceTaskId(value: unknown): string {
+  const root = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const agentControl = root.agentControl && typeof root.agentControl === 'object' && !Array.isArray(root.agentControl)
+    ? root.agentControl as Record<string, unknown>
+    : {};
+  const source = agentControl.source && typeof agentControl.source === 'object' && !Array.isArray(agentControl.source)
+    ? agentControl.source as Record<string, unknown>
+    : {};
+  return source.kind === 'recording_material' && typeof source.recordingTaskId === 'string'
+    ? source.recordingTaskId.trim()
+    : '';
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string' || !value.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
 function getSceneSourceTags(sceneKey: string) {
   if (sceneKey === 'customer-analysis') {
     return ['客户主数据', '联系人', '商机盘点', '公司研究供给'];
@@ -3113,6 +3806,7 @@ function buildRole(
   onGenerateImage: GenerateImageHandler,
   onOpenRecord: OpenRecordHandler,
   onSubmitQuestionCard: MetaQuestionSubmitHandler,
+  onCancelQuestionCard: MetaQuestionCancelHandler,
   activeQuestionInteractionId: string | undefined,
   submittedQuestionInteractionIds: Set<string>,
   presentationByArtifactId: Record<string, ArtifactPresentationPayload>,
@@ -3172,6 +3866,7 @@ function buildRole(
           onGenerateImage={onGenerateImage}
           onOpenRecord={onOpenRecord}
           onSubmitQuestionCard={onSubmitQuestionCard}
+          onCancelQuestionCard={onCancelQuestionCard}
           activeQuestionInteractionId={activeQuestionInteractionId}
           submittedQuestionInteractionIds={submittedQuestionInteractionIds}
           presentationByArtifactId={presentationByArtifactId}
@@ -3206,7 +3901,7 @@ function ArtifactMarkdownDrawer({
     <Drawer
       title={
         <Space orientation="vertical" size={2}>
-          <Text strong>{state.title || '公司研究资料'}</Text>
+              <Text strong>{state.title || 'Markdown 资料'}</Text>
           {state.artifact ? (
             <Text type="secondary">
               第 {state.artifact.version} 版 · 更新于 {state.artifact.updatedAt}
@@ -3256,7 +3951,7 @@ function ArtifactMarkdownDrawer({
           <Alert
             type="error"
             showIcon
-            message="公司研究资料加载失败"
+            message="资料加载失败"
             description={state.error}
           />
         ) : (
@@ -3270,7 +3965,7 @@ function ArtifactMarkdownDrawer({
               </>
             ) : null}
             <XMarkdown paragraphTag="div" className={markdownClassName}>
-              {state.markdown || '暂无公司研究资料内容。'}
+              {state.markdown || '暂无资料内容。'}
             </XMarkdown>
           </Card>
         )}
@@ -3289,6 +3984,8 @@ function AssistantConversationRuntime({
   markdownClassName,
   messageApi,
   setConversation,
+  prepareRecordingConversation,
+  activateConversation,
   navigateToScene,
   blankConversationKeys,
   setBlankConversationKeys,
@@ -3303,12 +4000,15 @@ function AssistantConversationRuntime({
   markdownClassName: string;
   messageApi: ReturnType<typeof message.useMessage>[0];
   setConversation: (key: string, conversation: ConversationSession) => boolean;
+  prepareRecordingConversation: (summary: string) => string;
+  activateConversation: (key: string) => void;
   navigateToScene: (route: string) => void;
   blankConversationKeys: Set<string>;
   setBlankConversationKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
   pendingBlankConversationSubmitRef: React.MutableRefObject<Record<string, string>>;
 }) {
   const listRef = useRef<BubbleListRef>(null);
+  const chatListRef = useRef<HTMLDivElement>(null);
   const [inputValue, setInputValue] = useState('');
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<GetProp<typeof Attachments, 'items'>>([]);
@@ -3325,6 +4025,9 @@ function AssistantConversationRuntime({
     Record<string, ArtifactPresentationPayload>
   >({});
   const [imageByArtifactId, setImageByArtifactId] = useState<Record<string, ArtifactImagePayload>>({});
+  const [recordingTasks, setRecordingTasks] = useState<RecordingTaskCardState[]>(
+    () => loadPersistedRecordingTasks(activeConversationKey),
+  );
   const [submittedQuestionInteractionIds, setSubmittedQuestionInteractionIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -3427,18 +4130,36 @@ function AssistantConversationRuntime({
 
   const messageList = messages ?? [];
   const displayMessageList = isActiveConversationBlank ? [] : messageList;
+  const hasRecordingTasks = recordingTasks.length > 0;
   const latestAgentMessage = [...displayMessageList]
     .reverse()
     .find((item) => item.message.role === 'assistant' && item.message.extraInfo?.agentTrace);
   const latestAgentTrace = latestAgentMessage?.message.extraInfo?.agentTrace;
+  const suggestedRecordingAnchors = useMemo(
+    () => buildSuggestedRecordingAnchors(latestAgentTrace),
+    [latestAgentTrace],
+  );
   const latestPendingConfirmationTrace = findLatestPendingConfirmationTrace(displayMessageList);
   const activeQuestionInteractionId = findLatestPendingQuestionInteractionId(displayMessageList);
+  const pendingRecordingFollowupTaskIds = useMemo(
+    () => findPendingRecordingFollowupTaskIds(displayMessageList),
+    [displayMessageList],
+  );
+  const latestTimelineAnchorMessageId = useMemo(
+    () => getLatestTimelineMessageId(displayMessageList),
+    [displayMessageList],
+  );
   const latestEvidence = latestAgentMessage?.message.extraInfo?.evidence ?? [];
   const visibleEvidenceCards = useMemo(
     () => displayMessageList.flatMap((item) => item.message.extraInfo?.evidence ?? []),
     [displayMessageList],
   );
   const safeScrollToBottom = React.useCallback(() => {
+    const chatList = chatListRef.current;
+    if (chatList) {
+      chatList.scrollTo({ top: chatList.scrollHeight });
+      return;
+    }
     const bubbleList = listRef.current;
     if (!bubbleList?.scrollBoxNativeElement) {
       return;
@@ -3522,6 +4243,331 @@ function AssistantConversationRuntime({
     }));
     return payload;
   }, []);
+
+  useEffect(() => {
+    setRecordingTasks(loadPersistedRecordingTasks(activeConversationKey));
+  }, [activeConversationKey]);
+
+  useEffect(() => {
+    const reloadRecordingTasks = () => {
+      setRecordingTasks(loadPersistedRecordingTasks(activeConversationKey));
+    };
+    const handleRecordingTasksUpdated = (event: Event) => {
+      const conversationKey = (event as CustomEvent<{ conversationKey?: string }>).detail?.conversationKey;
+      if (!conversationKey || conversationKey === activeConversationKey) {
+        reloadRecordingTasks();
+      }
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === CHAT_RECORDING_TASKS_STORAGE_KEY) {
+        reloadRecordingTasks();
+      }
+    };
+
+    window.addEventListener(CHAT_RECORDING_TASKS_UPDATED_EVENT, handleRecordingTasksUpdated);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(CHAT_RECORDING_TASKS_UPDATED_EVENT, handleRecordingTasksUpdated);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [activeConversationKey]);
+
+  const updateRecordingTasksForConversation = React.useCallback((
+    conversationKey: string,
+    updater: (tasks: RecordingTaskCardState[]) => RecordingTaskCardState[],
+  ) => {
+    if (conversationKey !== activeConversationKey) {
+      updatePersistedRecordingTasks(conversationKey, updater);
+      return;
+    }
+
+    setRecordingTasks((current) => {
+      const next = updater(current);
+      persistRecordingTasks(conversationKey, next, false);
+      return next;
+    });
+  }, [activeConversationKey]);
+
+  const upsertRecordingTask = React.useCallback((
+    task: RecordingTaskCardState,
+    conversationKey = activeConversationKey,
+  ) => {
+    updateRecordingTasksForConversation(conversationKey, (current) => {
+      const existingIndex = current.findIndex((item) => item.taskId === task.taskId);
+      if (existingIndex < 0) {
+        return [task, ...current].slice(0, 6);
+      }
+      const next = [...current];
+      next[existingIndex] = { ...next[existingIndex], ...task };
+      return next;
+    });
+  }, [activeConversationKey, updateRecordingTasksForConversation]);
+
+  const upsertRecordingSkillJob = React.useCallback((
+    taskId: string,
+    skillCode: RecordingSkillCode,
+    job: RecordingSkillJobState,
+    conversationKey = activeConversationKey,
+  ) => {
+    updateRecordingTasksForConversation(conversationKey, (current) => current.map((task) => {
+      if (task.taskId !== taskId) {
+        return task;
+      }
+      return {
+        ...task,
+        skillJobs: {
+          ...(task.skillJobs ?? {}),
+          [skillCode]: job,
+        },
+      };
+    }));
+  }, [activeConversationKey, updateRecordingTasksForConversation]);
+
+  const updateRecordingTaskTimelineAnchor = React.useCallback((
+    taskId: string,
+    timelineAnchorMessageId: string | null,
+    conversationKey = activeConversationKey,
+  ) => {
+    updateRecordingTasksForConversation(conversationKey, (current) => current.map((task) => (
+      task.taskId === taskId
+        ? { ...task, timelineAnchorMessageId }
+        : task
+    )));
+  }, [activeConversationKey, updateRecordingTasksForConversation]);
+
+  const fetchRecordingTask = React.useCallback(async (taskId: string) => {
+    const response = await fetch(`/api/recording-audio-tasks/${encodeURIComponent(taskId)}`);
+    if (!response.ok) {
+      throw new Error(`录音任务接口返回 ${response.status}`);
+    }
+    const payload = (await response.json()) as RecordingTaskPayload;
+    upsertRecordingTask(payload);
+    return payload;
+  }, [upsertRecordingTask]);
+
+  useEffect(() => {
+    const archivedTaskIds = extractArchivedRecordingTaskIds(latestAgentTrace);
+    if (!archivedTaskIds.length) {
+      return;
+    }
+    for (const taskId of archivedTaskIds) {
+      void fetchRecordingTask(taskId).catch(() => {
+        // The card can still be refreshed by the next polling/user action.
+      });
+    }
+  }, [fetchRecordingTask, latestAgentTrace]);
+
+  const fetchRecordingSkillJob = React.useCallback(async (
+    taskId: string,
+    skillCode: RecordingSkillCode,
+    jobId: string,
+	  ) => {
+	    const response = await fetch(
+	      `/api/recording-audio-tasks/${encodeURIComponent(taskId)}/skill-jobs/${encodeURIComponent(skillCode)}/${encodeURIComponent(jobId)}`,
+	    );
+    if (!response.ok) {
+      throw new Error(`外部技能 Job 接口返回 ${response.status}`);
+    }
+    const payload = (await response.json()) as ExternalSkillJobResponse;
+    upsertRecordingSkillJob(taskId, skillCode, toRecordingSkillJobState(skillCode, payload));
+    return payload;
+  }, [upsertRecordingSkillJob]);
+
+  const materializeRecordingTask = React.useCallback(async (
+    taskId: string,
+    conversationKey = activeConversationKey,
+  ) => {
+    const response = await fetch(`/api/recording-audio-tasks/${encodeURIComponent(taskId)}/materialize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preferredSource: 'auto' }),
+    });
+    if (!response.ok) {
+      throw new Error(`录音资料包接口返回 ${response.status}`);
+    }
+    const payload = (await response.json()) as RecordingTaskPayload;
+    upsertRecordingTask(payload, conversationKey);
+    return payload;
+  }, [activeConversationKey, upsertRecordingTask]);
+
+  const uploadRecordingFile = React.useCallback(async (
+    file: File,
+    conversationKey = activeConversationKey,
+  ) => {
+    const anchors = suggestedRecordingAnchors;
+    const timelineAnchorMessageId = conversationKey === activeConversationKey
+      ? latestTimelineAnchorMessageId
+      : null;
+    const pendingTask: RecordingTaskCardState = {
+      taskId: `pending-${file.name}-${file.lastModified}`,
+      status: 'queued',
+      serviceTaskId: '',
+      file: {
+        fileName: file.name,
+        mimeType: file.type || 'audio/*',
+        size: file.size,
+        md5: '',
+      },
+      anchors,
+      stages: [
+        { key: 'uploaded', label: '已上传', status: 'running' },
+        { key: 'summary', label: '生成摘要', status: 'pending' },
+        { key: 'chapters', label: '生成章节', status: 'pending' },
+        { key: 'keywords', label: '提取关键词', status: 'pending' },
+        { key: 'speakers', label: '识别说话人', status: 'pending' },
+        { key: 'material', label: '生成资料包', status: 'pending' },
+      ],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      localStatusText: '录音处理准备',
+      sourceFile: file,
+      timelineAnchorMessageId,
+    };
+    upsertRecordingTask(pendingTask, conversationKey);
+
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    formData.append('createdBy', ASSISTANT_OPERATOR_OPEN_ID);
+    if (Object.keys(anchors).length) {
+      formData.append('anchors', JSON.stringify(anchors));
+    }
+    const response = await fetch('/api/recording-audio-tasks', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}));
+      throw new Error(errorPayload.message || `录音上传接口返回 ${response.status}`);
+    }
+    const payload = (await response.json()) as RecordingTaskPayload;
+    updateRecordingTasksForConversation(
+      conversationKey,
+      (current) => current.filter((item) => item.taskId !== pendingTask.taskId),
+    );
+    upsertRecordingTask({ ...payload, sourceFile: file, timelineAnchorMessageId }, conversationKey);
+	    if (payload.status === 'succeeded' && !payload.material?.available) {
+      void materializeRecordingTask(payload.taskId, conversationKey).catch((error) => {
+        messageApi.error(error instanceof Error ? error.message : '录音资料包生成失败');
+      });
+    }
+    return payload;
+  }, [
+    activeConversationKey,
+    latestTimelineAnchorMessageId,
+    materializeRecordingTask,
+    messageApi,
+    suggestedRecordingAnchors,
+    updateRecordingTasksForConversation,
+    upsertRecordingTask,
+  ]);
+
+  const runRecordingSkillJob = React.useCallback(async (
+    task: RecordingTaskCardState,
+    skillCode: RecordingSkillCode,
+  ) => {
+    const existingJob = task.skillJobs?.[skillCode];
+    if (isRecordingSkillJobRunning(existingJob?.status)) {
+      return;
+    }
+
+    upsertRecordingSkillJob(task.taskId, skillCode, {
+      skillCode,
+      label: recordingSkillLabels[skillCode],
+      status: 'queued',
+      artifacts: [],
+      errorMessage: null,
+      updatedAt: new Date().toISOString(),
+    });
+
+    try {
+      const response = await fetch(`/api/recording-audio-tasks/${encodeURIComponent(task.taskId)}/skill-jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skillCode }),
+      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(errorPayload.message || `外部技能 Job 创建接口返回 ${response.status}`);
+      }
+      const payload = (await response.json()) as ExternalSkillJobResponse;
+      upsertRecordingSkillJob(task.taskId, skillCode, toRecordingSkillJobState(skillCode, payload));
+      if (payload.status === 'succeeded') {
+        messageApi.success(`${recordingSkillLabels[skillCode]} 已完成`);
+      } else {
+        messageApi.info(`${recordingSkillLabels[skillCode]} 已提交`);
+      }
+    } catch (error) {
+      upsertRecordingSkillJob(task.taskId, skillCode, {
+        skillCode,
+        label: recordingSkillLabels[skillCode],
+        status: 'failed',
+        artifacts: [],
+        errorMessage: error instanceof Error ? error.message : '外部技能调用失败',
+        updatedAt: new Date().toISOString(),
+      });
+      messageApi.error(error instanceof Error ? error.message : '外部技能调用失败');
+    }
+  }, [messageApi, upsertRecordingSkillJob]);
+
+  useEffect(() => {
+    const pollingTasks = recordingTasks
+      .filter((task) => !task.taskId.startsWith('pending-'))
+	      .filter((task) => task.status === 'queued' || task.status === 'running' || (task.status === 'succeeded' && !task.material?.available));
+
+    if (!pollingTasks.length) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      pollingTasks.forEach((task) => {
+        void fetchRecordingTask(task.taskId)
+          .then((latest) => {
+	            if (latest.status === 'succeeded' && !latest.material?.available) {
+              return materializeRecordingTask(latest.taskId);
+            }
+            return latest;
+          })
+          .catch(() => {
+            // Keep the current card; manual retry is still available.
+          });
+      });
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [fetchRecordingTask, materializeRecordingTask, recordingTasks]);
+
+  useEffect(() => {
+    const runningJobs = recordingTasks.flatMap((task) => (
+      Object.values(task.skillJobs ?? {})
+        .filter((job): job is RecordingSkillJobState => Boolean(job?.jobId && isRecordingSkillJobRunning(job.status)))
+        .map((job) => ({
+          taskId: task.taskId,
+          skillCode: job.skillCode,
+          jobId: job.jobId!,
+        }))
+    ));
+
+    if (!runningJobs.length) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      runningJobs.forEach((job) => {
+        void fetchRecordingSkillJob(job.taskId, job.skillCode, job.jobId).catch((error) => {
+          upsertRecordingSkillJob(job.taskId, job.skillCode, {
+            skillCode: job.skillCode,
+            label: recordingSkillLabels[job.skillCode],
+            status: 'failed',
+            artifacts: [],
+            errorMessage: error instanceof Error ? error.message : '外部技能 Job 状态同步失败',
+            updatedAt: new Date().toISOString(),
+          });
+        });
+      });
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [fetchRecordingSkillJob, recordingTasks, upsertRecordingSkillJob]);
 
   useEffect(() => {
     const missingArtifacts = Array.from(new Set(
@@ -3739,6 +4785,34 @@ function AssistantConversationRuntime({
     [activeConversationKey, isRequesting, messageApi, onRequest, safeScrollToBottom, scene.key],
   );
 
+  const handleCancelQuestionCard = React.useCallback<MetaQuestionCancelHandler>(
+    ({ runId, interactionId }) => {
+      if (isRequesting) {
+        messageApi.warning('当前请求仍在处理中，请等待完成后再取消。');
+        return;
+      }
+      onRequest({
+        query: '取消本次录入',
+        sceneKey: scene.key,
+        conversationKey: activeConversationKey,
+        resume: {
+          runId,
+          action: 'cancel_interaction',
+          interactionId,
+        },
+      });
+      setSubmittedQuestionInteractionIds((current) => {
+        const next = new Set(current);
+        next.add(interactionId);
+        return next;
+      });
+      window.requestAnimationFrame(() => {
+        safeScrollToBottom();
+      });
+    },
+    [activeConversationKey, isRequesting, messageApi, onRequest, safeScrollToBottom, scene.key],
+  );
+
   const handleOpenRecord = React.useCallback<OpenRecordHandler>(
     ({ objectKey, formInstId, title }) => {
       if (isRequesting) {
@@ -3774,51 +4848,171 @@ function AssistantConversationRuntime({
     [activeConversationKey, isRequesting, messageApi, onRequest, safeScrollToBottom, scene.key],
   );
 
-  const role = useMemo(
-    () => buildRole(styles, markdownClassName, async (evidence) => {
+  const handleOpenArtifactCard = React.useCallback<OpenArtifactHandler>(async (evidence) => {
+    setArtifactViewer({
+      open: true,
+      loading: true,
+      title: evidence.title,
+      artifactId: evidence.artifactId,
+      markdown: '',
+      error: null,
+    });
+
+    try {
+      const response = await fetch(`/api/artifacts/${encodeURIComponent(evidence.artifactId)}`);
+      if (!response.ok) {
+        throw new Error(`资料接口返回 ${response.status}`);
+      }
+      const payload = (await response.json()) as ArtifactDetailPayload;
       setArtifactViewer({
         open: true,
-        loading: true,
+        loading: false,
+        title: payload.artifact.title,
+        artifactId: payload.artifact.artifactId,
+        markdown: payload.markdown,
+        error: null,
+        artifact: payload.artifact,
+      });
+      void fetchPresentationStatus(payload.artifact.artifactId).catch(() => {
+        // PPT status is optional for Markdown viewing.
+      });
+    } catch (error) {
+      setArtifactViewer({
+        open: true,
+        loading: false,
         title: evidence.title,
         artifactId: evidence.artifactId,
         markdown: '',
+        error: error instanceof Error ? error.message : '无法读取资料',
+      });
+    }
+  }, [fetchPresentationStatus]);
+
+  const handleOpenRecordingViewer = React.useCallback((task: RecordingTaskCardState) => {
+    if (task.status !== 'succeeded') {
+      messageApi.warning('录音处理完成后才能打开查看页');
+      return;
+    }
+    window.open(
+      `/api/recording-audio-tasks/${encodeURIComponent(task.taskId)}/meeting-viewer`,
+      '_blank',
+      'noopener,noreferrer',
+    );
+  }, [messageApi]);
+
+  const handleOpenRecordingSkillArtifact = React.useCallback(async (
+    job: RecordingSkillJobState,
+    artifact: RecordingSkillArtifactTarget,
+  ) => {
+    setArtifactViewer({
+      open: true,
+      loading: true,
+      title: artifact.fileName || job.label,
+      markdown: '',
+      error: null,
+    });
+
+    try {
+      const response = await fetch(artifact.downloadPath);
+      if (!response.ok) {
+        throw new Error(`外部技能产物接口返回 ${response.status}`);
+      }
+      const markdown = await response.text();
+      setArtifactViewer({
+        open: true,
+        loading: false,
+        title: artifact.fileName || job.label,
+        markdown,
         error: null,
       });
+    } catch (error) {
+      setArtifactViewer({
+        open: true,
+        loading: false,
+        title: artifact.fileName || job.label,
+        markdown: '',
+        error: error instanceof Error ? error.message : '无法读取外部技能产物',
+      });
+    }
+  }, []);
 
-      try {
-        const response = await fetch(`/api/artifacts/${encodeURIComponent(evidence.artifactId)}`);
-        if (!response.ok) {
-          throw new Error(`公司研究资料接口返回 ${response.status}`);
-        }
-        const payload = (await response.json()) as ArtifactDetailPayload;
-        setArtifactViewer({
-          open: true,
-          loading: false,
-          title: payload.artifact.title,
-          artifactId: payload.artifact.artifactId,
-          markdown: payload.markdown,
-          error: null,
-          artifact: payload.artifact,
-        });
-        void fetchPresentationStatus(payload.artifact.artifactId).catch(() => {
-          // PPT status is optional for Markdown viewing.
-        });
-      } catch (error) {
-        setArtifactViewer({
-          open: true,
-          loading: false,
-          title: evidence.title,
-          artifactId: evidence.artifactId,
-          markdown: '',
-          error: error instanceof Error ? error.message : '无法读取公司研究资料',
-        });
-      }
-    }, handleGeneratePresentation, handleGenerateImage, handleOpenRecord, handleSubmitQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, presentationByArtifactId, imageByArtifactId),
+  const handleRetryRecordingTask = React.useCallback((task: RecordingTaskCardState) => {
+    if (!task.sourceFile) {
+      messageApi.warning('当前页面没有保留原始录音文件，请重新选择文件上传。');
+      return;
+    }
+    void uploadRecordingFile(task.sourceFile).catch((error) => {
+      messageApi.error(error instanceof Error ? error.message : '录音重试失败');
+    });
+  }, [messageApi, uploadRecordingFile]);
+
+  const requestFromRecordingTask = React.useCallback((
+    task: RecordingTaskCardState,
+    query: string,
+    clientAction?: AgentClientAction,
+  ) => {
+    if (isRequesting) {
+      messageApi.warning('当前请求仍在处理中，请等待完成后再继续。');
+      return;
+    }
+    if (!task.timelineAnchorMessageId && latestTimelineAnchorMessageId) {
+      updateRecordingTaskTimelineAnchor(task.taskId, latestTimelineAnchorMessageId);
+    }
+    onRequest({
+      query,
+      sceneKey: scene.key,
+      conversationKey: activeConversationKey,
+      ...(clientAction ? { clientAction } : {}),
+    });
+    window.requestAnimationFrame(() => {
+      safeScrollToBottom();
+    });
+  }, [
+    activeConversationKey,
+    isRequesting,
+    latestTimelineAnchorMessageId,
+    messageApi,
+    onRequest,
+    safeScrollToBottom,
+    scene.key,
+    updateRecordingTaskTimelineAnchor,
+  ]);
+
+  const handleCreateRecordingFollowup = React.useCallback((task: RecordingTaskCardState) => {
+    if (task.archive?.status === 'archived' && task.archive.followupId) {
+      handleOpenRecord({
+        objectKey: 'followup',
+        formInstId: task.archive.followupId,
+        title: `${task.file.fileName} 拜访记录`,
+      });
+      return;
+    }
+    requestFromRecordingTask(
+      task,
+      `基于录音资料包「${task.file.fileName}」新增拜访记录。正式写入前必须补齐客户和商机，并等待我确认后再写入。`,
+      {
+        type: 'record.preview_create',
+        objectKey: 'followup',
+	        source: {
+	          kind: 'recording_material',
+	          recordingTaskId: task.taskId,
+	          artifactId: task.material?.artifactId,
+	          fileName: task.file.fileName,
+	          sourceFileMd5: task.file.md5,
+	          anchors: task.anchors,
+	        },
+      },
+    );
+  }, [handleOpenRecord, requestFromRecordingTask]);
+
+  const role = useMemo(
+    () => buildRole(styles, markdownClassName, handleOpenArtifactCard, handleGeneratePresentation, handleGenerateImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, presentationByArtifactId, imageByArtifactId),
     [
       activeQuestionInteractionId,
-      fetchPresentationStatus,
+      handleCancelQuestionCard,
       handleGenerateImage,
       handleGeneratePresentation,
+      handleOpenArtifactCard,
       handleOpenRecord,
       handleSubmitQuestionCard,
       imageByArtifactId,
@@ -3867,16 +5061,21 @@ function AssistantConversationRuntime({
     }
   };
 
-  const onSubmit = (text: string) => {
+  const onSubmit = async (text: string) => {
     const normalizedText = text.trim();
     if (selectedComposerCommand?.key === 'company-research' && !normalizedText) {
       messageApi.warning('请输入公司全称');
       return;
     }
 
+    const audioFiles = (attachedFiles ?? [])
+      .filter(isAudioAttachment)
+      .map(getUploadFile)
+      .filter((file): file is File => Boolean(file));
+
     const queryText = selectedComposerCommand && !getSlashCommandFromInput(normalizedText)
       ? `${selectedComposerCommand.command}${normalizedText ? ` ${normalizedText}` : ''}`
-      : normalizedText;
+      : normalizedText || (audioFiles.length ? '生成录音资料包' : '');
 
     if (!queryText.trim()) {
       return;
@@ -3884,6 +5083,30 @@ function AssistantConversationRuntime({
 
     if (isRequesting) {
       messageApi.warning('当前请求仍在处理中，请等待完成后再继续。');
+      return;
+    }
+
+    if (audioFiles.length) {
+      const uploadSummary = audioFiles.length === 1
+        ? `上传录音：${audioFiles[0]?.name ?? '录音文件'}`
+        : `上传 ${audioFiles.length} 个录音文件`;
+      const recordingConversationKey = prepareRecordingConversation(uploadSummary);
+      setInputValue('');
+      setSelectedComposerCommand(null);
+      setAttachedFiles([]);
+      setAttachmentsOpen(false);
+      setSlashMenuOpen(false);
+      const uploadPromises = audioFiles.map((file) => uploadRecordingFile(file, recordingConversationKey));
+      activateConversation(recordingConversationKey);
+      try {
+        await Promise.all(uploadPromises);
+        messageApi.success('录音任务已创建，完成后会生成录音资料卡。');
+      } catch (error) {
+        messageApi.error(error instanceof Error ? error.message : '录音任务创建失败');
+      }
+      window.requestAnimationFrame(() => {
+        safeScrollToBottom();
+      });
       return;
     }
 
@@ -3958,6 +5181,8 @@ function AssistantConversationRuntime({
     onSubmit(normalized);
   };
 
+  const audioAttachedFiles = (attachedFiles ?? []).filter(isAudioAttachment);
+
   const senderHeader = (
     <Sender.Header
       title="文件上传"
@@ -3979,6 +5204,25 @@ function AssistantConversationRuntime({
               }
         }
       />
+      {audioAttachedFiles.length ? (
+        <div className={styles.recordingPrepCard}>
+          <div className={styles.recordingPrepTitle}>
+            <Space size={8}>
+              <CloudUploadOutlined />
+              <Text strong>录音处理准备</Text>
+            </Space>
+            <Tag color="processing">生成录音资料包</Tag>
+          </div>
+          <Space direction="vertical" size={4}>
+            {audioAttachedFiles.map((file) => (
+              <Text key={file.uid || file.name} type="secondary">
+                {file.name} · {formatFileSize(file.size)}
+              </Text>
+            ))}
+            <Text type="secondary">可先处理，稍后再关联客户/商机；当前不展示逐字转写。</Text>
+          </Space>
+        </div>
+      ) : null}
     </Sender.Header>
   );
 
@@ -4053,6 +5297,11 @@ function AssistantConversationRuntime({
         },
       }
     : undefined;
+  const recordingTimeline = useMemo(
+    () => buildRecordingTimeline(displayMessageList, recordingTasks),
+    [displayMessageList, recordingTasks],
+  );
+  const hasTimelineEntries = recordingTimeline.length > 0;
 
   const senderFooter: NodeRender = (_, { components }) => {
     const { LoadingButton, SendButton, SpeechButton } = components;
@@ -4097,22 +5346,45 @@ function AssistantConversationRuntime({
   };
 
   const chatList = (
-    <div className={styles.chatList}>
-      {displayMessageList.length ? (
-        <Bubble.List
-          key={activeConversationKey}
-          ref={listRef}
-          className={styles.bubbleList}
-          role={role}
-          styles={{ root: { maxWidth: 940 } }}
-          items={displayMessageList.map((item) => ({
-            ...item.message,
-            key: `${activeConversationKey}:${item.id}`,
-            status: item.status,
-            loading: item.status === 'loading',
-            extraInfo: item.message.extraInfo ?? item.extraInfo,
-          }))}
-        />
+    <div className={styles.chatList} ref={chatListRef}>
+      {hasTimelineEntries ? (
+        <>
+          {recordingTimeline.map((entry) => {
+            if (entry.kind === 'messages') {
+              return (
+                <Bubble.List
+                  key={`${activeConversationKey}:${entry.key}`}
+                  ref={listRef}
+                  className={styles.bubbleList}
+                  role={role}
+                  styles={{ root: { maxWidth: 940 } }}
+                  items={entry.messages.map((item) => ({
+                    ...item.message,
+                    key: `${activeConversationKey}:${item.id}`,
+                    status: item.status,
+                    loading: item.status === 'loading',
+                    extraInfo: item.message.extraInfo ?? item.extraInfo,
+                  }))}
+                />
+              );
+            }
+
+            return (
+              <div key={`${activeConversationKey}:${entry.key}`} className={styles.recordingTaskStack}>
+                <RecordingTaskCard
+                  task={entry.task}
+                  styles={styles}
+                  onOpenViewer={handleOpenRecordingViewer}
+                  onRetry={handleRetryRecordingTask}
+                  onRunSkill={runRecordingSkillJob}
+                  onOpenSkillArtifact={handleOpenRecordingSkillArtifact}
+                  onCreateFollowup={handleCreateRecordingFollowup}
+                  followupBusy={pendingRecordingFollowupTaskIds.has(entry.task.taskId)}
+                />
+              </div>
+            );
+          })}
+        </>
       ) : (
         <Flex
           vertical
@@ -4158,7 +5430,7 @@ function AssistantConversationRuntime({
           )}
         </div>
       ) : null}
-      {!attachmentsOpen && !showSlashMenu && !selectedComposerCommand ? (
+      {!attachmentsOpen && !showSlashMenu && !selectedComposerCommand && !hasRecordingTasks ? (
         <Prompts
           items={senderPrompts}
           onItemClick={(info) => {
@@ -4198,7 +5470,9 @@ function AssistantConversationRuntime({
     <ChatContext.Provider value={{ onReload, setMessage }}>
       <div className={styles.chat}>
         <div className={styles.chatToolbar}>
-          {scene.key !== 'chat' ? (
+          {hasRecordingTasks ? (
+            <Tag color="blue">录音处理</Tag>
+          ) : scene.key !== 'chat' ? (
             <>
               <Tag color="blue">{scene.title}</Tag>
               <Tag color="purple">命中 {getSceneSlashCommand(scene.key)}</Tag>
@@ -4227,6 +5501,30 @@ function AssistantConversationRuntime({
         tenantContext={runtimeTenantContext}
         agentTrace={latestAgentTrace}
         evidence={latestEvidence}
+        recordingTasks={recordingTasks.map((task) => ({
+          taskId: task.taskId,
+          fileName: task.file.fileName,
+          status: task.status,
+          localStatusText: task.localStatusText,
+          stages: task.stages.map((stage) => ({
+            key: stage.key,
+            label: stage.label,
+            status: stage.status,
+          })),
+          skillJobs: Object.values(task.skillJobs ?? {})
+            .filter((job): job is RecordingSkillJobState => Boolean(job))
+            .map((job) => ({
+              skillCode: job.skillCode,
+              label: job.label,
+              status: job.status,
+              errorMessage: job.errorMessage,
+              jobId: job.jobId,
+              artifacts: job.artifacts?.map((artifact) => ({
+                artifactId: artifact.artifactId,
+                fileName: artifact.fileName,
+              })),
+            })),
+        }))}
         adminBaseUrl={ADMIN_BASE_URL}
       />
       <ArtifactMarkdownDrawer
@@ -4383,7 +5681,7 @@ function AssistantWorkspace() {
     [homeConversation],
   );
   const defaultConversations = useMemo(
-    () => mergePersistedConversations(baseConversations),
+    () => baseConversations,
     [baseConversations],
   );
   const getConversationKeyByRoute = React.useCallback(
@@ -4439,6 +5737,7 @@ function AssistantWorkspace() {
       ?? getConversationKeyByRoute(location.pathname),
   });
   const conversationsRef = useRef<ConversationSession[]>(defaultConversations);
+  const conversationCacheWritableRef = useRef(false);
   const activeConversation = conversations.find(
     (item) => item.key === activeConversationKey,
   ) as ConversationSession | undefined;
@@ -4451,20 +5750,32 @@ function AssistantWorkspace() {
     let cancelled = false;
 
     void fetchRemoteConversations().then((remoteConversations) => {
-      if (cancelled || !remoteConversations) {
+      if (cancelled) {
         return;
       }
 
-      const nextConversations = mergeRemoteConversations(
-        baseConversations,
-        remoteConversations,
-        conversationsRef.current,
-      );
+      const remoteAvailable = remoteConversations !== null;
+      const nextConversations = remoteAvailable
+        ? mergeRemoteConversations(baseConversations, remoteConversations)
+        : mergePersistedConversations(baseConversations);
+      conversationCacheWritableRef.current = true;
       setConversations(nextConversations);
       persistCustomConversations(nextConversations, baseConversations);
+      if (remoteAvailable) {
+        prunePersistedChatState(nextConversations.map((item) => item.key));
+      }
 
-      if (!nextConversations.some((item) => item.key === activeConversationKey)) {
-        setActiveConversationKey(getConversationKeyByRoute(location.pathname));
+      const allowedKeys = nextConversations.map((item) => item.key);
+      const nextActiveConversationKey = resolveSyncedActiveConversationKey({
+        validConversationKeys: allowedKeys,
+        currentActiveKey: activeConversationKey,
+        storedActiveKey: getStoredActiveConversationKey(allowedKeys),
+        fallbackKey: getConversationKeyByRoute(location.pathname),
+      });
+      if (nextActiveConversationKey !== activeConversationKey) {
+        setActiveConversationKey(nextActiveConversationKey);
+      } else {
+        persistActiveConversationKey(nextActiveConversationKey);
       }
     });
 
@@ -4474,6 +5785,7 @@ function AssistantWorkspace() {
   }, [
     baseConversations,
     getConversationKeyByRoute,
+    activeConversationKey,
     location.pathname,
     setActiveConversationKey,
     setConversations,
@@ -4502,10 +5814,16 @@ function AssistantWorkspace() {
   ]);
 
   useEffect(() => {
+    if (!conversationCacheWritableRef.current) {
+      return;
+    }
     persistActiveConversationKey(activeConversationKey);
   }, [activeConversationKey]);
 
   useEffect(() => {
+    if (!conversationCacheWritableRef.current) {
+      return;
+    }
     persistCustomConversations(conversations as ConversationSession[], baseConversations);
   }, [baseConversations, conversations]);
 
@@ -4513,6 +5831,75 @@ function AssistantWorkspace() {
     setActiveConversationKey(getConversationKeyByRoute(route));
     navigate(route);
   }, [getConversationKeyByRoute, navigate, setActiveConversationKey]);
+
+  const prepareRecordingConversation = React.useCallback((summary: string) => {
+    const normalizedSummary = summary.trim() || '上传录音';
+    const now = new Date();
+
+    if (activeConversation && isUserCreatedConversationKey(activeConversation.key)) {
+      const nextConversation: ConversationSession = {
+        ...activeConversation,
+        label: isBlankUserConversation(activeConversation)
+          ? buildConversationTitleFromQuery(normalizedSummary)
+          : activeConversation.label,
+        lastMessage: normalizedSummary,
+        updatedAt: '刚刚',
+        scene: 'chat',
+        route: '/chat',
+      };
+      setConversation(activeConversation.key, nextConversation);
+      persistCustomConversations(
+        conversationsRef.current.map((item) => (
+          item.key === activeConversation.key ? nextConversation : item
+        )),
+        baseConversations,
+      );
+      setBlankConversationKeys((current) => {
+        const next = new Set(current);
+        next.delete(activeConversation.key);
+        return next;
+      });
+      delete pendingBlankConversationSubmitRef.current[activeConversation.key];
+      void persistRemoteConversation(nextConversation).catch(() => {
+        // Local conversation remains available when admin-api is unavailable.
+      });
+      return activeConversation.key;
+    }
+
+    const conversationKey = `${USER_CONVERSATION_KEY_PREFIX}${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
+    const newConversation: ConversationSession = {
+      key: conversationKey,
+      label: buildConversationTitleFromQuery(normalizedSummary),
+      route: '/chat',
+      group: '最近会话',
+      lastMessage: normalizedSummary,
+      updatedAt: '刚刚',
+      scene: 'chat',
+    };
+    addConversation(newConversation, 'prepend');
+    persistCustomConversations([newConversation, ...conversationsRef.current], baseConversations);
+    persistMessages(conversationKey, []);
+    void persistRemoteConversation(newConversation).catch(() => {
+      // Local conversation remains available when admin-api is unavailable.
+    });
+    return conversationKey;
+  }, [
+    activeConversation,
+    addConversation,
+    baseConversations,
+    pendingBlankConversationSubmitRef,
+    setBlankConversationKeys,
+    setConversation,
+  ]);
+
+  const activateConversation = React.useCallback((conversationKey: string) => {
+    if (activeConversationKey !== conversationKey) {
+      setActiveConversationKey(conversationKey);
+    }
+    if (location.pathname !== '/chat') {
+      navigate('/chat');
+    }
+  }, [activeConversationKey, location.pathname, navigate, setActiveConversationKey]);
 
   const footerSubtitle = `${personalSettings.roleLabel}${personalSettings.isDefaultSoulPrompt ? ' · SOUL 未配置' : ' · SOUL 已配置'}`;
 
@@ -4623,6 +6010,8 @@ function AssistantWorkspace() {
       markdownClassName={markdownClassName}
       messageApi={messageApi}
       setConversation={(key, conversation) => setConversation(key, conversation)}
+      prepareRecordingConversation={prepareRecordingConversation}
+      activateConversation={activateConversation}
       navigateToScene={navigateToScene}
       blankConversationKeys={blankConversationKeys}
       setBlankConversationKeys={setBlankConversationKeys}

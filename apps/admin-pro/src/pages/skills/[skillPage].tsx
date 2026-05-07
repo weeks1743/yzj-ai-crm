@@ -336,6 +336,65 @@ function CompanyResearchUsageConfigPreview() {
   );
 }
 
+function getUpstreamMaterialConfig(skillCode: string): {
+  materials: string[];
+  actions: string[];
+  enabled: boolean;
+} | null {
+  const configs: Record<string, { materials: string[]; actions: string[]; enabled: boolean }> = {
+    'ext.visit_conversation_understanding': {
+      materials: ['通义结构化分析 JSON', '录音资料包', '客户资料', '商机资料'],
+      actions: ['拜访会话理解'],
+      enabled: true,
+    },
+    'ext.customer_needs_todo_analysis': {
+      materials: ['通义结构化分析 JSON', '录音资料包', '客户资料', '商机资料'],
+      actions: ['客户需求工作待办分析'],
+      enabled: true,
+    },
+    'ext.problem_statement_pm': {
+      materials: ['通义结构化分析 JSON', '录音资料包', '需求待办', '客户资料'],
+      actions: ['问题陈述'],
+      enabled: true,
+    },
+    'ext.customer_value_positioning_pm': {
+      materials: ['问题陈述', '客户资料', '商机资料'],
+      actions: ['客户价值定位'],
+      enabled: true,
+    },
+  };
+  return configs[skillCode] ?? null;
+}
+
+function UpstreamMaterialPreview({ skill }: { skill: ExternalSkillCatalogItem }) {
+  const config = getUpstreamMaterialConfig(skill.skillCode);
+  if (!config) {
+    return null;
+  }
+
+  return (
+    <Alert
+      type="info"
+      showIcon
+      message="可使用的上游资料"
+      description={
+        <Space direction="vertical" size={8}>
+          <Space wrap>
+            {config.materials.map((item) => (
+              <Tag key={item} color={item.includes('结构化') ? 'processing' : item === '录音资料包' ? 'blue' : 'default'}>{item}</Tag>
+            ))}
+          </Space>
+          <Typography.Text>用户看到的动作：{config.actions.join('、')}</Typography.Text>
+          <Space>
+            <Typography.Text>允许在聊天中基于录音资料使用此能力</Typography.Text>
+            <Switch checked={config.enabled} disabled checkedChildren="开启" unCheckedChildren="关闭" />
+          </Space>
+        </Space>
+      }
+    />
+  );
+}
+
 function ExternalSkillBasicInfo({ skill }: { skill: ExternalSkillCatalogItem }) {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -392,6 +451,7 @@ function ExternalSkillBasicInfo({ skill }: { skill: ExternalSkillCatalogItem }) 
           )}
         </ProDescriptions.Item>
       </ProDescriptions>
+      <UpstreamMaterialPreview skill={skill} />
     </Space>
   );
 }

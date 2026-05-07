@@ -367,7 +367,7 @@ export class SkillExecutor {
       supportFileHints.push('- 如需固定结构，请先读取 template.md。');
     }
     if (skill.profile.examples.length > 0) {
-      supportFileHints.push('- 如需把握输出语气或结构，可按需读取 examples/ 下的示例。');
+      supportFileHints.push(`- 如需把握输出语气或结构，只读取这些示例文件：${skill.profile.examples.join('、')}。`);
     }
 
     return {
@@ -380,11 +380,11 @@ export class SkillExecutor {
         '- 只允许使用这些工具：read_skill_file, read_source_file, write_text_artifact。',
         '- 必须产出结构化 markdown，不要输出闲聊式答复。',
         '- 如果用户提供了附件，优先读取附件后再组织内容；没有附件时，直接基于 requestText 生成。',
+        '- 只能读取“可用输入文件”清单中的具体文件路径，不要把输入目录、输出目录或工作目录当作文件读取。',
         '- 如技能自带 template.md 或 examples，可按需读取，但不要把模板说明原样照抄到最终结果中。',
         '- 必须在结束前调用 write_text_artifact 生成 markdown 产物。',
         `- 输出 artifact 建议文件名：${skill.skillName}-${job.jobId}.md`,
         `- Job 输出目录：${paths.outputsDir}`,
-        `- Job 附件目录：${paths.inputsDir}`,
         ...supportFileHints,
       ].join('\n'),
       userPrompt: [

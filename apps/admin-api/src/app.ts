@@ -17,6 +17,8 @@ import type {
   ExternalSkillPresentationSessionHeartbeatRequest,
   ExternalSkillPresentationSessionOpenRequest,
   ImageGenerationRequest,
+  RecordingTaskCreateRequest,
+  RecordingTaskMaterializeRequest,
   ShadowObjectKey,
   ShadowPreviewDeleteInput,
   ShadowPreviewGetInput,
@@ -39,6 +41,7 @@ import type { OrgSyncRepository } from './org-sync-repository.js';
 import { getTenantAppSettings, getYzjAuthSettings } from './settings-service.js';
 import { ShadowMetadataService } from './shadow-metadata-service.js';
 import { buildMetaQuestionOptionsResponse, buildRecordSearchPageResponse } from './crm-agent-pack.js';
+import type { RecordingTaskService } from './recording-task-service.js';
 
 interface CreateAdminApiServerOptions {
   config: AppConfig;
@@ -51,6 +54,7 @@ interface CreateAdminApiServerOptions {
   artifactService?: ArtifactService;
   artifactPresentationService?: ArtifactPresentationService;
   artifactImageService?: ArtifactImageService;
+  recordingTaskService?: RecordingTaskService;
   agentService?: AgentService;
   agentConversationService?: AgentConversationService;
   agentPersonalSettingsService?: AgentPersonalSettingsService;
@@ -204,6 +208,17 @@ function parseOptionalPositiveInteger(value: string | null): number | undefined 
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
 }
 
+function parseJsonField<T>(value: string | undefined, fallbackValue: T): T {
+  if (!value?.trim()) {
+    return fallbackValue;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch (error) {
+    throw new BadRequestError('multipart JSON 字段解析失败', { cause: error });
+  }
+}
+
 export function createAdminApiServer(options: CreateAdminApiServerOptions) {
   return createServer(async (request: IncomingMessage, response: ServerResponse) => {
     const method = request.method ?? 'GET';
@@ -222,6 +237,14 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
 
       if (method === 'GET' && url.pathname === '/api/settings/yzj-auth') {
         writeJson(response, 200, getYzjAuthSettings(options.config));
+        return;
+      }
+
+      if (method === 'GET' && url.pathname === '/api/settings/recording-service') {
+        if (!options.recordingTaskService) {
+          throw new ServiceUnavailableError('录音处理服务未启用');
+        }
+        writeJson(response, 200, await options.recordingTaskService.getHealth());
         return;
       }
 
@@ -443,6 +466,83 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           }),
         );
         return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/recording-audio-tasks') {
+        if (!options.recordingTaskService) {
+          throw new ServiceUnavailableError('录音处理服务未启用');
+        }
+        const contentType = request.headers['content-type'] ?? '';
+        if (contentType.includes('multipart/form-data')) {
+          const payload = await readMultipartBody(request);
+          const file = payload.files.find((item) => item.fieldName === 'file') ?? payload.files[0];
+          if (!file) {
+            throw new BadRequestError('请上传录音文件');
+          }
+          writeJson(
+            response,
+            201,
+            await options.recordingTaskService.uploadTask({
+              eid: payload.fields.eid,
+              appId: payload.fields.appId,
+              fileName: file.fileName,
+              mimeType: file.mimeType,
+              content: file.content,
+              anchors: parseJsonField(payload.fields.anchors, {}),
+              createdBy: payload.fields.createdBy,
+            }),
+          );
+          return;
+        }
+
+        const payload = await readJsonBody<RecordingTaskCreateRequest>(request);
+        writeJson(response, 201, await options.recordingTaskService.createFixtureTask(payload));
+        return;
+      }
+
+      if (url.pathname.startsWith('/api/recording-audio-tasks/')) {
+        if (!options.recordingTaskService) {
+          throw new ServiceUnavailableError('录音处理服务未启用');
+        }
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (method === 'GET' && parts.length === 4 && parts[3] === 'meeting-viewer') {
+          const taskId = decodeURIComponent(parts[2] ?? '');
+          const location = await options.recordingTaskService.getMeetingViewerUrl(taskId);
+          response.writeHead(302, {
+            Location: location,
+            'Access-Control-Allow-Origin': '*',
+          });
+          response.end();
+          return;
+        }
+
+        if (method === 'GET' && parts.length === 3) {
+          const taskId = decodeURIComponent(parts[2] ?? '');
+          writeJson(response, 200, await options.recordingTaskService.getTask(taskId));
+          return;
+        }
+
+        if (method === 'POST' && parts.length === 4 && parts[3] === 'materialize') {
+          const taskId = decodeURIComponent(parts[2] ?? '');
+          const payload = await readJsonBody<RecordingTaskMaterializeRequest>(request);
+          writeJson(response, 200, await options.recordingTaskService.materializeTask(taskId, payload));
+          return;
+        }
+
+        if (method === 'POST' && parts.length === 4 && parts[3] === 'skill-jobs') {
+          const taskId = decodeURIComponent(parts[2] ?? '');
+          const payload = await readJsonBody<{ skillCode?: string }>(request);
+          writeJson(response, 202, await options.recordingTaskService.createSkillJob(taskId, payload));
+          return;
+        }
+
+        if (method === 'GET' && parts.length === 6 && parts[3] === 'skill-jobs') {
+          const taskId = decodeURIComponent(parts[2] ?? '');
+          const skillCode = decodeURIComponent(parts[4] ?? '');
+          const jobId = decodeURIComponent(parts[5] ?? '');
+          writeJson(response, 200, await options.recordingTaskService.getSkillJob(taskId, skillCode, jobId));
+          return;
+        }
       }
 
       if (method === 'POST' && url.pathname === '/api/external-skills/image-generate') {

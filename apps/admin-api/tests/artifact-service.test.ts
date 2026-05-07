@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chunkMarkdown } from '../src/artifact-chunker.js';
+import { buildAnchorIdentity } from '../src/artifact-repository.js';
 import { ArtifactService } from '../src/artifact-service.js';
 import type { ArtifactVectorStatus } from '../src/contracts.js';
 import { createTestConfig } from './test-helpers.js';
@@ -21,6 +22,28 @@ ${'风险描述。'.repeat(220)}
     chunks.map((_, index) => index),
   );
   assert.ok(chunks.some((item) => item.heading === '风险'));
+});
+
+test('buildAnchorIdentity keeps recording and analysis artifacts stable by formal anchors', () => {
+  const anchors = [
+    { type: 'source_file' as const, id: 'md5-bsm', role: 'source' as const },
+    { type: 'customer' as const, id: 'customer-bsm', role: 'primary' as const },
+    { type: 'opportunity' as const, id: 'opportunity-bsm', role: 'related' as const },
+    { type: 'followup' as const, id: 'followup-bsm', role: 'related' as const },
+  ];
+
+  assert.equal(
+    buildAnchorIdentity(anchors, { kind: 'recording_material', sourceToolCode: 'tongyi.audio.recording_material' }),
+    'recording_material:followup:followup-bsm:source_file:md5-bsm',
+  );
+  assert.equal(
+    buildAnchorIdentity(anchors, {
+      kind: 'analysis_material',
+      sourceToolCode: 'ext.problem_statement_pm',
+      metadata: { skillCode: 'ext.problem_statement_pm' },
+    }),
+    'analysis_material:followup:followup-bsm:skill:ext.problem_statement_pm',
+  );
 });
 
 test('createCompanyResearchArtifact saves markdown when embedding key is missing', async () => {

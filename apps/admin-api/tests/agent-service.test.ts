@@ -820,7 +820,14 @@ function createLiveSkillRuntimeConfig(tempRoot: string) {
   return config;
 }
 
-test('AgentService rejects real company research result for nonexistent company without artifact', { timeout: 240_000 }, async () => {
+const hasLiveCompanyResearchKeys = Boolean(process.env.DEEPSEEK_API_KEY && process.env.ARK_API_KEY);
+
+test('AgentService rejects real company research result for nonexistent company without artifact', {
+  timeout: 240_000,
+  skip: hasLiveCompanyResearchKeys
+    ? false
+    : 'requires DEEPSEEK_API_KEY and ARK_API_KEY for live company research',
+}, async () => {
   const tempRoot = createTempDir('admin-api-real-invalid-company-research-');
   let harness: Awaited<ReturnType<typeof createRuntimeHarness>> | null = null;
   try {

@@ -129,7 +129,33 @@ export type AgentClientAction =
       objectKey: ShadowObjectKey;
       formInstId: string;
       title?: string;
+    }
+  | {
+      type: 'record.preview_create';
+      objectKey: ShadowObjectKey;
+      title?: string;
+      source?: {
+        kind: 'recording_material';
+        recordingTaskId?: string;
+        artifactId?: string;
+        fileName?: string;
+        sourceFileMd5?: string;
+        anchors?: {
+          customer?: string;
+          opportunity?: string;
+          followup?: string;
+        };
+      };
     };
+
+export interface RecordingTaskArchiveState {
+  status: 'unarchived' | 'archived';
+  artifactId?: string;
+  followupId?: string;
+  customerId?: string;
+  opportunityId?: string;
+  sourceFileMd5?: string;
+}
 
 export interface AgentUiSurface {
   kind: 'record-search-results' | 'record-detail';
@@ -921,6 +947,7 @@ export type AgentTaskPlanKind =
   | 'tool_clarify'
   | 'company_research'
   | 'artifact_search'
+  | 'recording_material'
   | 'audio_not_supported'
   | 'unknown_clarify';
 export type AgentToolCallStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
@@ -943,6 +970,7 @@ export interface AgentObservedContextSubject {
 export interface AgentObservedEvidenceCard {
   artifactId: string;
   versionId: string;
+  kind?: 'company_research' | 'recording_material' | 'analysis_material';
   title: string;
   version: number;
   sourceToolCode: string;

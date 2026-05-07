@@ -177,6 +177,9 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
   const chatClient = new QueueChatClient([
     (input) => {
       const userPrompt = input.messages.find((message) => message.role === 'user')?.content || '';
+      const systemPrompt = input.messages.find((message) => message.role === 'system')?.content || '';
+      assert.match(systemPrompt, /只能读取“可用输入文件”清单中的具体文件路径/);
+      assert.doesNotMatch(systemPrompt, /Job 附件目录/);
       const attachmentPath = extractListItem(userPrompt, '.md');
       return {
         content: null,

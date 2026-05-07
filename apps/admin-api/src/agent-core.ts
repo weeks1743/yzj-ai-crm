@@ -287,6 +287,7 @@ export interface ContinuationResolution {
   action:
     | 'resume_pending_interaction'
     | 'start_new_task'
+    | 'cancel_interaction'
     | 'confirm_writeback'
     | 'reject_writeback'
     | 'select_candidate'
@@ -393,6 +394,14 @@ export interface AgentStartNewTaskResumeDecision {
   reason: string;
 }
 
+export interface AgentCancelInteractionResumeDecision {
+  runId: string;
+  action: 'cancel_interaction';
+  interactionId: string;
+  query: string;
+  reason: string;
+}
+
 export interface AgentCandidateSelectionResumeDecision {
   runId: string;
   action: 'select_candidate';
@@ -426,6 +435,7 @@ export type AgentResumeDecision =
   | AgentConfirmWritebackResumeDecision
   | AgentProvideInputResumeDecision
   | AgentStartNewTaskResumeDecision
+  | AgentCancelInteractionResumeDecision
   | AgentCandidateSelectionResumeDecision
   | AgentRouteToolResumeDecision
   | AgentWaitInputResumeDecision;

@@ -1543,6 +1543,7 @@ async function createTestServer(options: {
   imageApiKey?: string | null;
   imageFetchImpl?: FetchLike;
   skillRuntimeFetchImpl?: FetchLike;
+  recordingTaskService?: unknown;
 } = {}) {
   const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-http-'));
   const fieldBoundWorkbookPath = join(tempDir, 'province-city-district.xlsx');
@@ -1678,6 +1679,7 @@ async function createTestServer(options: {
       fetchImpl: combinedFetchImpl,
       now: () => new Date('2026-04-24T09:00:00.000Z'),
     }),
+    recordingTaskService: options.recordingTaskService as any,
   });
 
   server.listen(0);
@@ -2713,6 +2715,99 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
       released: boolean;
     };
     assert.equal(closeSessionPayload.released, true);
+  } finally {
+    runtime.server.close();
+    await once(runtime.server, 'close');
+    rmSync(runtime.tempDir, { recursive: true, force: true });
+  }
+});
+
+test('HTTP endpoints expose recording viewer redirect and downstream skill job creation', async () => {
+  const calls: Array<{ method: string; taskId: string; payload?: unknown }> = [];
+  const runtime = await createTestServer({
+    recordingTaskService: {
+      getMeetingViewerUrl: async (taskId: string) => {
+        calls.push({ method: 'viewer', taskId });
+        return 'http://127.0.0.1:3018/meeting-viewer/?task=EV5TddyrE5zM';
+      },
+	      createSkillJob: async (taskId: string, payload: unknown) => {
+	        calls.push({ method: 'skill-job', taskId, payload });
+	        return {
+          jobId: 'job-recording-001',
+          skillCode: 'ext.visit_conversation_understanding',
+          runtimeSkillName: 'visit-conversation-understanding',
+          model: 'deepseek-v4-flash',
+          status: 'queued',
+          finalText: null,
+          events: [],
+          artifacts: [],
+          error: null,
+          createdAt: '2026-05-06T10:00:00.000Z',
+	          updatedAt: '2026-05-06T10:00:00.000Z',
+	        };
+	      },
+	      getSkillJob: async (taskId: string, skillCode: string, jobId: string) => {
+	        calls.push({ method: 'skill-job-get', taskId, payload: { skillCode, jobId } });
+	        return {
+	          jobId,
+	          skillCode,
+	          runtimeSkillName: 'visit-conversation-understanding',
+	          model: 'deepseek-v4-flash',
+	          status: 'succeeded',
+	          finalText: '# 分析完成',
+	          events: [],
+	          artifacts: [],
+	          error: null,
+	          createdAt: '2026-05-06T10:00:00.000Z',
+	          updatedAt: '2026-05-06T10:00:00.000Z',
+	        };
+	      },
+	    },
+	  });
+
+  try {
+    const viewerResponse = await fetch(
+      `${runtime.baseUrl}/api/recording-audio-tasks/recording-task-001/meeting-viewer`,
+      { redirect: 'manual' },
+    );
+    assert.equal(viewerResponse.status, 302);
+    assert.equal(
+      viewerResponse.headers.get('location'),
+      'http://127.0.0.1:3018/meeting-viewer/?task=EV5TddyrE5zM',
+    );
+
+    const skillJobResponse = await fetch(
+      `${runtime.baseUrl}/api/recording-audio-tasks/recording-task-001/skill-jobs`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skillCode: 'ext.visit_conversation_understanding' }),
+      },
+    );
+    assert.equal(skillJobResponse.status, 202);
+    const skillJobPayload = (await skillJobResponse.json()) as { jobId: string; skillCode: string };
+	    assert.equal(skillJobPayload.jobId, 'job-recording-001');
+	    assert.equal(skillJobPayload.skillCode, 'ext.visit_conversation_understanding');
+	    const skillJobGetResponse = await fetch(
+	      `${runtime.baseUrl}/api/recording-audio-tasks/recording-task-001/skill-jobs/ext.visit_conversation_understanding/job-recording-001`,
+	    );
+	    assert.equal(skillJobGetResponse.status, 200);
+	    const skillJobGetPayload = (await skillJobGetResponse.json()) as { jobId: string; status: string };
+	    assert.equal(skillJobGetPayload.jobId, 'job-recording-001');
+	    assert.equal(skillJobGetPayload.status, 'succeeded');
+	    assert.deepEqual(calls, [
+	      { method: 'viewer', taskId: 'recording-task-001' },
+      {
+        method: 'skill-job',
+        taskId: 'recording-task-001',
+	        payload: { skillCode: 'ext.visit_conversation_understanding' },
+	      },
+	      {
+	        method: 'skill-job-get',
+	        taskId: 'recording-task-001',
+	        payload: { skillCode: 'ext.visit_conversation_understanding', jobId: 'job-recording-001' },
+	      },
+	    ]);
   } finally {
     runtime.server.close();
     await once(runtime.server, 'close');

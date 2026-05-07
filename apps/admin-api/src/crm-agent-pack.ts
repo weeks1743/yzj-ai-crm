@@ -68,6 +68,7 @@ import type { ArtifactService } from './artifact-service.js';
 import type { ExternalSkillService } from './external-skill-service.js';
 import type { IntentFrameService } from './intent-frame-service.js';
 import type { OrgEmployeeCandidate, OrgSyncRepository } from './org-sync-repository.js';
+import type { RecordingTaskService } from './recording-task-service.js';
 import type { ShadowMetadataService } from './shadow-metadata-service.js';
 import { AgentToolRegistry } from './tool-registry.js';
 import { getErrorMessage } from './errors.js';
@@ -77,6 +78,7 @@ const COMPANY_RESEARCH_TOOL = 'external.company_research';
 const COMPANY_RESEARCH_RUNTIME_TOOL = 'ext.company_research_pm';
 const COMPANY_RESEARCH_SERVICE_LABEL = '公司研究服务';
 const COMPANY_RESEARCH_MATERIAL_LABEL = '公司研究资料';
+const RECORDING_MATERIAL_TOOL = 'artifact.recording_material.prepare';
 const CONTEXT_SUMMARY_TOOL = 'meta.context_summary';
 const EXTERNAL_INFO_SOURCE_LABEL = '外部信息';
 const INTERNAL_RECORDS_SOURCE_LABEL = '系统内记录';
@@ -89,6 +91,12 @@ const COMPANY_RESEARCH_POLL_INTERVAL_MS = 1000;
 const COMPANY_RESEARCH_MAX_WAIT_MS = 420_000;
 const DUPLICATE_CHECK_MAX_ATTEMPTS = 2;
 const DUPLICATE_CHECK_RETRY_DELAY_MS = 300;
+const RECORDING_FOLLOWUP_REQUIRED_PARAMS = [
+  'linked_customer_form_inst_id',
+  'linked_opportunity_form_inst_id',
+  'followup_method',
+  'owner_open_id',
+] as const;
 const SEARCH_EXTRACTOR_WIDGET_TYPES = new Set([
   'textWidget',
   'textAreaWidget',
@@ -338,6 +346,7 @@ export interface CrmAgentPackOptions {
   orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>;
   externalSkillService: ExternalSkillService;
   artifactService: ArtifactService;
+  recordingTaskService?: Pick<RecordingTaskService, 'archiveTask' | 'getTask'>;
   companyResearchMaxWaitMs?: number;
 }
 
@@ -458,6 +467,7 @@ export function createCrmAgentRuntimeParts(options: CrmAgentPackOptions): {
   }
   registerCompanyResearchTool(registry, options);
   registerArtifactSearchTool(registry, options);
+  registerRecordingMaterialTool(registry);
   registerMetaTools(registry, options);
 
   return {
@@ -659,13 +669,15 @@ function inferExplicitRecordObject(query: string): string | null {
 
 function resolveDataSourceScope(query: string): DataSourceScopeResolution {
   const normalized = query.replace(/\s+/g, '').trim();
-  const hasExternalInfo = /(外部信息|系统外信息|系统外资料|公开资料|公开信息)/.test(normalized);
-  const hasInternalRecords = /(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录)/i.test(normalized);
+  const hasExternalInfo = /(外部信息|系统外信息|系统外资料|公开资料|公开信息|公司研究|录音资料|录音资料包|拜访录音|录音分析|最近拜访|这次拜访|上次拜访|下次拜访|需求待办|问题陈述|价值定位|价值主张|分析结果|客户诉求|价值点|风险|推进阻塞|客户问题|方案|时机)/.test(normalized);
+  const hasInternalRecords = /(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录|客户|商机|机会|跟进记录|拜访记录|回访记录|待办情况|预算|关键人)/i.test(normalized);
 
   if (
     (/(结合|综合|融合|同时看|一起看)/.test(normalized) && hasExternalInfo && hasInternalRecords)
+    || (/(结合|综合|融合|同时看|一起看|基于|整理|判断)/.test(normalized) && hasExternalInfo && hasInternalRecords)
     || /外部信息(?:和|与|及|以及|、)系统(?:内)?记录/.test(normalized)
     || /系统(?:内)?记录(?:和|与|及|以及|、)外部信息/.test(normalized)
+    || (hasExternalInfo && /(判断|简报|推进|阻塞|赢单|开场|下一步|经营|值不值得|为什么)/.test(normalized))
   ) {
     return {
       scope: 'combined',
@@ -700,6 +712,15 @@ function resolveDataSourceScope(query: string): DataSourceScopeResolution {
 function normalizeDataSourceScope(value: unknown): DataSourceScope {
   return value === 'external_info' || value === 'internal_records' || value === 'combined'
     ? value
+    : 'auto';
+}
+
+function inferContextSummaryDataSourceScope(query: string, currentScope: DataSourceScope): DataSourceScope {
+  if (currentScope !== 'auto') {
+    return currentScope;
+  }
+  return /(公司研究|录音|拜访|需求|待办|问题陈述|客户问题|价值|风险|阻塞|简报|赢单|开场|客户诉求)/.test(query)
+    ? 'combined'
     : 'auto';
 }
 
@@ -768,7 +789,7 @@ function isExternalInfoConsumptionQuery(query: string): boolean {
 }
 
 function isInternalRecordsConsumptionQuery(query: string): boolean {
-  return /(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|商机进展|机会进展|商机阶段|联系人|跟进记录|拜访记录|回访记录)/i.test(query);
+  return /(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|商机进展|机会进展|商机阶段|联系人|跟进记录|拜访记录|回访记录|商机|机会|待办情况)/i.test(query);
 }
 
 function isInternalRecordsSummaryQuery(query: string): boolean {
@@ -789,6 +810,11 @@ function isWriteLikeRecordMutationQuery(query: string, actionType: IntentFrame['
   return actionType === 'write'
     || /(?:录入|创建|新增|新建|补录|写入|修改|更新|改成|改为|变更|调整|设置|设为|关联|绑定|选择)/.test(query)
     || (isRecordFieldAssignmentQuery(query) && !isReadQuestion);
+}
+
+function hasExplicitRecordMutationVerb(query: string, actionType: IntentFrame['actionType']): boolean {
+  return actionType === 'write'
+    || /(?:录入|创建|新增|新建|补录|写入|修改|更新|改成|改为|变更|调整|设置|设为|关联|绑定|选择)/.test(query);
 }
 
 function resolveCustomerRecordLookupName(query: string): string {
@@ -903,13 +929,37 @@ function selectTool(
   const scopedQuery = dataSourceScope.normalizedQuery || query;
   const target = input.intentFrame.target;
   const recordOpenAction = readRecordOpenClientAction(input.request.clientAction);
+  const recordPreviewCreateAction = readRecordPreviewCreateClientAction(input.request.clientAction);
+
+  if (recordPreviewCreateAction) {
+    const objectKey = recordPreviewCreateAction.objectKey;
+    const toolCode = `record.${objectKey}.preview_create`;
+    const tool = input.availableTools.find((item) => item.code === toolCode);
+    return wrapSelectedTool({
+      toolCode,
+      reason: recordPreviewCreateAction.source?.kind === 'recording_material'
+        ? '用户从录音资料包卡片发起记录新建，优先选择记录系统预创建工具。'
+        : `用户通过客户端动作发起 ${objectKey} 新建预览，选择记录系统预创建工具。`,
+      input: buildRecordPreviewCreateInputFromClientAction({
+        action: recordPreviewCreateAction,
+        query: scopedQuery,
+        operatorOpenId: input.request.tenantContext?.operatorOpenId,
+        tool,
+        fields: readRecordFields({ shadowMetadataService }, objectKey),
+        contextFrame: input.contextFrame ?? null,
+        resolvedContext: input.resolvedContext ?? null,
+      }),
+      confidence: 0.96,
+    });
+  }
 
   if (hasAudioInput(input.request)) {
     return wrapSelectedTool({
-      toolCode: 'meta.clarify_card',
-      reason: '当前 MVP 不做录音转写，需要用户补充文字纪要。',
+      toolCode: RECORDING_MATERIAL_TOOL,
+      reason: '用户上传或提到录音，选择录音资料包处理入口。',
       input: {
-        missingSlots: ['文字纪要'],
+        attachmentNames: (input.request.attachments ?? []).map((item) => item.name),
+        query,
       },
       confidence: 0.82,
     });
@@ -928,7 +978,46 @@ function selectTool(
   }
 
   const customerLookupName = resolveCustomerRecordLookupName(scopedQuery);
-  if (dataSourceScope.scope === 'auto' && customerLookupName) {
+  if (isComplexContextSummaryQuery(scopedQuery) && !hasExplicitRecordMutationVerb(scopedQuery, input.intentFrame.legacyIntentFrame.actionType)) {
+    const summaryType = inferContextSummaryType(scopedQuery);
+    const summaryDataSourceScope = inferContextSummaryDataSourceScope(scopedQuery, dataSourceScope.scope);
+    return wrapSelectedTool({
+      toolCode: CONTEXT_SUMMARY_TOOL,
+      reason: summaryDataSourceScope === 'combined'
+        ? '用户要求融合外部信息和系统内记录，选择通用上下文摘要工具。'
+        : '用户要求消费系统内记录，选择通用上下文摘要工具。',
+      input: {
+        query: scopedQuery,
+        dataSourceScope: summaryDataSourceScope,
+        summaryType,
+      },
+      confidence: dataSourceScope.explicit ? 0.9 : 0.84,
+    });
+  }
+
+  if (dataSourceScope.scope === 'auto' && customerLookupName && isSimpleCustomerRecordLookupQuery(scopedQuery)) {
+    const objectKey: ShadowObjectKey = 'customer';
+    const toolCode = 'record.customer.search';
+    const tool = input.availableTools.find((item) => item.code === toolCode);
+    return wrapSelectedTool({
+      toolCode,
+      reason: '用户以简称查询客户或客户状态，选择系统内客户记录查询。',
+      input: buildRecordToolInput({
+        query: scopedQuery,
+        objectKey,
+        operation: 'search',
+        operatorOpenId: input.request.tenantContext?.operatorOpenId,
+        targetName: customerLookupName,
+        tool,
+        fields: readRecordFields({ shadowMetadataService }, objectKey),
+        contextFrame: input.contextFrame ?? null,
+        resolvedContext: input.resolvedContext ?? null,
+      }),
+      confidence: 0.8,
+    });
+  }
+
+  if (dataSourceScope.scope === 'auto' && customerLookupName && !isContextSummaryQuery(scopedQuery)) {
     const objectKey: ShadowObjectKey = 'customer';
     const toolCode = 'record.customer.search';
     const tool = input.availableTools.find((item) => item.code === toolCode);
@@ -952,14 +1041,15 @@ function selectTool(
 
   if (shouldRouteToContextSummary(input, dataSourceScope)) {
     const summaryType = inferContextSummaryType(scopedQuery);
+    const summaryDataSourceScope = inferContextSummaryDataSourceScope(scopedQuery, dataSourceScope.scope);
     return wrapSelectedTool({
       toolCode: CONTEXT_SUMMARY_TOOL,
-      reason: dataSourceScope.scope === 'combined'
+      reason: summaryDataSourceScope === 'combined'
         ? '用户要求融合外部信息和系统内记录，选择通用上下文摘要工具。'
         : '用户要求消费系统内记录，选择通用上下文摘要工具。',
       input: {
         query: scopedQuery,
-        dataSourceScope: dataSourceScope.scope,
+        dataSourceScope: summaryDataSourceScope,
         summaryType,
       },
       confidence: dataSourceScope.explicit ? 0.88 : 0.82,
@@ -1205,6 +1295,103 @@ function readRecordOpenClientAction(action: AgentPlannerInput['request']['client
     objectKey: action.objectKey,
     formInstId,
   };
+}
+
+function readRecordPreviewCreateClientAction(action: AgentPlannerInput['request']['clientAction']): {
+  objectKey: ShadowObjectKey;
+  title?: string;
+	  source?: {
+	    kind: 'recording_material';
+	    recordingTaskId?: string;
+	    artifactId?: string;
+	    fileName?: string;
+	    sourceFileMd5?: string;
+	    anchors?: {
+      customer?: string;
+      opportunity?: string;
+      followup?: string;
+    };
+  };
+} | null {
+  if (!action || action.type !== 'record.preview_create') {
+    return null;
+  }
+  if (!CRM_RECORD_OBJECTS.includes(action.objectKey)) {
+    return null;
+  }
+  return {
+    objectKey: action.objectKey,
+    title: action.title,
+    source: action.source?.kind === 'recording_material' ? action.source : undefined,
+  };
+}
+
+function buildRecordPreviewCreateInputFromClientAction(input: {
+  action: NonNullable<ReturnType<typeof readRecordPreviewCreateClientAction>>;
+  query: string;
+  operatorOpenId?: string;
+  tool?: AgentToolDefinition;
+  fields?: ShadowStandardizedField[];
+  contextFrame?: ContextFrame | null;
+  resolvedContext?: AgentPlannerInput['resolvedContext'];
+}): Record<string, unknown> {
+  const baseInput = buildRecordToolInput({
+    query: input.query,
+    objectKey: input.action.objectKey,
+    operation: 'preview_create',
+    operatorOpenId: input.operatorOpenId,
+    targetName: input.action.title,
+    tool: input.tool,
+    fields: input.fields ?? [],
+    contextFrame: input.contextFrame ?? null,
+    resolvedContext: input.resolvedContext ?? null,
+  });
+
+  if (input.action.objectKey !== 'followup' || input.action.source?.kind !== 'recording_material') {
+    return baseInput;
+  }
+
+  const source = input.action.source;
+  const params: Record<string, unknown> = {
+    ...readPlainObject(baseInput.params),
+    followup_record: buildRecordingFollowupRecordTitle(source.fileName),
+  };
+  if (source.anchors?.customer && !hasMeaningfulValue(params.linked_customer_form_inst_id)) {
+    params.linked_customer_form_inst_id = source.anchors.customer;
+  }
+  if (source.anchors?.opportunity && !hasMeaningfulValue(params.linked_opportunity_form_inst_id)) {
+    params.linked_opportunity_form_inst_id = source.anchors.opportunity;
+  }
+
+  return {
+    ...baseInput,
+    params,
+    agentControl: {
+      ...readPlainObject(baseInput.agentControl),
+      subjectName: String(params.followup_record),
+	      source: {
+	        kind: 'recording_material',
+	        recordingTaskId: source.recordingTaskId,
+	        artifactId: source.artifactId,
+	        fileName: source.fileName,
+	        sourceFileMd5: source.sourceFileMd5,
+	        anchors: source.anchors,
+	      },
+    },
+  };
+}
+
+function buildRecordingFollowupRecordTitle(fileName?: string): string {
+  const normalizedFileName = fileName?.trim();
+  return normalizedFileName
+    ? `基于录音资料包「${normalizedFileName}」新增拜访记录`
+    : '基于录音资料包新增拜访记录';
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function injectOperatorOpenId(selectedTool: AgentToolSelection, operatorOpenId?: string): AgentToolSelection {
@@ -2353,7 +2540,11 @@ function normalizeRecordSubjectNameCandidate(input: {
   subjectNameParam: string;
 }): string {
   const trimmed = trimValueBeforeKnownLabels(input.value, input.capability, input.subjectNameParam);
-  const cleaned = cleanupCompanyName(trimmed);
+  const labels = getRecordObjectLabelPattern(input.objectKey);
+  const commandStripped = isBareRecordWriteCommand(trimmed, labels)
+    ? ''
+    : stripRecordWriteCommandPrefix(trimmed, labels) || trimmed;
+  const cleaned = cleanupCompanyName(commandStripped);
   return isMeaningfulRecordNameCandidate(cleaned, input.objectKey) ? cleaned : '';
 }
 
@@ -2784,10 +2975,30 @@ function extractRecordName(query: string, objectKey: string): string {
       : objectKey === 'followup'
         ? '跟进记录|拜访记录'
         : '客户|公司';
+  if (isBareRecordWriteCommand(withoutSlash, labels)) {
+    return '';
+  }
+  const commandStripped = stripRecordWriteCommandPrefix(withoutSlash, labels);
+  if (commandStripped && commandStripped !== withoutSlash) {
+    const candidate = cleanupCompanyName(commandStripped);
+    return isMeaningfulRecordNameCandidate(candidate, objectKey) ? candidate : '';
+  }
   const pattern = new RegExp(`(?:录入|创建|新增|新建|补录|查询|查一下|找一下|搜索)?(?:一个|这?个)?(?:${labels})?[，,：:\\s]*([^，。！？\\n]+)`);
   const matched = withoutSlash.match(pattern)?.[1] ?? '';
   const candidate = cleanupCompanyName(matched) || cleanupCompanyName(withoutSlash);
   return isMeaningfulRecordNameCandidate(candidate, objectKey) ? candidate : '';
+}
+
+function isBareRecordWriteCommand(query: string, labels: string): boolean {
+  const operation = '录入|创建|新增|新建|补录|写入|添加|建立';
+  return new RegExp(`^(?:帮我|请|麻烦)?\\s*(?:${operation})\\s*(?:一个|一条|一位|一名|这?个)?\\s*(?:${labels})\\s*$`).test(query);
+}
+
+function stripRecordWriteCommandPrefix(query: string, labels: string): string {
+  const operation = '录入|创建|新增|新建|补录|写入|添加|建立';
+  return query
+    .replace(new RegExp(`^(?:帮我|请|麻烦)?\\s*(?:${operation})\\s*(?:一个|一条|一位|一名|这?个)?\\s*(?:${labels})\\s*[，,：:\\s]*`), '')
+    .trim();
 }
 
 function extractFormInstId(query: string): string | undefined {
@@ -2835,8 +3046,11 @@ function isLikelyEntityAnchorName(value: string): boolean {
 }
 
 function hasAudioInput(request: AgentToolExecuteInput['request']): boolean {
-  return request.query.includes('录音')
-    || (request.attachments ?? []).some((item) => item.type.includes('audio') || item.name.match(/\.(mp3|m4a|wav)$/i));
+  if ((request.attachments ?? []).some((item) => item.type.includes('audio') || item.name.match(/\.(mp3|m4a|wav)$/i))) {
+    return true;
+  }
+  const normalized = request.query.replace(/\s+/g, '').trim();
+  return /(?:上传|处理|解析|转写|导入|整理).{0,8}(?:录音|音频)|(?:录音|音频)(?:文件)?(?:上传|处理|解析|转写|导入)|这段(?:拜访)?录音/.test(normalized);
 }
 
 function buildToolTaskPlan(intentFrame: IntentFrame, selectedTool: AgentToolSelection | null): TaskPlan {
@@ -2851,6 +3065,21 @@ function buildToolTaskPlan(intentFrame: IntentFrame, selectedTool: AgentToolSele
         step('clarify', '请用户补充目标对象或任务类型', 'meta', ['meta.clarify_card'], 'pending'),
       ],
       evidenceRequired: false,
+    };
+  }
+
+  if (selectedTool.toolCode === RECORDING_MATERIAL_TOOL) {
+    return {
+      planId,
+      kind: 'recording_material',
+      title: '录音资料包处理计划',
+      status: 'running',
+      steps: [
+        step('create-recording-task', '创建录音处理任务', 'query', [selectedTool.toolCode], 'pending'),
+        step('materialize-recording', '生成可消费录音资料包', 'query', [selectedTool.toolCode], 'pending'),
+        step('continue-actions', '等待用户选择继续使用动作', 'meta', ['meta.candidate_selection'], 'pending'),
+      ],
+      evidenceRequired: true,
     };
   }
 
@@ -4144,6 +4373,18 @@ interface RecordAgentControl {
     answerParamKey?: string;
     choices?: Record<string, unknown>;
   };
+  source?: {
+    kind?: string;
+    recordingTaskId?: string;
+    artifactId?: string;
+    fileName?: string;
+    sourceFileMd5?: string;
+    anchors?: {
+      customer?: string;
+      opportunity?: string;
+      followup?: string;
+    };
+  };
 }
 
 function readRecordAgentControl(input: Record<string, unknown>): RecordAgentControl {
@@ -4154,6 +4395,49 @@ function readRecordAgentControl(input: Record<string, unknown>): RecordAgentCont
 function stripRecordAgentControl(input: Record<string, unknown>): Record<string, unknown> {
   const { agentControl: _agentControl, ...rest } = input;
   return rest;
+}
+
+function hasRecordAgentControlPayload(control: RecordAgentControl): boolean {
+  return Boolean(
+    control.duplicateCheck
+    || control.searchExtraction
+    || control.subjectName
+    || control.choiceRouting
+    || control.targetSanitization
+    || control.source,
+  );
+}
+
+function attachRecordAgentControl(
+  input: Record<string, unknown>,
+  control: RecordAgentControl,
+): Record<string, unknown> {
+  if (!hasRecordAgentControlPayload(control)) {
+    return input;
+  }
+  const existingAgentControl = readRecordAgentControl(input);
+  return {
+    ...input,
+    agentControl: {
+      ...existingAgentControl,
+      ...control,
+    },
+  };
+}
+
+function buildConfirmationRequestInput(
+  requestInput: ShadowPreviewUpsertInput,
+  agentControl: RecordAgentControl,
+): Record<string, unknown> {
+  if (!agentControl.source) {
+    return requestInput as unknown as Record<string, unknown>;
+  }
+  return {
+    ...(requestInput as unknown as Record<string, unknown>),
+    agentControl: {
+      source: agentControl.source,
+    },
+  };
 }
 
 function readSearchExtractionIssue(control: RecordAgentControl): {
@@ -4966,6 +5250,46 @@ function buildRecordPreviewView(input: {
     ],
     recommendedRows: buildRecommendedRows(input),
   };
+}
+
+function withRecordingFollowupRequiredRows(input: {
+  userPreview: RecordWritePreviewView;
+  requestInput: ShadowPreviewUpsertInput;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  shadowMetadataService: ShadowMetadataService;
+}): RecordWritePreviewView {
+  const params = readRequestParams(input.requestInput);
+  const existing = new Set((input.userPreview.missingRequiredRows ?? []).map((row) => row.paramKey).filter(Boolean));
+  const extraRows = RECORDING_FOLLOWUP_REQUIRED_PARAMS
+    .filter((paramKey) => !hasMeaningfulValue(params[paramKey]) && !existing.has(paramKey))
+    .map((paramKey) => ({
+      label: getFieldLabel(input.capability, paramKey),
+      paramKey,
+      reason: '录音来源拜访记录正式归档前必须补齐该业务锚点',
+      source: 'system' as const,
+      options: buildFieldOptionHints(paramKey, input.fields),
+      lookup: buildFieldQuestionLookup({
+        paramKey,
+        fields: input.fields,
+        shadowMetadataService: input.shadowMetadataService,
+      }),
+    }));
+  if (!extraRows.length) {
+    return input.userPreview;
+  }
+  return {
+    ...input.userPreview,
+    missingRequiredRows: [
+      ...(input.userPreview.missingRequiredRows ?? []),
+      ...extraRows,
+    ],
+    recommendedRows: (input.userPreview.recommendedRows ?? []).filter((row) => !extraRows.some((extra) => extra.paramKey === row.paramKey)),
+  };
+}
+
+function hasMissingRequiredRows(userPreview: RecordWritePreviewView): boolean {
+  return Boolean(userPreview.missingRequiredRows?.length || userPreview.blockedRows?.length);
 }
 
 function buildMetaQuestionCard(input: {
@@ -5791,6 +6115,18 @@ async function executeRecordPreviewTool(
     mode,
     operatorOpenId: context.operatorOpenId ?? undefined,
   } as ShadowPreviewUpsertInput;
+  const archivedRecordingFollowupResult = await buildArchivedRecordingFollowupResult({
+    options,
+    objectKey,
+    mode,
+    toolCode: input.selectedTool.toolCode,
+    source: agentControl.source,
+    context,
+    requestInput: initialRequestInput,
+  });
+  if (archivedRecordingFollowupResult) {
+    return archivedRecordingFollowupResult;
+  }
   if (mode === 'update' && !readRecordFormInstId(initialRequestInput)) {
     const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(initialRequestInput));
     finishToolCall(toolCall, 'skipped', '缺少可更新的记录上下文，等待用户选择记录');
@@ -5838,12 +6174,7 @@ async function executeRecordPreviewTool(
     return buildReferenceResolutionWaitingResult({
       runId: context.runId,
       toolCode: input.selectedTool.toolCode,
-      partialInput: {
-        ...(initialRequestInput as unknown as Record<string, unknown>),
-        ...(agentControl.duplicateCheck || agentControl.searchExtraction || agentControl.subjectName
-          ? { agentControl }
-          : {}),
-      },
+      partialInput: attachRecordAgentControl(initialRequestInput as unknown as Record<string, unknown>, agentControl),
       toolCall,
       issues: [missingReferenceIntent],
       context,
@@ -5862,12 +6193,7 @@ async function executeRecordPreviewTool(
     return buildPersonResolutionWaitingResult({
       runId: context.runId,
       toolCode: input.selectedTool.toolCode,
-      partialInput: {
-        ...(initialRequestInput as unknown as Record<string, unknown>),
-        ...(agentControl.duplicateCheck || agentControl.searchExtraction || agentControl.subjectName
-          ? { agentControl }
-          : {}),
-      },
+      partialInput: attachRecordAgentControl(initialRequestInput as unknown as Record<string, unknown>, agentControl),
       toolCall,
       issues: personResolution.issues,
       context,
@@ -5885,12 +6211,7 @@ async function executeRecordPreviewTool(
     return buildReferenceResolutionWaitingResult({
       runId: context.runId,
       toolCode: input.selectedTool.toolCode,
-      partialInput: {
-        ...(personResolution.requestInput as unknown as Record<string, unknown>),
-        ...(agentControl.duplicateCheck || agentControl.searchExtraction || agentControl.subjectName
-          ? { agentControl }
-          : {}),
-      },
+      partialInput: attachRecordAgentControl(personResolution.requestInput as unknown as Record<string, unknown>, agentControl),
       toolCall,
       issues: referenceResolution.issues,
       context,
@@ -5905,9 +6226,10 @@ async function executeRecordPreviewTool(
     mode,
     context,
     agentControl,
-    partialInput: requestInput as unknown as Record<string, unknown>,
+    partialInput: attachRecordAgentControl(requestInput as unknown as Record<string, unknown>, agentControl),
   });
-  const effectiveSelectedInput = guardToolCalls.partialInput ?? (requestInput as unknown as Record<string, unknown>);
+  const effectiveSelectedInput = guardToolCalls.partialInput
+    ?? attachRecordAgentControl(requestInput as unknown as Record<string, unknown>, agentControl);
   if (guardToolCalls.result) {
     finishToolCall(toolCall, 'skipped', '写入预览前发现候选记录、缺少运行输入或查重不可用');
     return {
@@ -5918,7 +6240,7 @@ async function executeRecordPreviewTool(
 
   const preview = await options.shadowMetadataService.previewUpsert(objectKey, requestInput);
   const toolCalls = [...guardToolCalls.toolCalls, toolCall];
-  const userPreview = buildRecordPreviewView({
+  const baseUserPreview = buildRecordPreviewView({
     objectKey,
     mode,
     requestInput,
@@ -5927,6 +6249,15 @@ async function executeRecordPreviewTool(
     fields,
     shadowMetadataService: options.shadowMetadataService,
   });
+  const userPreview = objectKey === 'followup' && mode === 'create' && agentControl.source?.kind === 'recording_material'
+    ? withRecordingFollowupRequiredRows({
+        userPreview: baseUserPreview,
+        requestInput,
+        capability,
+        fields,
+        shadowMetadataService: options.shadowMetadataService,
+      })
+    : baseUserPreview;
   if (!preview.readyToSend) {
     finishToolCall(toolCall, 'skipped', '写入预览参数不完整');
     return {
@@ -5975,18 +6306,52 @@ async function executeRecordPreviewTool(
     return guardResult;
   }
 
-  const confirmation: ConfirmationRequest = {
-    confirmationId: randomUUID(),
-    runId: context.runId,
-    toolCode: input.selectedTool.toolCode,
+  if (hasMissingRequiredRows(userPreview)) {
+    finishToolCall(toolCall, 'skipped', '录音来源拜访记录仍缺少正式归档必填字段');
+    return {
+      status: 'waiting_input',
+      currentStepKey: 'execute-tool',
+      content: buildPreviewWaitingInputContent({
+        toolCode: input.selectedTool.toolCode,
+        userPreview,
+        preview,
+      }),
+      headline: '录音拜访记录还需要补齐信息',
+      references: ['meta.clarify_card', input.selectedTool.toolCode],
+      toolCalls,
+      pendingInteraction: buildPendingInteraction({
+        runId: context.runId,
+        kind: 'input_required',
+        toolCode: input.selectedTool.toolCode,
+        title: '录音拜访记录还需要补齐信息',
+        summary: '录音资料正式归档前必须补齐客户、商机、跟进方式和跟进负责人。',
+        partialInput: effectiveSelectedInput,
+        userPreview,
+        context,
+      }),
+      policyDecisions: [
+        createPolicyDecision({
+          policyCode: 'recording.followup_required_anchors',
+          action: 'clarify',
+          toolCode: input.selectedTool.toolCode,
+          reason: '录音来源拜访记录正式写入前必须补齐客户、商机、跟进方式和跟进负责人。',
+        }),
+      ],
+    };
+  }
+
+	  const confirmation: ConfirmationRequest = {
+	    confirmationId: randomUUID(),
+	    runId: context.runId,
+	    toolCode: input.selectedTool.toolCode,
     title: `${objectKey} ${mode} 写回确认`,
     summary: `确认后将通过轻云记录系统执行 ${objectKey} ${mode} 写回。`,
-    preview,
-    userPreview,
-    debugPayload: preview,
-    requestInput: requestInput as unknown as Record<string, unknown>,
-    status: 'pending',
-    createdAt: new Date().toISOString(),
+	    preview,
+	    userPreview,
+	    debugPayload: preview,
+	    requestInput: buildConfirmationRequestInput(requestInput, agentControl),
+	    status: 'pending',
+	    createdAt: new Date().toISOString(),
     decidedAt: null,
   };
   await options.repository.saveConfirmation(confirmation);
@@ -6055,8 +6420,9 @@ async function executeRecordCommitTool(
     };
   }
 
-  const requestInput = pending.requestInput as unknown as ShadowPreviewUpsertInput;
-  const result = await options.shadowMetadataService.executeUpsert(objectKey, requestInput);
+	  const pendingRequestInput = pending.requestInput as unknown as ShadowPreviewUpsertInput;
+	  const requestInput = stripRecordAgentControl(pendingRequestInput as unknown as Record<string, unknown>) as unknown as ShadowPreviewUpsertInput;
+	  const result = await options.shadowMetadataService.executeUpsert(objectKey, requestInput);
   const commitPreview: ShadowPreviewResponse = {
     objectKey,
     operation: 'upsert',
@@ -6082,9 +6448,17 @@ async function executeRecordCommitTool(
     runId: context.runId,
     confirmationId,
     status: 'approved',
-  }) ?? pending;
-  finishToolCall(toolCall, 'succeeded', `formInstIds=${result.formInstIds.join(',')}`);
-  const recommendedRows = userPreview.recommendedRows ?? [];
+	  }) ?? pending;
+	  finishToolCall(toolCall, 'succeeded', `formInstIds=${result.formInstIds.join(',')}`);
+	  const archiveResult = await archiveRecordingMaterialAfterFollowupCommit({
+	    options,
+	    objectKey,
+	    mode,
+	    context,
+	    requestInput: pendingRequestInput,
+	    followupId: result.formInstIds[0],
+	  });
+	  const recommendedRows = userPreview.recommendedRows ?? [];
   const committedContextFrame = buildCommittedRecordContextFrame({
     objectKey,
     mode,
@@ -6114,18 +6488,182 @@ async function executeRecordCommitTool(
             `- ${recommendedRows.map((row) => row.label).join('、')}`,
             `- 可以继续说：补充这条记录的${recommendedRows.slice(0, 3).map((row) => row.label).join('、')}。`,
           ]
-        : []),
-    ].join('\n'),
+	        : []),
+	      ...(archiveResult.contentLines.length ? ['', ...archiveResult.contentLines] : []),
+	    ].join('\n'),
     headline: `${objectKey} ${mode} 写回完成`,
     references: [input.selectedTool.toolCode, 'meta.confirm_writeback'],
-    toolCalls: [toolCall],
+	    toolCalls: [toolCall, ...archiveResult.toolCalls],
     contextFrame: committedContextFrame,
     pendingConfirmation: {
       ...approved,
       userPreview,
       debugPayload: result,
     },
+	  };
+	}
+
+async function archiveRecordingMaterialAfterFollowupCommit(input: {
+  options: CrmAgentPackOptions;
+  objectKey: ShadowObjectKey;
+  mode: 'create' | 'update';
+  context: AgentToolExecuteContext;
+  requestInput: ShadowPreviewUpsertInput;
+  followupId?: string;
+}): Promise<{
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+  contentLines: string[];
+}> {
+  const source = readRecordingMaterialSource(input.requestInput);
+  if (
+    input.objectKey !== 'followup'
+    || input.mode !== 'create'
+    || !source?.recordingTaskId
+    || !input.followupId
+  ) {
+    return { toolCalls: [], contentLines: [] };
+  }
+
+  const params = readRequestParams(input.requestInput);
+  const customerId = readArchiveParam(params.linked_customer_form_inst_id)
+    || source.anchors?.customer
+    || '';
+  const opportunityId = readArchiveParam(params.linked_opportunity_form_inst_id)
+    || source.anchors?.opportunity
+    || '';
+  const call = createToolCall(
+    input.context.runId,
+    'artifact.recording_material.archive',
+    JSON.stringify({
+      recordingTaskId: source.recordingTaskId,
+      customerId,
+      opportunityId,
+      followupId: input.followupId,
+      sourceFileMd5: source.sourceFileMd5,
+    }),
+  );
+
+  if (!input.options.recordingTaskService) {
+    finishToolCall(call, 'skipped', '录音资料归档服务未启用');
+    return {
+      toolCalls: [call],
+      contentLines: ['## 录音资料归档', '- 拜访记录已写入，但当前运行环境未启用录音资料归档服务。'],
+    };
+  }
+
+  if (!customerId || !opportunityId) {
+    finishToolCall(call, 'skipped', '缺少客户或商机锚点，不能归档录音资料');
+    return {
+      toolCalls: [call],
+      contentLines: ['## 录音资料归档', '- 拜访记录已写入，但录音资料缺少客户或商机锚点，暂未进入跨会话资料库。'],
+    };
+  }
+
+  try {
+    const archived = await input.options.recordingTaskService.archiveTask({
+      taskId: source.recordingTaskId,
+      customerId,
+      opportunityId,
+      followupId: input.followupId,
+      createdBy: input.context.operatorOpenId ?? 'assistant-web',
+    });
+    finishToolCall(call, 'succeeded', `artifact=${archived.material?.artifactId ?? '-'}, followup=${input.followupId}`);
+    return {
+      toolCalls: [call],
+      contentLines: [
+        '## 录音资料归档',
+        `- 已将录音资料包归档到本次拜访记录：${archived.file.fileName}`,
+      ],
+    };
+  } catch (error) {
+    finishToolCall(call, 'failed', '录音资料归档失败', error);
+    return {
+      toolCalls: [call],
+      contentLines: [
+        '## 录音资料归档',
+        `- 拜访记录已写入，但录音资料归档失败：${getErrorMessage(error)}`,
+      ],
+    };
+  }
+}
+
+function readRecordingMaterialSource(requestInput: ShadowPreviewUpsertInput): RecordAgentControl['source'] | null {
+  const source = readRecordAgentControl(requestInput as unknown as Record<string, unknown>).source;
+  return source?.kind === 'recording_material' ? source : null;
+}
+
+async function buildArchivedRecordingFollowupResult(input: {
+  options: CrmAgentPackOptions;
+  objectKey: ShadowObjectKey;
+  mode: 'create' | 'update';
+  toolCode: string;
+  source?: RecordAgentControl['source'];
+  context: AgentToolExecuteContext;
+  requestInput: ShadowPreviewUpsertInput;
+}): Promise<AgentToolExecutionResult | null> {
+  if (
+    input.objectKey !== 'followup'
+    || input.mode !== 'create'
+    || input.source?.kind !== 'recording_material'
+    || !input.source.recordingTaskId
+    || !input.options.recordingTaskService?.getTask
+  ) {
+    return null;
+  }
+  let task: Awaited<ReturnType<RecordingTaskService['getTask']>>;
+  try {
+    task = await input.options.recordingTaskService.getTask(input.source.recordingTaskId);
+  } catch {
+    return null;
+  }
+  if (task.archive?.status !== 'archived' || !task.archive.followupId) {
+    return null;
+  }
+  const call = createToolCall(input.context.runId, input.toolCode, JSON.stringify(input.requestInput));
+  finishToolCall(call, 'skipped', `recordingTask already archived followup=${task.archive.followupId}`);
+  return {
+    status: 'completed',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 已存在拜访记录',
+      `- 录音文件：${task.file.fileName}`,
+      `- 拜访记录：${task.archive.followupId}`,
+      '- 该录音资料包已经正式归档，不会重复创建新的拜访记录。',
+    ].join('\n'),
+    headline: '已存在拜访记录',
+    references: [input.toolCode, 'artifact.recording_material.archive'],
+    toolCalls: [call],
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'recording.followup_create_idempotent',
+        action: 'block',
+        toolCode: input.toolCode,
+        reason: '同一录音任务已归档到正式拜访记录，阻止重复发起录音来源 followup 新建。',
+      }),
+    ],
   };
+}
+
+function readArchiveParam(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (typeof value === 'number') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(readArchiveParam).find(Boolean) ?? '';
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const key of ['formInstId', 'form_inst_id', 'id', 'value', 'key', 'name', 'title']) {
+      const candidate = readArchiveParam(record[key]);
+      if (candidate) {
+        return candidate;
+      }
+    }
+  }
+  return '';
 }
 
 function buildCommittedRecordContextFrame(input: {
@@ -6386,8 +6924,8 @@ function registerArtifactSearchTool(registry: AgentToolRegistry, options: CrmAge
     code: 'artifact.search',
     type: 'artifact',
     provider: 'ai-crm-native-data',
-    description: '检索已有外部信息资料并返回可引用资料卡',
-    whenToUse: '用户追问已有外部信息、资产或上下文证据时使用。当前外部信息来源包括公司研究资料。',
+	    description: '检索已有正式资料资产并返回可引用资料卡',
+	    whenToUse: '用户追问已有外部信息、资料资产或上下文证据时使用。当前来源包括公司研究、已归档录音资料包和已归档分析结果。',
     inputSchema: { type: 'object', properties: { query: { type: 'string' }, anchorName: { type: 'string' }, dataSourceScope: { type: 'string' } } },
     outputSchema: { type: 'object' },
     riskLevel: 'low',
@@ -6418,6 +6956,7 @@ function registerArtifactSearchTool(registry: AgentToolRegistry, options: CrmAge
       const evidence: AgentEvidenceCard[] = search.evidence.map((item) => ({
         artifactId: item.artifactId,
         versionId: item.versionId,
+        kind: item.kind,
         title: item.title,
         version: item.version,
         sourceToolCode: item.sourceToolCode,
@@ -6439,6 +6978,52 @@ function registerArtifactSearchTool(registry: AgentToolRegistry, options: CrmAge
         references: [EXTERNAL_INFO_SOURCE_LABEL, ...evidence.map((item) => item.title)],
         evidence,
         qdrantFilter: search.qdrantFilter,
+        toolCalls: [call],
+      };
+    },
+  });
+}
+
+function registerRecordingMaterialTool(registry: AgentToolRegistry): void {
+  registry.register({
+    code: RECORDING_MATERIAL_TOOL,
+    type: 'artifact',
+    provider: 'ai-crm-native-data',
+    description: '创建录音处理任务并生成可被对话和外部技能消费的录音资料包',
+    whenToUse: '用户上传录音、提到录音整理、或希望基于拜访录音继续拆需求待办时使用。',
+    inputSchema: { type: 'object', properties: { attachmentNames: { type: 'array' }, query: { type: 'string' } } },
+    outputSchema: { type: 'object' },
+    riskLevel: 'low',
+    confirmationPolicy: 'read_only',
+    displayCardType: 'recording-material-task',
+    owner: 'Agent 平台组',
+    enabled: true,
+    semanticProfile: {
+      subjectTypes: ['artifact'],
+      intentCodes: ['recording_material_prepare'],
+      conflictGroups: [],
+      priority: 74,
+      risk: 'low_cost',
+      aliases: ['录音资料', '录音资料包', '拜访录音'],
+    },
+    execute: async (input, context) => {
+      const attachmentNames = (input.request.attachments ?? []).map((item) => item.name).filter(Boolean);
+      const call = createToolCall(context.runId, RECORDING_MATERIAL_TOOL, JSON.stringify(input.selectedTool.input));
+      finishToolCall(call, 'succeeded', '录音资料包处理入口已准备，具体上传和轮询由录音处理服务完成');
+      return {
+        status: 'completed',
+        currentStepKey: 'continue-actions',
+        content: [
+          '## 录音处理已接入',
+          attachmentNames.length ? `- 录音文件：${attachmentNames.join('、')}` : '- 录音文件：请在输入框上传音频。',
+          '- 当前会先生成录音资料包，不展示逐字转写。',
+          '- 未关联客户/商机时可以先处理，生成正式跟进记录前必须补齐关联并确认。',
+          '',
+          '完成后可以点击录音卡片打开录音查看页，或继续调用：拜访会话理解、客户需求工作待办分析、问题陈述、客户价值定位、新增拜访记录。',
+        ].join('\n'),
+        headline: '录音资料包处理入口已准备',
+        references: ['录音处理服务', '录音资料包'],
+        attachments: [],
         toolCalls: [call],
       };
     },
@@ -6487,11 +7072,27 @@ function registerMetaTools(registry: AgentToolRegistry, options: CrmAgentPackOpt
 }
 
 function isContextSummaryQuery(query: string): boolean {
-  return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下|拜访前摘要|商机进展|机会进展|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统)/.test(query);
+  return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下|拜访前摘要|商机进展|机会进展|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统|值不值得|重点推进|赢单概率|下次拜访|怎么开场|价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|需求|问题陈述|价值主张)/.test(query);
+}
+
+function isComplexContextSummaryQuery(query: string): boolean {
+  return /(结合|综合|融合|同时看|一起看|值不值得|重点推进|赢单概率|下次拜访|怎么开场|问哪些问题|推什么价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|问题陈述|价值主张|价值定位|行动建议|主要提了什么需求|需求.*待办)/.test(query);
+}
+
+function isSimpleCustomerRecordLookupQuery(query: string): boolean {
+  const normalized = stripDataSourceScopePhrases(query).trim();
+  if (isComplexContextSummaryQuery(normalized)) {
+    return false;
+  }
+  if (/(公司研究|录音资料|录音资料包|拜访录音|录音分析|最近拜访|这次拜访|上次拜访|需求待办|问题陈述|价值定位|价值主张|分析结果)/.test(normalized)) {
+    return false;
+  }
+  return isDirectRecordLookupQuery(normalized)
+    || /(?:客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|客户资料|客户信息|客户详情)\s*[？?。！!]*$/.test(normalized);
 }
 
 function inferContextSummaryType(query: string): 'journey' | 'next_step' {
-  return /(下一步|怎么推进|推进建议)/.test(query) ? 'next_step' : 'journey';
+  return /(下一步|怎么推进|推进建议|下次拜访|怎么开场|问哪些问题|推什么价值点)/.test(query) ? 'next_step' : 'journey';
 }
 
 function hasContextSummarySubject(input: AgentPlannerInput): boolean {
@@ -6565,15 +7166,16 @@ async function executeContextSummaryTool(
     toolCalls,
   });
 
-  const externalInfo = dataSourceScope === 'combined'
-    ? await loadExternalInfoEvidenceForSummary({
-        options,
-        context,
-        query,
-        anchorName: resolvedSubject.name,
-        rootSubject,
-        toolCalls,
-      })
+	  const externalInfo = dataSourceScope === 'combined'
+	    ? await loadExternalInfoEvidenceForSummary({
+	        options,
+	        context,
+	        query,
+	        anchorName: resolvedSubject.name,
+	        resolvedSubject,
+	        rootSubject,
+	        toolCalls,
+	      })
     : null;
 
   finishToolCall(
@@ -6724,32 +7326,47 @@ async function loadExternalInfoEvidenceForSummary(input: {
   context: AgentToolExecuteContext;
   query: string;
   anchorName: string;
+  resolvedSubject?: { id: string; name: string };
   rootSubject: ContextFrame['subject'] | null;
   toolCalls: AgentToolExecutionResult['toolCalls'];
 }): Promise<{ anchorName: string; evidence: AgentEvidenceCard[] }> {
   const anchorName = input.anchorName || input.rootSubject?.name || extractExternalInfoSubjectName(input.query);
-  const call = createToolCall(input.context.runId, 'artifact.search', input.query);
-  const search = await input.options.artifactService.search({
-    eid: input.context.eid,
-    appId: input.context.appId,
-    query: input.query,
-    anchors: anchorName ? [buildCompanyAnchor(anchorName)] : undefined,
-    limit: 5,
-  });
-  finishToolCall(call, 'succeeded', `找到 ${search.evidence.length} 条外部信息`);
-  input.toolCalls.push(call);
+  const anchors = [
+    ...(anchorName ? [buildCompanyAnchor(anchorName)] : []),
+    ...(input.resolvedSubject?.id
+      ? [{ type: 'customer' as const, id: input.resolvedSubject.id, name: input.resolvedSubject.name, role: 'primary' as const }]
+      : []),
+  ];
+  const searches = await Promise.all((['company_research', 'recording_material', 'analysis_material'] as const).map(async (kind) => {
+    const call = createToolCall(input.context.runId, 'artifact.search', `${kind}:${input.query}`);
+    const search = await input.options.artifactService.search({
+      eid: input.context.eid,
+      appId: input.context.appId,
+      query: input.query,
+      kinds: [kind],
+      anchors: anchors.length ? anchors : undefined,
+      limit: 5,
+    });
+    finishToolCall(call, 'succeeded', `${artifactKindBusinessLabel(kind)} 找到 ${search.evidence.length} 条`);
+    input.toolCalls.push(call);
+    return search;
+  }));
+  const evidenceRefs = searches.flatMap((search) => (
+    search.evidence.map((item) => ({ item, vectorStatus: search.vectorStatus }))
+  ));
   return {
     anchorName,
-    evidence: search.evidence.map((item) => ({
+    evidence: evidenceRefs.map(({ item, vectorStatus }) => ({
       artifactId: item.artifactId,
       versionId: item.versionId,
+      kind: item.kind,
       title: item.title,
       version: item.version,
       sourceToolCode: item.sourceToolCode,
       anchorLabel: item.anchorIds[0] ?? anchorName ?? EXTERNAL_INFO_SOURCE_LABEL,
       snippet: item.snippet,
       score: item.score,
-      vectorStatus: search.vectorStatus,
+      vectorStatus,
     })),
   };
 }
@@ -6820,13 +7437,41 @@ function buildExternalInfoContent(input: {
   const heading = '#'.repeat(input.headingLevel);
   const targetLabel = input.anchorName || '当前会话对象';
   const snippets = input.evidence.slice(0, 2).map((item) => `- ${item.snippet}`);
+  const sources = summarizeEvidenceBusinessSources(input.evidence);
   return [
     `${heading} ${EXTERNAL_INFO_SOURCE_LABEL}`,
     `- 对象：**${targetLabel}**`,
     `- 可引用资料：${input.evidence.length} 条`,
+    ...sources.map((item) => `- ${item}`),
     '',
     ...snippets,
   ].join('\n');
+}
+
+function summarizeEvidenceBusinessSources(evidence: AgentEvidenceCard[]): string[] {
+  const grouped = new Map<string, Set<string>>();
+  for (const item of evidence) {
+    const label = artifactKindBusinessLabel(item.kind);
+    const titles = grouped.get(label) ?? new Set<string>();
+    titles.add(item.title);
+    grouped.set(label, titles);
+  }
+  return Array.from(grouped.entries()).map(([label, titles]) => (
+    `${label}：${Array.from(titles).slice(0, 3).join('、')}`
+  ));
+}
+
+function artifactKindBusinessLabel(kind: AgentEvidenceCard['kind']): string {
+  if (kind === 'company_research') {
+    return '公司研究';
+  }
+  if (kind === 'recording_material') {
+    return '拜访录音';
+  }
+  if (kind === 'analysis_material') {
+    return '分析结果';
+  }
+  return EXTERNAL_INFO_SOURCE_LABEL;
 }
 
 function buildCombinedDataSourceContent(input: {

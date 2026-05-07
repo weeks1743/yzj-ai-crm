@@ -1,4 +1,5 @@
 import type {
+  AnalysisMaterialArtifactRequest,
   AppConfig,
   ArtifactCreateResponse,
   ArtifactDetailResponse,
@@ -7,6 +8,7 @@ import type {
   ArtifactSearchResponse,
   ArtifactVersionSummary,
   CompanyResearchArtifactRequest,
+  RecordingMaterialArtifactRequest,
 } from './contracts.js';
 import { chunkMarkdown } from './artifact-chunker.js';
 import type { DashScopeEmbeddingService } from './dashscope-embedding-service.js';
@@ -29,6 +31,26 @@ export class ArtifactService {
   ): Promise<ArtifactCreateResponse> {
     const normalized = this.normalizeCreateInput(input);
     const saved = await this.options.repository.saveCompanyResearchArtifact(normalized);
+    const artifact = await this.vectorizeSavedArtifact(saved);
+
+    return { artifact };
+  }
+
+  async createRecordingMaterialArtifact(
+    input: RecordingMaterialArtifactRequest,
+  ): Promise<ArtifactCreateResponse> {
+    const normalized = this.normalizeRecordingMaterialInput(input);
+    const saved = await this.options.repository.saveRecordingMaterialArtifact(normalized);
+    const artifact = await this.vectorizeSavedArtifact(saved);
+
+    return { artifact };
+  }
+
+  async createAnalysisMaterialArtifact(
+    input: AnalysisMaterialArtifactRequest,
+  ): Promise<ArtifactCreateResponse> {
+    const normalized = this.normalizeAnalysisMaterialInput(input);
+    const saved = await this.options.repository.saveAnalysisMaterialArtifact(normalized);
     const artifact = await this.vectorizeSavedArtifact(saved);
 
     return { artifact };
@@ -129,6 +151,7 @@ export class ArtifactService {
       eid: input.eid,
       appId: input.appId,
       terms,
+      kinds: input.kinds,
       limit: input.limit ?? 5,
     });
 
@@ -155,6 +178,7 @@ export class ArtifactService {
         artifactId: saved.artifact.artifactId,
         versionId: saved.artifact.versionId,
         version: saved.artifact.version,
+        kind: saved.artifact.kind,
         title: saved.artifact.title,
         sourceToolCode: saved.artifact.sourceToolCode,
         eid: saved.eid,
@@ -211,6 +235,66 @@ export class ArtifactService {
         id: item.id.trim(),
         name: item.name?.trim(),
       })),
+    };
+  }
+
+  private normalizeRecordingMaterialInput(
+    input: RecordingMaterialArtifactRequest,
+  ): Required<Pick<RecordingMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>> &
+    Omit<RecordingMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'> {
+    if (!input.recordingTaskId?.trim()) {
+      throw new BadRequestError('recordingTaskId 不能为空');
+    }
+    if (input.sourceFile && !input.sourceFile.name?.trim()) {
+      throw new BadRequestError('sourceFile.name 不能为空');
+    }
+
+    const normalized = this.normalizeCreateInput(input);
+    return {
+      ...input,
+      ...normalized,
+      recordingTaskId: input.recordingTaskId.trim(),
+      providerDataId: input.providerDataId?.trim() || null,
+      sourceFile: input.sourceFile
+        ? {
+            ...input.sourceFile,
+            name: input.sourceFile.name.trim(),
+            md5: input.sourceFile.md5?.trim(),
+            mimeType: input.sourceFile.mimeType?.trim(),
+          }
+        : undefined,
+    };
+  }
+
+  private normalizeAnalysisMaterialInput(
+    input: AnalysisMaterialArtifactRequest,
+  ): Required<Pick<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>> &
+    Omit<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'> {
+    if (!input.recordingTaskId?.trim()) {
+      throw new BadRequestError('recordingTaskId 不能为空');
+    }
+    if (!input.skillCode?.trim()) {
+      throw new BadRequestError('skillCode 不能为空');
+    }
+    if (input.sourceFile && !input.sourceFile.name?.trim()) {
+      throw new BadRequestError('sourceFile.name 不能为空');
+    }
+
+    const normalized = this.normalizeCreateInput(input);
+    return {
+      ...input,
+      ...normalized,
+      recordingTaskId: input.recordingTaskId.trim(),
+      skillCode: input.skillCode.trim(),
+      sourceJobId: input.sourceJobId?.trim(),
+      sourceFile: input.sourceFile
+        ? {
+            ...input.sourceFile,
+            name: input.sourceFile.name.trim(),
+            md5: input.sourceFile.md5?.trim(),
+            mimeType: input.sourceFile.mimeType?.trim(),
+          }
+        : undefined,
     };
   }
 
@@ -273,6 +357,7 @@ function buildFallbackEvidence(detail: ArtifactDetailResponse, index: number): A
   return {
     artifactId: detail.artifact.artifactId,
     versionId: detail.artifact.versionId,
+    kind: detail.artifact.kind,
     title: detail.artifact.title,
     version: detail.artifact.version,
     sourceToolCode: detail.artifact.sourceToolCode,

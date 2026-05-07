@@ -29,8 +29,11 @@ import { LightCloudClient } from './lightcloud-client.js';
 import { OrgSyncRepository } from './org-sync-repository.js';
 import { OrgSyncService } from './org-sync-service.js';
 import { QdrantVectorService } from './qdrant-vector-service.js';
+import { RecordingTaskRepository } from './recording-task-repository.js';
+import { RecordingTaskService } from './recording-task-service.js';
 import { ShadowMetadataRepository } from './shadow-metadata-repository.js';
 import { ShadowMetadataService } from './shadow-metadata-service.js';
+import { TongyiAudioServiceClient } from './tongyi-audio-service-client.js';
 import { IntentFrameService } from './intent-frame-service.js';
 import { YzjClient } from './yzj-client.js';
 
@@ -121,6 +124,15 @@ const artifactImageService = new ArtifactImageService({
   artifactService,
   externalSkillService,
 });
+const recordingTaskService = new RecordingTaskService({
+  config,
+  repository: new RecordingTaskRepository(database),
+  client: new TongyiAudioServiceClient({
+    baseUrl: config.external.tongyiAudioService.baseUrl,
+  }),
+  artifactService,
+  externalSkillService,
+});
 const agentRunRepository = new AgentRunRepository(database);
 const agentObservabilityService = new AgentObservabilityService(agentRunRepository);
 const agentConversationService = new AgentConversationService(agentRunRepository);
@@ -140,6 +152,7 @@ const agentRuntimeParts = createCrmAgentRuntimeParts({
   orgSyncRepository,
   externalSkillService,
   artifactService,
+  recordingTaskService,
 });
 const agentRuntime = new MainAgentRuntime({
   config,
@@ -169,6 +182,7 @@ const server = createAdminApiServer({
   artifactService,
   artifactPresentationService,
   artifactImageService,
+  recordingTaskService,
   agentService,
   agentConversationService,
   agentPersonalSettingsService,

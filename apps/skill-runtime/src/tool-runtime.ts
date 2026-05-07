@@ -264,8 +264,47 @@ function truncateText(text: string, maxChars = MAX_FILE_RETURN_CHARS): {
 }
 
 function readTextFile(pathValue: string): { content: string; truncated: boolean } {
+  const stat = statSync(pathValue, { throwIfNoEntry: false });
+  if (!stat) {
+    throw new BadRequestError(`读取文件不存在: ${pathValue}`);
+  }
+  if (!stat.isFile()) {
+    throw new BadRequestError(`读取路径不是文件，请传入具体附件文件路径: ${pathValue}`);
+  }
   const content = readFileSync(pathValue, 'utf8');
   return truncateText(content);
+}
+
+function readSupportedInputDirectory(pathValue: string): {
+  content: string;
+  truncated: boolean;
+  files: string[];
+} {
+  const entries = readdirSync(pathValue, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && GENERIC_TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase()))
+    .map((entry) => join(pathValue, entry.name))
+    .sort();
+
+  if (!entries.length) {
+    throw new BadRequestError(`输入目录中没有可读取的文本附件: ${pathValue}`);
+  }
+
+  const content = entries.map((filePath) => {
+    const extension = extname(filePath).replace(/^\./, '') || 'txt';
+    const fileContent = readFileSync(filePath, 'utf8');
+    return [
+      `## Source File: ${basename(filePath)}`,
+      '',
+      `\`\`\`${extension}`,
+      fileContent.trim(),
+      '```',
+    ].join('\n');
+  }).join('\n\n');
+  const truncated = truncateText(content);
+  return {
+    ...truncated,
+    files: entries,
+  };
 }
 
 function resolveReadablePath(
@@ -436,6 +475,20 @@ function createReadSourceFileTool(): RuntimeTool {
     async execute(rawArgs, context) {
       const args = expectObject(rawArgs);
       const sourcePath = resolveReadablePath(expectString(args, 'path'), context);
+      const stat = statSync(sourcePath, { throwIfNoEntry: false });
+      if (stat?.isDirectory()) {
+        if (sourcePath !== context.paths.inputsDir) {
+          throw new BadRequestError(`读取路径是目录，请传入具体附件文件路径: ${sourcePath}`);
+        }
+        const { content, truncated, files } = readSupportedInputDirectory(sourcePath);
+        return {
+          path: sourcePath,
+          extractionMethod: 'inputs_directory_utf8',
+          files,
+          content,
+          truncated,
+        };
+      }
       const extension = extname(sourcePath).toLowerCase();
 
       if (GENERIC_TEXT_EXTENSIONS.has(extension)) {

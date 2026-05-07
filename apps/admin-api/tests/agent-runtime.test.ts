@@ -307,9 +307,10 @@ function createAgentTestService(input: {
   intentFrame: IntentFrame | ((request: { query: string }) => IntentFrame);
   shadowMetadataService?: unknown;
   orgSyncRepository?: unknown;
-  externalSkillService?: unknown;
-  artifactService?: unknown;
-  companyResearchMaxWaitMs?: number;
+	  externalSkillService?: unknown;
+	  artifactService?: unknown;
+	  recordingTaskService?: unknown;
+	  companyResearchMaxWaitMs?: number;
 }) {
   const config = input.config ?? createTestConfig();
   const resolveTestIntentFrame = (request: { query: string }) =>
@@ -345,7 +346,7 @@ function createAgentTestService(input: {
       }),
     }) as any,
     orgSyncRepository: input.orgSyncRepository as any,
-    externalSkillService: (input.externalSkillService ?? {
+	    externalSkillService: (input.externalSkillService ?? {
       createSkillJob: async () => {
         throw new Error('not used');
       },
@@ -356,14 +357,15 @@ function createAgentTestService(input: {
         throw new Error('not used');
       },
     }) as any,
-    artifactService: (input.artifactService ?? {
+	    artifactService: (input.artifactService ?? {
       createCompanyResearchArtifact: async () => {
         throw new Error('not used');
       },
       search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
-    }) as any,
-    companyResearchMaxWaitMs: input.companyResearchMaxWaitMs,
-  });
+	    }) as any,
+	    recordingTaskService: input.recordingTaskService as any,
+	    companyResearchMaxWaitMs: input.companyResearchMaxWaitMs,
+	  });
 
   return {
     service: new AgentService({
@@ -700,6 +702,7 @@ test('Tool Registry exposes generic contracts and rejects scene tools', () => {
     'record.object.commit_update',
     'external.company_research',
     'artifact.search',
+    'artifact.recording_material.prepare',
     'meta.clarify_card',
     'meta.candidate_selection',
     'meta.plan_builder',
@@ -955,6 +958,475 @@ test('Agent runtime opens record detail from hidden client action without exposi
   assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.opportunity.get');
   assert.equal(getInput.formInstId, 'opportunity-live-001');
   assert.equal(response.message.extraInfo.agentTrace.selectedTool?.input.formInstId, 'opportunity-live-001');
+});
+
+test('Agent runtime routes recording followup client action to followup preview before recording material tool', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let previewObject: ShadowObjectKey | null = null;
+  let previewInput: any = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('followup', 'write', '贝斯美拜访'),
+    shadowMetadataService: {
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (objectKey: ShadowObjectKey, input: any) => {
+        previewObject = objectKey;
+        previewInput = input;
+        return {
+          objectKey,
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: ['linked_customer_form_inst_id', 'linked_opportunity_form_inst_id'],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: false,
+          requestBody: {
+            formCodeId: 'followup-form-001',
+            data: [{ widgetValue: { Ta_0: input.params?.followup_record } }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-recording-followup-preview',
+    sceneKey: 'chat',
+    query: '基于录音资料包「贝斯美拜访.mp3」新增拜访记录。跟进方式：电话，跟进负责人：open-followup-owner。正式写入前必须补齐客户和商机，并等待我确认后再写入。',
+    clientAction: {
+      type: 'record.preview_create',
+      objectKey: 'followup',
+      source: {
+        kind: 'recording_material',
+        recordingTaskId: 'recording-task-842f8e39',
+        artifactId: 'artifact-recording-material-001',
+        fileName: '贝斯美拜访.mp3',
+        anchors: {},
+      },
+    },
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.followup.preview_create');
+  assert.notEqual(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'artifact.recording_material.prepare');
+  assert.equal(previewObject, 'followup');
+  assert.equal(previewInput.params.followup_record, '基于录音资料包「贝斯美拜访.mp3」新增拜访记录');
+  assert.equal((response.message.extraInfo.agentTrace.selectedTool?.input as any).agentControl.source.kind, 'recording_material');
+  assert.equal(response.message.extraInfo.agentTrace.pendingInteraction?.toolCode, 'record.followup.preview_create');
+  assert.doesNotMatch(response.message.content, /录音处理已接入/);
+});
+
+test('Agent runtime keeps recording source while requiring followup archive anchors', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const previewInputs: any[] = [];
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('followup', 'write', '贝斯美拜访'),
+    shadowMetadataService: {
+      getObject: () => ({ fields: createFollowupWriteFields() }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (objectKey: ShadowObjectKey, input: any) => {
+        previewInputs.push(input);
+        return {
+          objectKey,
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: [],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: true,
+          requestBody: {
+            formCodeId: 'followup-form-001',
+            data: [{ widgetValue: input.params ?? {} }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const preview = await service.chat({
+    conversationKey: 'conv-recording-followup-requires-anchors',
+    sceneKey: 'chat',
+    query: '基于录音资料包「贝斯美拜访.mp3」新增拜访记录。跟进方式：电话，跟进负责人：open-followup-owner。',
+    clientAction: {
+      type: 'record.preview_create',
+      objectKey: 'followup',
+      source: {
+        kind: 'recording_material',
+        recordingTaskId: 'recording-task-842f8e39',
+        fileName: '贝斯美拜访.mp3',
+        sourceFileMd5: 'md5-bsm',
+        anchors: {
+          customer: 'customer-bsm-001',
+        },
+      },
+    },
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  const pendingInteraction = preview.message.extraInfo.agentTrace.pendingInteraction;
+  assert.equal(preview.executionState.status, 'waiting_input');
+  assert.equal(preview.message.extraInfo.agentTrace.pendingConfirmation, null);
+  assert.ok(pendingInteraction?.missingRows?.some((row) => row.paramKey === 'linked_opportunity_form_inst_id'));
+  assert.equal((pendingInteraction?.partialInput as any)?.agentControl?.source?.kind, 'recording_material');
+
+  const continued = await service.chat({
+    conversationKey: 'conv-recording-followup-requires-anchors',
+    sceneKey: 'chat',
+    query: '商机：opportunity-bsm-001',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: preview.executionState.runId,
+      action: 'provide_input',
+      interactionId: pendingInteraction!.interactionId,
+      answers: {
+        linked_opportunity_form_inst_id: 'opportunity-bsm-001',
+      },
+    },
+  });
+
+  assert.equal(continued.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInputs.at(-1)?.params.linked_opportunity_form_inst_id, 'opportunity-bsm-001');
+  assert.equal((continued.message.extraInfo.agentTrace.pendingConfirmation?.requestInput as any)?.agentControl?.source?.recordingTaskId, 'recording-task-842f8e39');
+});
+
+test('Agent runtime does not create duplicate followup for archived recording task', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let previewCalled = false;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('followup', 'write', '贝斯美拜访'),
+    recordingTaskService: {
+      getTask: async () => ({
+        taskId: 'recording-task-archived',
+        eid: 'eid',
+        appId: 'app',
+        status: 'succeeded',
+        serviceTaskId: 'audio-task-archived',
+        file: {
+          fileName: '贝斯美拜访.mp3',
+          mimeType: 'audio/mpeg',
+          size: 1,
+          md5: 'md5-bsm',
+        },
+        anchors: {
+          customer: 'customer-bsm-001',
+          opportunity: 'opportunity-bsm-001',
+          followup: 'followup-bsm-001',
+        },
+        stages: [],
+        material: {
+          available: true,
+          artifactId: 'artifact-recording-formal',
+          path: '/tmp/tongyi/md5-bsm/recording-material.md',
+        },
+        archive: {
+          status: 'archived',
+          artifactId: 'artifact-recording-formal',
+          followupId: 'followup-bsm-001',
+          customerId: 'customer-bsm-001',
+          opportunityId: 'opportunity-bsm-001',
+          sourceFileMd5: 'md5-bsm',
+        },
+        playback: { available: false },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      archiveTask: async () => {
+        throw new Error('not used');
+      },
+    },
+    shadowMetadataService: {
+      previewUpsert: async () => {
+        previewCalled = true;
+        throw new Error('not used');
+      },
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-recording-followup-archived-idempotent',
+    sceneKey: 'chat',
+    query: '基于录音资料包「贝斯美拜访.mp3」新增拜访记录。',
+    clientAction: {
+      type: 'record.preview_create',
+      objectKey: 'followup',
+      source: {
+        kind: 'recording_material',
+        recordingTaskId: 'recording-task-archived',
+        fileName: '贝斯美拜访.mp3',
+        sourceFileMd5: 'md5-bsm',
+      },
+    },
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(previewCalled, false);
+  assert.match(response.message.content, /已存在拜访记录/);
+  assert.equal(response.message.extraInfo.agentTrace.pendingConfirmation, null);
+});
+
+test('Agent runtime archives recording material after confirmed followup create', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let archiveInput: any = null;
+  let executeInput: any = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('followup', 'write', '拜访记录'),
+    recordingTaskService: {
+      archiveTask: async (input: any) => {
+        archiveInput = input;
+        return {
+          taskId: input.taskId,
+          eid: 'eid',
+          appId: 'app',
+          status: 'succeeded',
+          serviceTaskId: 'audio-task-001',
+          file: {
+            fileName: '贝斯美拜访.mp3',
+            mimeType: 'audio/mpeg',
+            size: 1,
+            md5: 'md5-bsm',
+          },
+          anchors: {
+            customer: input.customerId,
+            opportunity: input.opportunityId,
+            followup: input.followupId,
+          },
+          stages: [],
+          material: {
+            available: true,
+            artifactId: 'artifact-recording-formal',
+            path: '/tmp/tongyi/md5-bsm/recording-material.md',
+          },
+          playback: { available: false },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      },
+    },
+    shadowMetadataService: {
+      getObject: () => ({ fields: createFollowupWriteFields() }),
+      previewUpsert: async (objectKey: string, input: any) => ({
+        objectKey,
+        operation: 'upsert',
+        unresolvedDictionaries: [],
+        resolvedDictionaryMappings: [],
+        missingRequiredParams: [],
+        blockedReadonlyParams: [],
+        missingRuntimeInputs: [],
+        validationErrors: [],
+        readyToSend: true,
+        requestBody: {
+          formCodeId: 'followup-form-001',
+          data: [{ widgetValue: input.params ?? {} }],
+        },
+      }),
+      executeUpsert: async (_objectKey: string, input: any) => {
+        executeInput = input;
+        return {
+          objectKey: 'followup',
+          operation: 'upsert',
+          mode: 'live',
+          writeMode: 'create',
+          requestBody: { formCodeId: 'followup-form-001', data: [{ widgetValue: input.params ?? {} }] },
+          formInstIds: ['followup-bsm-001'],
+        };
+      },
+    },
+  });
+
+  const preview = await service.chat({
+    conversationKey: 'conv-recording-followup-archive',
+    sceneKey: 'chat',
+    query: '基于录音资料包「贝斯美拜访.mp3」新增拜访记录。跟进方式：电话，跟进负责人：open-followup-owner。正式写入前必须补齐客户和商机，并等待我确认后再写入。',
+    clientAction: {
+      type: 'record.preview_create',
+      objectKey: 'followup',
+      source: {
+        kind: 'recording_material',
+        recordingTaskId: 'recording-task-842f8e39',
+        fileName: '贝斯美拜访.mp3',
+        sourceFileMd5: 'md5-bsm',
+        anchors: {
+          customer: 'customer-bsm-001',
+          opportunity: 'opportunity-bsm-001',
+        },
+      },
+    },
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const pending = preview.message.extraInfo.agentTrace.pendingConfirmation;
+
+  assert.equal(preview.executionState.status, 'waiting_confirmation');
+  assert.ok(pending);
+
+  const approved = await service.chat({
+    conversationKey: 'conv-recording-followup-archive',
+    sceneKey: 'chat',
+    query: '确认写回',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: preview.executionState.runId,
+      action: 'confirm_writeback',
+      decision: 'approve',
+      confirmationId: pending?.confirmationId,
+    },
+  });
+
+  assert.equal(approved.executionState.status, 'completed');
+  assert.equal(approved.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.followup.commit_create');
+  assert.equal(executeInput.agentControl, undefined);
+  assert.deepEqual(archiveInput, {
+    taskId: 'recording-task-842f8e39',
+    customerId: 'customer-bsm-001',
+    opportunityId: 'opportunity-bsm-001',
+    followupId: 'followup-bsm-001',
+    createdBy: 'operator-001',
+  });
+  assert.equal(
+    approved.message.extraInfo.agentTrace.toolCalls.some((item) => item.toolCode === 'artifact.recording_material.archive'),
+    true,
+  );
+  assert.match(approved.message.content, /录音资料归档/);
+});
+
+test('Agent runtime keeps direct audio requests on recording material tool', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('followup', 'query', '拜访录音'),
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-direct-recording-material',
+    sceneKey: 'chat',
+    query: '帮我处理这段拜访录音',
+    attachments: [{ name: 'visit.mp3', type: 'audio/mpeg', url: '#attachment', size: 1024 }],
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'artifact.recording_material.prepare');
+  assert.match(response.message.content, /录音处理已接入/);
+});
+
+test('Agent runtime routes complex multi-source customer questions to context summary atomic calls', async (t) => {
+  const complexQueries = [
+    '贝斯美这个客户现在到底值不值得重点推进？请结合公司研究、商机、最近拜访录音和待办情况给我判断。',
+    '帮我判断贝斯美这次拜访后，当前商机的赢单概率有没有变化，为什么？',
+    '贝斯美下次拜访我应该怎么开场、问哪些问题、推什么价值点？',
+    '贝斯美目前最大的推进阻塞是什么？是客户问题、我们方案、预算、关键人，还是时机？',
+    '请帮我整理贝斯美的客户经营简报，给老板看：背景、机会、客户诉求、风险、下一步。',
+  ];
+
+  for (const query of complexQueries) {
+    await t.test(query, async () => {
+      const repository = new AgentRunRepository(createInMemoryDatabase());
+      const artifactKinds: string[] = [];
+      const { service } = createAgentTestService({
+        repository,
+        intentFrame: recordIntent('customer', 'query', '贝斯美'),
+        shadowMetadataService: {
+          executeSearch: async (objectKey: ShadowObjectKey) => {
+            if (objectKey === 'customer') {
+              return {
+                records: [{ formInstId: 'customer-bsm-001', fields: [{ title: '客户名称', value: '贝斯美' }] }],
+                totalElements: 1,
+              };
+            }
+            if (objectKey === 'opportunity') {
+              return {
+                records: [{ formInstId: 'opportunity-bsm-001', fields: [{ title: '商机名称', value: '贝斯美数字化升级' }] }],
+                totalElements: 1,
+              };
+            }
+            if (objectKey === 'followup') {
+              return {
+                records: [{ formInstId: 'followup-bsm-001', fields: [{ title: '跟进记录', value: '客户关注审批周期和试点预算' }] }],
+                totalElements: 1,
+              };
+            }
+            return { records: [], totalElements: 0 };
+          },
+          executeGet: async () => ({
+            record: {
+              formInstId: 'customer-bsm-001',
+              fields: [
+                { title: '客户名称', value: '贝斯美' },
+                { title: '客户状态', value: '推进中' },
+              ],
+            },
+          }),
+        },
+        artifactService: {
+          search: async (input: any) => {
+            const kind = input.kinds?.[0] ?? 'company_research';
+            artifactKinds.push(kind);
+            return {
+              query: input.query,
+              vectorStatus: 'searched',
+              qdrantFilter: {},
+              evidence: [{
+                artifactId: `artifact-${kind}`,
+                versionId: `version-${kind}`,
+                kind,
+                title: kind === 'company_research'
+                  ? '贝斯美公司研究'
+                  : kind === 'recording_material'
+                    ? '贝斯美拜访.mp3 录音资料包'
+                    : '贝斯美拜访 - 问题陈述',
+                version: 1,
+                sourceToolCode: kind === 'analysis_material' ? 'ext.problem_statement_pm' : 'test',
+                anchorTypes: ['customer'],
+                anchorIds: ['贝斯美'],
+                snippet: `${kind} 命中资料片段。`,
+                score: 0.8,
+              }],
+            };
+          },
+        },
+      });
+
+      const response = await service.chat({
+        conversationKey: `conv-context-${Buffer.from(query).toString('hex').slice(0, 8)}`,
+        sceneKey: 'chat',
+        query,
+        tenantContext: { operatorOpenId: 'operator-001' },
+      });
+
+      assert.equal(response.executionState.status, 'completed');
+      assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'meta.context_summary');
+      assert.deepEqual(artifactKinds, ['company_research', 'recording_material', 'analysis_material']);
+      assert.equal(
+        response.message.extraInfo.agentTrace.toolCalls.some((item) => item.toolCode === 'record.opportunity.search'),
+        true,
+      );
+      assert.equal(
+        response.message.extraInfo.agentTrace.toolCalls.filter((item) => item.toolCode === 'artifact.search').length,
+        3,
+      );
+      assert.match(response.message.content, /公司研究/);
+      assert.match(response.message.content, /拜访录音/);
+      assert.match(response.message.content, /分析结果/);
+    });
+  }
 });
 
 test('Agent runtime returns A2UI surfaces for empty, single, and multi record search results', async () => {
@@ -2484,6 +2956,54 @@ test('Agent runtime surfaces missing required record fields with user-readable l
   assert.equal(response.message.extraInfo.agentTrace.pendingConfirmation, null);
 });
 
+test('Agent runtime cancels pending input interaction by natural language', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '测试客户'),
+    shadowMetadataService: {
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => ({
+        objectKey: 'customer',
+        operation: 'upsert',
+        unresolvedDictionaries: [],
+        resolvedDictionaryMappings: [],
+        missingRequiredParams: ['customer_status', 'contact_phone'],
+        blockedReadonlyParams: [],
+        missingRuntimeInputs: [],
+        validationErrors: [],
+        readyToSend: false,
+        requestBody: { formCodeId: 'customer-form', data: [{ widgetValue: { _S_NAME: '测试客户' } }] },
+      }),
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const preview = await service.chat({
+    conversationKey: 'conv-cancel-pending-input',
+    sceneKey: 'chat',
+    query: '新增客户 测试客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.equal(preview.executionState.status, 'waiting_input');
+  assert.equal(preview.message.extraInfo.agentTrace.pendingInteraction?.status, 'pending');
+
+  const cancelled = await service.chat({
+    conversationKey: 'conv-cancel-pending-input',
+    sceneKey: 'chat',
+    query: '取消录入',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(cancelled.executionState.status, 'cancelled');
+  assert.equal(cancelled.message.extraInfo.agentTrace.pendingInteraction?.status, 'cancelled');
+  assert.equal(cancelled.message.extraInfo.agentTrace.continuationResolution?.action, 'cancel_interaction');
+  assert.match(cancelled.message.content, /已取消本次录入/);
+});
+
 test('Agent runtime does not treat create command text as customer name', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   let searchCount = 0;
@@ -2532,6 +3052,48 @@ test('Agent runtime does not treat create command text as customer name', async 
   assert.doesNotMatch(response.message.content, /客户名称：新增客户/);
   assert.match(response.message.content, /客户名称/);
   assert.equal(response.message.extraInfo.agentTrace.pendingConfirmation, null);
+});
+
+test('Agent runtime strips customer create command prefix from customer name', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let previewParams: Record<string, unknown> | null = null;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '绍兴贝斯美化工股份有限公司'),
+    shadowMetadataService: {
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewParams = input.params;
+        return {
+          objectKey: 'customer',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: ['contact_name'],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: false,
+          requestBody: { formCodeId: 'customer-form', data: [{ widgetValue: { _S_NAME: input.params?.customer_name } }] },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-create-customer-prefix-stripped',
+    sceneKey: 'chat',
+    query: '新增客户 绍兴贝斯美化工股份有限公司',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(previewParams?.customer_name, '绍兴贝斯美化工股份有限公司');
+  assert.notEqual(previewParams?.customer_name, '新增客户绍兴贝斯美化工股份有限公司');
 });
 
 test('Agent runtime returns Meta Question Card with field options for missing enum fields', async () => {

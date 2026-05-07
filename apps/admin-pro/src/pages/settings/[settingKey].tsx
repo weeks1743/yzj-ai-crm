@@ -108,10 +108,27 @@ const orgSyncRunColumns: ProColumns<OrgSyncRunSummary>[] = [
   },
 ];
 
-type RealPageKey = 'tenant-app' | 'yzj-auth' | 'org-sync';
-type RealPagePayload = TenantAppSettingsResponse | YzjAuthSettingsResponse | OrgSyncSettingsResponse;
+interface RecordingServiceSettingsResponse {
+  serviceProvider: string;
+  status: 'running' | 'warning' | string;
+  providerConfigured: boolean;
+  capabilities: string[];
+  outputs: string[];
+  consumableMaterials: string[];
+  structuredAnalysisFiles?: string[];
+  processOnlyFiles: string[];
+  defaultRules: string[];
+  errorMessage?: string | null;
+}
 
-const realPageKeys = new Set<RealPageKey>(['tenant-app', 'yzj-auth', 'org-sync']);
+type RealPageKey = 'tenant-app' | 'yzj-auth' | 'org-sync' | 'recording-service';
+type RealPagePayload =
+  | TenantAppSettingsResponse
+  | YzjAuthSettingsResponse
+  | OrgSyncSettingsResponse
+  | RecordingServiceSettingsResponse;
+
+const realPageKeys = new Set<RealPageKey>(['tenant-app', 'yzj-auth', 'org-sync', 'recording-service']);
 
 function isRealPageKey(pageKey: string): pageKey is RealPageKey {
   return realPageKeys.has(pageKey as RealPageKey);
@@ -178,6 +195,8 @@ const SettingsPage = () => {
         setRealPageData(await requestJson<TenantAppSettingsResponse>('/api/settings/tenant-app'));
       } else if (pageKey === 'yzj-auth') {
         setRealPageData(await requestJson<YzjAuthSettingsResponse>('/api/settings/yzj-auth'));
+      } else if (pageKey === 'recording-service') {
+        setRealPageData(await requestJson<RecordingServiceSettingsResponse>('/api/settings/recording-service'));
       } else {
         setRealPageData(await requestJson<OrgSyncSettingsResponse>('/api/settings/org-sync'));
       }
@@ -325,6 +344,103 @@ const SettingsPage = () => {
               columns={credentialColumns}
               dataSource={realPageData.credentials}
             />
+          </>
+        ) : null}
+
+        {!loading && !errorMessage && realPageData && pageKey === 'recording-service' ? (
+          <>
+            {(realPageData as RecordingServiceSettingsResponse).errorMessage ? (
+              <Alert
+                style={{ marginTop: 16 }}
+                type="warning"
+                showIcon
+                message="录音处理服务需检查"
+                description={(realPageData as RecordingServiceSettingsResponse).errorMessage}
+              />
+            ) : null}
+
+            {renderMetrics([
+              {
+                key: 'provider',
+                label: '服务提供方',
+                value: (realPageData as RecordingServiceSettingsResponse).serviceProvider,
+                helper: (realPageData as RecordingServiceSettingsResponse).providerConfigured ? 'Key 已配置' : 'Key 未配置',
+              },
+              {
+                key: 'status',
+                label: '服务状态',
+                value: (realPageData as RecordingServiceSettingsResponse).status === 'running' ? '运行中' : '需检查',
+                helper: '独立 Python 进程健康检查',
+              },
+              {
+                key: 'material',
+                label: '可消费资料',
+                value: (realPageData as RecordingServiceSettingsResponse).consumableMaterials.length,
+                helper: 'Markdown 与结构化分析附件',
+              },
+            ])}
+
+            <ProCard style={{ marginTop: 16 }} title="产出资料">
+              <ProDescriptions<RecordingServiceSettingsResponse>
+                column={1}
+                dataSource={realPageData as RecordingServiceSettingsResponse}
+              >
+                <ProDescriptions.Item label="支持能力">
+                  {(realPageData as RecordingServiceSettingsResponse).capabilities.map((item) => (
+                    <Tag key={item}>{item}</Tag>
+                  ))}
+                </ProDescriptions.Item>
+                <ProDescriptions.Item label="产出资料">
+                  {(realPageData as RecordingServiceSettingsResponse).outputs.map((item) => (
+                    <Tag key={item} color="blue">{item}</Tag>
+                  ))}
+                </ProDescriptions.Item>
+                <ProDescriptions.Item label="可被继续使用的资料">
+                  {(realPageData as RecordingServiceSettingsResponse).consumableMaterials.map((item) => (
+                    <Tag key={item} color="success">{item}</Tag>
+                  ))}
+                </ProDescriptions.Item>
+                <ProDescriptions.Item label="结构化分析附件">
+                  {((realPageData as RecordingServiceSettingsResponse).structuredAnalysisFiles ?? []).map((item) => (
+                    <Tag key={item} color="processing">{item}</Tag>
+                  ))}
+                </ProDescriptions.Item>
+                <ProDescriptions.Item label="过程文件隔离">
+                  {(realPageData as RecordingServiceSettingsResponse).processOnlyFiles.map((item) => (
+                    <Tag key={item} color="default">{item}</Tag>
+                  ))}
+                </ProDescriptions.Item>
+              </ProDescriptions>
+            </ProCard>
+
+            <ProCard style={{ marginTop: 16 }} title="可继续使用">
+              <ProTable
+                rowKey="capability"
+                search={false}
+                toolBarRender={false}
+                pagination={false}
+                columns={[
+                  { title: '后续能力', dataIndex: 'capability' },
+                  { title: '使用资料', dataIndex: 'materials' },
+                  { title: '用户动作', dataIndex: 'action' },
+                ]}
+                dataSource={[
+                  { capability: '会话理解', materials: '结构化分析 JSON、录音资料包', action: '拜访会话理解' },
+                  { capability: '需求待办', materials: '结构化分析 JSON、录音资料包、客户资料、商机资料', action: '客户需求工作待办分析' },
+                  { capability: '问题陈述', materials: '结构化分析 JSON、需求待办、录音资料包', action: '问题陈述' },
+                  { capability: '价值定位', materials: '问题陈述、客户资料', action: '客户价值定位' },
+                  { capability: '跟进记录生成', materials: '录音资料包、客户/商机', action: '新增拜访记录' },
+                ]}
+              />
+            </ProCard>
+
+            <ProCard style={{ marginTop: 16 }} title="默认规则">
+              <Space direction="vertical">
+                {(realPageData as RecordingServiceSettingsResponse).defaultRules.map((item) => (
+                  <Text key={item}>{item}</Text>
+                ))}
+              </Space>
+            </ProCard>
           </>
         ) : null}
 

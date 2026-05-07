@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>智能纪要查看器</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <main class="workspace">
+        <section class="panel panel--left">
+          <div class="panel__header">
+            <h2>对话内容</h2>
+            <label class="display-mode">
+              <span>展示方式</span>
+              <select id="displayMode">
+                <option value="translation">翻译结果</option>
+                <option value="original">原文</option>
+                <option value="polish" selected>书面化</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="transcript" id="transcript"></div>
+
+          <div class="player">
+            <audio id="audio" preload="metadata"></audio>
+            <div class="player__row">
+              <button id="playButton" class="icon-button icon-button--primary" type="button">▶</button>
+              <div class="player__progress">
+                <div class="timeline-shell">
+                  <div id="timelineTooltip" class="timeline-tooltip is-hidden"></div>
+                  <div id="timeline" class="timeline" role="slider" tabindex="0" aria-label="录音进度">
+                    <div id="timelineSegments" class="timeline__segments"></div>
+                    <div id="timelineProgress" class="timeline__progress"></div>
+                    <div id="timelineThumb" class="timeline__thumb"></div>
+                    <input id="timelineRange" class="timeline__range" type="range" min="0" max="1000" value="0" />
+                  </div>
+                </div>
+                <div class="player__times">
+                  <span id="currentTime">00:00</span>
+                  <span id="duration">00:00</span>
+                </div>
+              </div>
+              <label class="speed-picker">
+                <span>倍速</span>
+                <select id="speedSelect">
+                  <option value="0.75">0.75x</option>
+                  <option value="1" selected>1x</option>
+                  <option value="1.25">1.25x</option>
+                  <option value="1.5">1.5x</option>
+                  <option value="2">2x</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <div id="splitter" class="splitter" aria-label="分栏控制">
+          <div class="splitter__button-group">
+            <button id="showLeftOnly" class="splitter__button" type="button" title="仅显示左侧">◧</button>
+            <button id="showBothPanels" class="splitter__button splitter__button--active" type="button" title="双栏显示">◫</button>
+            <button id="showRightOnly" class="splitter__button" type="button" title="仅显示右侧">◨</button>
+          </div>
+          <div id="splitterHandle" class="splitter__handle" title="拖动调整宽度">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+
+        <section class="panel panel--right">
+          <div class="panel__header panel__header--tight">
+            <h2>分析结果</h2>
+            <nav class="tabs" id="mainTabs">
+              <button class="tab is-active" data-tab="overview" type="button">智能速览</button>
+              <button class="tab" data-tab="mindmap" type="button">思维导图</button>
+              <button class="tab" data-tab="profiles" type="button">画像分析</button>
+            </nav>
+          </div>
+
+          <section class="view is-active" data-view="overview">
+            <div class="keywords">
+              <div class="section-title-row">
+                <h3>关键词</h3>
+                <button id="keywordToggle" class="section-link" type="button">展开全部</button>
+              </div>
+              <div id="keywordList" class="keyword-list is-collapsed"></div>
+            </div>
+
+            <nav class="subtabs" id="overviewTabs">
+              <button class="subtab is-active" data-subtab="summary" type="button">全文概要</button>
+              <button class="subtab" data-subtab="chapters" type="button">章节速览</button>
+              <button class="subtab" data-subtab="speakers" type="button">发言总结</button>
+              <button class="subtab" data-subtab="qa" type="button">要点回顾</button>
+            </nav>
+
+            <div class="subview is-active" data-subview="summary">
+              <article id="summaryContent" class="article"></article>
+            </div>
+            <div class="subview" data-subview="chapters">
+              <div id="chaptersList" class="chapter-list"></div>
+            </div>
+            <div class="subview" data-subview="speakers">
+              <div id="speakerSummaryList" class="card-list"></div>
+            </div>
+            <div class="subview" data-subview="qa">
+              <div id="qaList" class="card-list"></div>
+            </div>
+          </section>
+
+          <section class="view" data-view="mindmap">
+            <div class="mindmap">
+              <div class="mindmap__toolbar">
+                <div class="mindmap__actions">
+                  <button class="icon-button" id="zoomOutButton" type="button">－</button>
+                  <button class="icon-button" id="zoomResetButton" type="button">重置</button>
+                  <button class="icon-button" id="zoomInButton" type="button">＋</button>
+                </div>
+              </div>
+              <div id="mindmapCanvas" class="mindmap__canvas"></div>
+            </div>
+          </section>
+
+          <section class="view" data-view="profiles">
+            <div class="profile-view">
+              <div class="profile-controls">
+                <label class="profile-field">
+                  <span>场景</span>
+                  <select id="profileScenario">
+                    <option value="interview">面试</option>
+                    <option value="crm_visit">CRM 客户拜访</option>
+                  </select>
+                </label>
+                <button id="analyzeProfileButton" class="solid-button" type="button">生成画像 md</button>
+                <a id="profileOpenLink" class="ghost-link is-hidden" href="#" target="_blank" rel="noreferrer">打开 md</a>
+              </div>
+
+              <section class="profile-panel">
+                <div class="section-title-row">
+                  <h3>发言人修改</h3>
+                </div>
+                <div id="profileSpeakerList" class="speaker-chip-list"></div>
+                <div class="speaker-editor">
+                  <input id="speakerAliasInput" class="speaker-alias-input" type="text" placeholder="输入真实姓名，如张三" />
+                  <button id="applySpeakerSingle" class="mini-button mini-button--primary" type="button">单个</button>
+                  <button id="applySpeakerGlobal" class="mini-button" type="button">全局</button>
+                </div>
+                <p class="helper-text">单个：仅当前任务生效。全局：后续任务里同名发言人也会自动套用。</p>
+                <div id="globalAliasList" class="global-alias-list"></div>
+              </section>
+
+              <div class="profile-grid">
+                <section class="profile-card">
+                  <div class="section-title-row">
+                    <h3>Prompt</h3>
+                  </div>
+                  <pre id="profilePrompt" class="profile-code">选择场景后点击“生成画像 md”，这里会展示用于和大模型交互的提示词。</pre>
+                </section>
+                <section class="profile-card">
+                  <div class="section-title-row">
+                    <h3>结构化画像</h3>
+                  </div>
+                  <div id="profileMarkdown" class="profile-markdown">生成后的结构化画像会显示在这里，并同步写入 md 文件。</div>
+                </section>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="sr-only" aria-hidden="true">
+      <select id="taskSelect"></select>
+      <span id="taskMeta">载入中</span>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+  </html>

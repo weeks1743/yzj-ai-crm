@@ -5,6 +5,7 @@ import type {
   ArtifactAnchor,
   ArtifactAnchorType,
   ArtifactEvidenceRef,
+  ArtifactKind,
   ArtifactSearchRequest,
 } from './contracts.js';
 import type { ArtifactMarkdownChunk } from './artifact-chunker.js';
@@ -15,6 +16,7 @@ interface VectorPayload {
   appId: string;
   artifactId: string;
   versionId: string;
+  kind: ArtifactKind;
   title: string;
   version: number;
   sourceToolCode: string;
@@ -39,7 +41,7 @@ export class QdrantVectorService {
     });
   }
 
-  buildFilter(input: Pick<ArtifactSearchRequest, 'eid' | 'appId' | 'anchors'>) {
+  buildFilter(input: Pick<ArtifactSearchRequest, 'eid' | 'appId' | 'anchors' | 'kinds'>) {
     const must: unknown[] = [
       { key: 'eid', match: { value: input.eid } },
       { key: 'appId', match: { value: input.appId } },
@@ -48,6 +50,9 @@ export class QdrantVectorService {
     if (anchorKeys.length) {
       must.push({ key: 'anchorKeys', match: { any: anchorKeys } });
     }
+    if (input.kinds?.length) {
+      must.push({ key: 'kind', match: { any: input.kinds } });
+    }
 
     return { must };
   }
@@ -55,6 +60,7 @@ export class QdrantVectorService {
   async upsertChunks(input: {
     artifactId: string;
     versionId: string;
+    kind: ArtifactKind;
     version: number;
     title: string;
     sourceToolCode: string;
@@ -65,6 +71,12 @@ export class QdrantVectorService {
     embeddings: number[][];
   }): Promise<void> {
     await this.ensureCollection();
+    await this.client.delete(this.config.qdrant.collectionName, {
+      wait: true,
+      filter: {
+        must: [{ key: 'versionId', match: { value: input.versionId } }],
+      },
+    });
     const anchorTypes = Array.from(new Set(input.anchors.map((item) => item.type)));
     const anchorIds = Array.from(new Set(input.anchors.map((item) => item.id)));
     const anchorKeys = buildAnchorKeys(input.anchors);
@@ -78,6 +90,7 @@ export class QdrantVectorService {
         appId: input.appId,
         artifactId: input.artifactId,
         versionId: input.versionId,
+        kind: input.kind,
         title: input.title,
         version: input.version,
         sourceToolCode: input.sourceToolCode,
@@ -116,6 +129,7 @@ export class QdrantVectorService {
       return {
         artifactId: String(payload.artifactId ?? ''),
         versionId: String(payload.versionId ?? ''),
+        kind: payload.kind,
         title: String(payload.title ?? '未命名 Artifact'),
         version: Number(payload.version ?? 1),
         sourceToolCode: String(payload.sourceToolCode ?? ''),

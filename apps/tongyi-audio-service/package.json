@@ -1,0 +1,11 @@
+{
+  "name": "@yzj-ai-crm/tongyi-audio-service",
+  "private": true,
+  "version": "0.9.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "setup": "node scripts/dev.mjs --setup-only",
+    "test": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover tests"
+  }
+}

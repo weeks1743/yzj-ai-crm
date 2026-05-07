@@ -183,6 +183,7 @@ export interface AssistantChatMessage {
         action:
           | 'resume_pending_interaction'
           | 'start_new_task'
+          | 'cancel_interaction'
           | 'confirm_writeback'
           | 'reject_writeback'
           | 'select_candidate'
@@ -308,6 +309,10 @@ export interface AssistantRequestInput {
     action: 'provide_input';
     interactionId: string;
     answers: Record<string, unknown>;
+  } | {
+    runId: string;
+    action: 'cancel_interaction';
+    interactionId: string;
   };
 }
 

@@ -149,6 +149,12 @@ export default [
         component: './settings/ppt-templates/index',
       },
       {
+        name: '录音处理服务',
+        path: '/settings/recording-service',
+        icon: 'audio',
+        component: './settings/[settingKey]',
+      },
+      {
         name: '云之家接入',
         path: '/settings/yzj-auth',
         icon: 'api',

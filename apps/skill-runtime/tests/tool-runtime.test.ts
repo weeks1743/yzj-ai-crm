@@ -3,7 +3,7 @@ import test from 'node:test';
 import { join } from 'node:path';
 import { createTempDir, QueueChatClient, writeTextFixture } from './test-helpers.js';
 import { createPptxGenJsInstance } from '../src/pptxgenjs-runtime.js';
-import { createPptxTools, runToolLoop, type ToolExecutionContext } from '../src/tool-runtime.js';
+import { createGenericTextTools, createPptxTools, runToolLoop, type ToolExecutionContext } from '../src/tool-runtime.js';
 
 test('runToolLoop executes tool calls and returns final text', async () => {
   const tempDir = createTempDir('tool-loop-');
@@ -103,6 +103,101 @@ test('runToolLoop executes tool calls and returns final text', async () => {
   assert.equal(result.finalText, 'done');
   assert.equal(result.turns, 2);
   assert.equal(client.calls.length, 2);
+});
+
+test('read_source_file reads staged inputs directory as combined text attachments', async () => {
+  const tempDir = createTempDir('tool-read-inputs-dir-');
+  const inputsDir = join(tempDir, 'inputs');
+  const outputsDir = join(tempDir, 'outputs');
+  const workspaceDir = join(tempDir, 'workspace');
+  writeTextFixture(tempDir, 'inputs/mindMapSummary.json', '{"mindMapSummary":[{"title":"客户预算"}]}');
+  writeTextFixture(tempDir, 'inputs/recording-material.md', '# 录音资料包\n\n客户关注预算审批。');
+  const context: ToolExecutionContext = {
+    job: {
+      jobId: 'job-read-inputs-dir',
+      skillName: 'problem-statement',
+      model: 'deepseek-v4-pro',
+      requestText: '基于录音生成问题陈述',
+      attachments: [],
+      workingDirectory: null,
+      status: 'running',
+      finalText: null,
+      error: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    },
+    skill: {
+      skillName: 'problem-statement',
+      skillFilePath: `${tempDir}/problem-statement/SKILL.md`,
+      rawContent: '',
+      promptContent: 'problem statement prompt',
+      frontmatter: {},
+      profile: {
+        skillName: 'problem-statement',
+        displayName: 'problem statement',
+        description: 'problem statement',
+        arguments: [],
+        allowedTools: [],
+        baseDir: tempDir,
+        supportFiles: [],
+        examples: [],
+        hasTemplate: false,
+      },
+    },
+    paths: {
+      jobHomeDir: tempDir,
+      workspaceDir,
+      inputsDir,
+      outputsDir,
+      skillDir: tempDir,
+      artifactDir: tempDir,
+    },
+    webSearchClient: {
+      async search() {
+        throw new Error('not used');
+      },
+    },
+    emitEvent() {},
+    publishTextArtifact() {
+      throw new Error('not used');
+    },
+    publishFileArtifact() {
+      throw new Error('not used');
+    },
+  };
+
+  const client = new QueueChatClient([
+    {
+      content: null,
+      toolCalls: [
+        {
+          id: 'call-read-inputs-dir',
+          name: 'read_source_file',
+          arguments: JSON.stringify({ path: inputsDir }),
+        },
+      ],
+    },
+    {
+      content: 'done',
+      toolCalls: [],
+    },
+  ]);
+
+  const result = await runToolLoop({
+    client,
+    model: 'deepseek-v4-pro',
+    systemPrompt: 'system',
+    userPrompt: 'user',
+    context,
+    tools: createGenericTextTools(),
+  });
+
+  assert.equal(result.finalText, 'done');
+  const toolMessage = client.calls[1]?.messages.find((message) => message.role === 'tool');
+  assert.ok(toolMessage?.content.includes('mindMapSummary.json'));
+  assert.ok(toolMessage?.content.includes('客户关注预算审批'));
 });
 
 test('runToolLoop supports explicit stop conditions for pptx QA pass', async () => {

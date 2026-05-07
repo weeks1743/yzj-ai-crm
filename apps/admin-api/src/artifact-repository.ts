@@ -1,12 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { MongoClient, type Collection, type Db } from 'mongodb';
 import type {
+  AnalysisMaterialArtifactRequest,
   AppConfig,
   ArtifactAnchor,
+  ArtifactKind,
   ArtifactDetailResponse,
   ArtifactVectorStatus,
   ArtifactVersionSummary,
   CompanyResearchArtifactRequest,
+  RecordingMaterialArtifactRequest,
 } from './contracts.js';
 import { NotFoundError } from './errors.js';
 
@@ -15,7 +18,7 @@ interface ArtifactDocument {
   artifactId: string;
   eid: string;
   appId: string;
-  kind: 'company_research';
+  kind: ArtifactKind;
   title: string;
   sourceToolCode: string;
   anchors: ArtifactAnchor[];
@@ -41,6 +44,7 @@ interface ArtifactVersionDocument {
   markdown: string;
   summary?: string;
   sourceRefs?: CompanyResearchArtifactRequest['sourceRefs'];
+  metadata?: Record<string, unknown>;
   contentHash: string;
   createdAt: Date;
 }
@@ -64,7 +68,21 @@ export interface CompanyResearchArtifactMetadataSearchInput {
   appId: string;
   terms: string[];
   limit: number;
+  kinds?: ArtifactKind[];
 }
+
+type ArtifactCreateInput =
+  Required<Pick<CompanyResearchArtifactRequest, 'eid' | 'appId' | 'createdBy'>> & {
+    title: string;
+    markdown: string;
+    sourceToolCode: string;
+    anchors: ArtifactAnchor[];
+    summary?: string;
+    sourceRefs?: CompanyResearchArtifactRequest['sourceRefs'];
+    kind: ArtifactKind;
+    metadata?: Record<string, unknown>;
+    versionPolicy?: 'append' | 'replace_current';
+  };
 
 export class ArtifactRepository {
   private readonly client: MongoClient;
@@ -79,21 +97,62 @@ export class ArtifactRepository {
     input: Required<Pick<CompanyResearchArtifactRequest, 'eid' | 'appId' | 'createdBy'>> &
       Omit<CompanyResearchArtifactRequest, 'eid' | 'appId' | 'createdBy'>,
   ): Promise<SavedArtifactVersion> {
+    return this.saveArtifact({ ...input, kind: 'company_research' });
+  }
+
+  async saveRecordingMaterialArtifact(
+    input: Required<Pick<RecordingMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>> &
+      Omit<RecordingMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>,
+  ): Promise<SavedArtifactVersion> {
+    return this.saveArtifact({
+      ...input,
+      kind: 'recording_material',
+      metadata: {
+        recordingTaskId: input.recordingTaskId,
+        providerDataId: input.providerDataId ?? null,
+        sourceFile: input.sourceFile ?? null,
+      },
+    });
+  }
+
+  async saveAnalysisMaterialArtifact(
+    input: Required<Pick<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>> &
+      Omit<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>,
+  ): Promise<SavedArtifactVersion> {
+    return this.saveArtifact({
+      ...input,
+      kind: 'analysis_material',
+      versionPolicy: 'replace_current',
+      metadata: {
+        recordingTaskId: input.recordingTaskId,
+        skillCode: input.skillCode,
+        sourceJobId: input.sourceJobId ?? null,
+        sourceFile: input.sourceFile ?? null,
+      },
+    });
+  }
+
+  async saveArtifact(input: ArtifactCreateInput): Promise<SavedArtifactVersion> {
     await this.ensureIndexes();
     const artifacts = await this.artifacts();
     const versions = await this.versions();
     const now = new Date();
     const contentHash = hashContent(input.markdown);
-    const anchorIdentity = buildAnchorIdentity(input.anchors);
+    const anchorIdentity = buildAnchorIdentity(input.anchors, {
+      kind: input.kind,
+      sourceToolCode: input.sourceToolCode,
+      metadata: input.metadata,
+    });
     const existing = await artifacts.findOne({
       eid: input.eid,
       appId: input.appId,
-      kind: 'company_research',
+      kind: input.kind,
       anchorIdentity,
     });
     const artifactId = existing?.artifactId ?? randomUUID();
-    const versionId = randomUUID();
-    const version = (existing?.latestVersion ?? 0) + 1;
+    const replaceCurrent = input.versionPolicy === 'replace_current' && existing !== null;
+    const versionId = replaceCurrent ? existing.currentVersionId : randomUUID();
+    const version = replaceCurrent ? existing.latestVersion : (existing?.latestVersion ?? 0) + 1;
 
     const versionDoc: ArtifactVersionDocument = {
       _id: versionId,
@@ -106,17 +165,40 @@ export class ArtifactRepository {
       markdown: input.markdown,
       summary: input.summary,
       sourceRefs: input.sourceRefs,
+      metadata: input.metadata,
       contentHash,
       createdAt: now,
     };
-    await versions.insertOne(versionDoc);
+    if (replaceCurrent) {
+      const existingVersion = await versions.findOne({ artifactId, versionId });
+      if (existingVersion) {
+        await versions.updateOne(
+          { artifactId, versionId },
+          {
+            $set: {
+              title: versionDoc.title,
+              markdown: versionDoc.markdown,
+              summary: versionDoc.summary,
+              sourceRefs: versionDoc.sourceRefs,
+              metadata: versionDoc.metadata,
+              contentHash: versionDoc.contentHash,
+              createdAt: versionDoc.createdAt,
+            },
+          },
+        );
+      } else {
+        await versions.insertOne(versionDoc);
+      }
+    } else {
+      await versions.insertOne(versionDoc);
+    }
 
     const artifactDoc: ArtifactDocument = {
       _id: artifactId,
       artifactId,
       eid: input.eid,
       appId: input.appId,
-      kind: 'company_research',
+      kind: input.kind,
       title: input.title,
       sourceToolCode: input.sourceToolCode,
       anchors: input.anchors,
@@ -245,7 +327,7 @@ export class ArtifactRepository {
     const artifactDocs = await artifacts.find({
       eid: input.eid,
       appId: input.appId,
-      kind: 'company_research',
+      kind: { $in: input.kinds?.length ? input.kinds : ['company_research', 'recording_material', 'analysis_material'] },
       $or: regexClauses,
     }).sort({ updatedAt: -1 }).limit(Math.min(Math.max(input.limit, 1), 10)).toArray();
     if (!artifactDocs.length) {
@@ -358,7 +440,30 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function buildAnchorIdentity(anchors: ArtifactAnchor[]): string {
+export function buildAnchorIdentity(
+  anchors: ArtifactAnchor[],
+  options?: {
+    kind?: ArtifactKind;
+    sourceToolCode?: string;
+    metadata?: Record<string, unknown>;
+  },
+): string {
+  if (options?.kind === 'analysis_material') {
+    const followup = anchors.find((item) => item.type === 'followup' && item.id);
+    const skillCode = String(options.metadata?.skillCode || options.sourceToolCode || '').trim();
+    if (followup && skillCode) {
+      return `analysis_material:followup:${followup.id}:skill:${skillCode}`;
+    }
+  }
+
+  if (options?.kind === 'recording_material') {
+    const followup = anchors.find((item) => item.type === 'followup' && item.id);
+    const sourceFile = anchors.find((item) => item.type === 'source_file' && item.id);
+    if (followup && sourceFile) {
+      return `recording_material:followup:${followup.id}:source_file:${sourceFile.id}`;
+    }
+  }
+
   const primary =
     anchors.find((item) => item.role === 'primary') ??
     anchors.find((item) => item.type === 'company') ??
@@ -387,6 +492,7 @@ function toSummary(document: ArtifactDocument): ArtifactVersionSummary {
     artifactId: document.artifactId,
     versionId: document.currentVersionId,
     version: document.latestVersion,
+    kind: document.kind,
     title: document.title,
     sourceToolCode: document.sourceToolCode,
     vectorStatus: document.vectorStatus,

@@ -35,6 +35,10 @@ export function resolvePendingContinuation(input: {
 
   const query = input.request.query.trim();
 
+  if (pending.kind !== 'confirmation' && isCancelPendingInteractionRequest(query)) {
+    return cancelPendingInteraction(input.runId, query, pending, '用户取消当前等待录入。');
+  }
+
   if (pending.kind === 'confirmation') {
     if (isExplicitTaskSwitch(query)) {
       return startNewTask(input.runId, query, pending, '用户在确认等待态中明确切换到新任务。');
@@ -483,6 +487,35 @@ function startNewTask(
       toolCode: pending.toolCode,
     },
   };
+}
+
+function cancelPendingInteraction(
+  runId: string,
+  query: string,
+  pending: PendingInteraction,
+  reason: string,
+): PendingContinuationResult {
+  return {
+    decision: {
+      runId,
+      action: 'cancel_interaction',
+      interactionId: pending.interactionId,
+      query,
+      reason,
+    },
+    resolution: {
+      usedContinuation: true,
+      action: 'cancel_interaction',
+      reason,
+      sourceInteractionId: pending.interactionId,
+      toolCode: pending.toolCode,
+    },
+  };
+}
+
+function isCancelPendingInteractionRequest(query: string): boolean {
+  const normalized = query.replace(/\s+/g, '').trim();
+  return /^(取消|取消录入|不录了|放弃|放弃录入|停止|停止录入|停止本次录入|取消本次录入)$/.test(normalized);
 }
 
 function isExplicitTaskSwitch(query: string): boolean {

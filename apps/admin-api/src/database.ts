@@ -272,6 +272,30 @@ export async function initializeDatabaseSchema(
         PRIMARY KEY (eid, operator_open_id)
       );
 
+      CREATE TABLE IF NOT EXISTS ${table('recording_audio_tasks')} (
+        task_id TEXT PRIMARY KEY,
+        eid TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        service_task_id TEXT NOT NULL,
+        provider_data_id TEXT,
+        fixture_task_id TEXT,
+        status TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        file_sha256 TEXT NOT NULL,
+        anchors_json JSONB NOT NULL,
+        service_payload_json JSONB NOT NULL,
+        artifact_id TEXT,
+        material_path TEXT,
+        material_source TEXT,
+        error_message TEXT,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (eid, app_id, file_sha256)
+      );
+
       CREATE TABLE IF NOT EXISTS ${table('agent_tool_calls')} (
         tool_call_id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
@@ -305,6 +329,9 @@ export async function initializeDatabaseSchema(
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_personal_settings_user`)}
       ON ${table('agent_personal_settings')}(eid, operator_open_id);
+
+      CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_recording_audio_tasks_recent`)}
+      ON ${table('recording_audio_tasks')}(eid, app_id, updated_at DESC);
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_tool_calls_run`)}
       ON ${table('agent_tool_calls')}(run_id, started_at ASC, tool_call_id ASC);

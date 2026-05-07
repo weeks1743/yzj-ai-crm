@@ -47,6 +47,7 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.equal(config.external.image.model, 'gpt-image-2');
   assert.equal(config.external.image.timeoutMs, 60000);
   assert.equal(config.external.skillRuntime.baseUrl, 'http://127.0.0.1:3012');
+  assert.equal(config.external.tongyiAudioService.baseUrl, 'http://127.0.0.1:3018');
 });
 
 test('loadAppConfig rejects invalid PostgreSQL schema name', () => {

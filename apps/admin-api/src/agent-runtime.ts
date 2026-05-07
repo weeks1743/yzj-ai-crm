@@ -224,6 +224,41 @@ export class MainAgentRuntime {
       }
     }
 
+    if (input.request.resume?.action === 'cancel_interaction') {
+      const snapshot = await this.readGraphState(config);
+      const values = snapshot?.values as Partial<MainAgentGraphState> | undefined;
+      const pendingInteraction = values?.pendingInteraction ?? input.resumeFallback?.pendingInteraction ?? null;
+      const decision: AgentResumeDecision = {
+        runId: input.request.resume.runId,
+        action: 'cancel_interaction',
+        interactionId: input.request.resume.interactionId,
+        query: input.request.query,
+        reason: '用户点击补充卡取消本次录入。',
+      };
+      const resolution: AgentRuntimeOutput['continuationResolution'] = {
+        usedContinuation: Boolean(pendingInteraction),
+        action: pendingInteraction ? 'cancel_interaction' : 'none',
+        reason: pendingInteraction ? decision.reason : '当前没有可取消的等待态。',
+        sourceInteractionId: input.request.resume.interactionId,
+        toolCode: pendingInteraction?.toolCode,
+      };
+      if (values?.pendingInteraction) {
+        return new Command({
+          resume: decision,
+          update: {
+            ...invocationUpdate,
+            continuationResolution: resolution,
+          },
+        });
+      }
+      return buildRecoveredCancelCommand({
+        input,
+        pendingInteraction,
+        decision,
+        resolution,
+      });
+    }
+
     if (input.request.resume?.action === 'confirm_writeback') {
       const decision = input.request.resume satisfies AgentResumeDecision;
       return new Command({
@@ -482,6 +517,39 @@ export class MainAgentRuntime {
           };
         }
 
+        if (decision.action === 'cancel_interaction') {
+          const reason = decision.reason || '用户取消当前等待态。';
+          return {
+            selectedTool: state.selectedTool,
+            pendingInteraction: state.pendingInteraction
+              ? { ...state.pendingInteraction, status: 'cancelled' as const }
+              : null,
+            resumeDecision: decision,
+            continuationResolution: {
+              usedContinuation: true,
+              action: 'cancel_interaction' as const,
+              reason,
+              sourceInteractionId: decision.interactionId,
+              toolCode: state.pendingInteraction?.toolCode,
+            },
+            content: ['## 已取消本次录入', '已取消当前未确认写入的补充等待态；已正式写入的记录不会被删除。'].join('\n'),
+            headline: '已取消本次录入',
+            references: ['meta.clarify_card'],
+            uiSurfaces: [],
+            status: 'cancelled' as AgentExecutionStatus,
+            currentStepKey: null,
+            policyDecisions: [
+              ...(state.policyDecisions ?? []),
+              createPolicyDecision({
+                policyCode: 'meta.pending_interaction.cancelled',
+                action: 'block',
+                toolCode: state.pendingInteraction?.toolCode,
+                reason,
+              }),
+            ],
+          };
+        }
+
         if (decision.action === 'select_candidate') {
           const selectedTool: AgentToolSelection = {
             toolCode: decision.toolCode,
@@ -731,6 +799,115 @@ function buildRecoveredProvidedInputCommand(input: {
     }) as unknown as Record<string, unknown>,
     goto: 'execute_tool',
   });
+}
+
+function buildRecoveredCancelCommand(input: {
+  input: MainAgentRuntimeInvokeInput;
+  pendingInteraction?: PendingInteraction | null;
+  decision: Extract<AgentResumeDecision, { action: 'cancel_interaction' }>;
+  resolution: AgentRuntimeOutput['continuationResolution'];
+}) {
+  const pendingInteraction = input.pendingInteraction
+    ? { ...input.pendingInteraction, status: 'cancelled' as const }
+    : null;
+  return new Command({
+    update: {
+      ...input.input,
+      request: input.input.request,
+      runId: input.input.runId,
+      traceId: input.input.traceId,
+      startedAt: input.input.startedAt,
+      eid: input.input.eid,
+      appId: input.input.appId,
+      operatorOpenId: input.input.operatorOpenId,
+      focusedName: input.input.focusedName,
+      contextFrame: input.input.contextFrame ?? null,
+      contextCandidates: input.input.contextCandidates ?? [],
+      resolvedContext: null,
+      semanticResolution: null,
+      toolArbitration: null,
+      intentFrame: buildRecoveredCancelIntentFrame(input.input.request.query, input.pendingInteraction),
+      taskPlan: buildRecoveredCancelTaskPlan(input.pendingInteraction?.toolCode),
+      selectedTool: undefined,
+      pendingConfirmation: null,
+      pendingInteraction,
+      continuationResolution: input.resolution,
+      resumeDecision: input.decision,
+      policyDecisions: [
+        createPolicyDecision({
+          policyCode: input.pendingInteraction ? 'meta.pending_interaction.cancelled_from_persistence' : 'meta.pending_interaction.cancel_missing',
+          action: input.pendingInteraction ? 'block' : 'audit',
+          toolCode: input.pendingInteraction?.toolCode,
+          reason: input.resolution?.reason ?? input.decision.reason,
+        }),
+      ],
+      toolCalls: [],
+      evidence: [],
+      content: input.pendingInteraction
+        ? ['## 已取消本次录入', '已取消当前未确认写入的补充等待态；已正式写入的记录不会被删除。'].join('\n')
+        : ['## 没有待取消录入', '当前没有正在等待补充的录入。'].join('\n'),
+      headline: input.pendingInteraction ? '已取消本次录入' : '没有待取消录入',
+      references: ['meta.clarify_card'],
+      attachments: [],
+      uiSurfaces: [],
+      qdrantFilter: undefined,
+      status: input.pendingInteraction ? 'cancelled' : 'completed',
+      currentStepKey: null,
+    } as unknown as Record<string, unknown>,
+    goto: END,
+  });
+}
+
+function buildRecoveredCancelIntentFrame(
+  query: string,
+  pendingInteraction?: PendingInteraction | null,
+): GenericIntentFrame {
+  const legacyIntentFrame: GenericIntentFrame['legacyIntentFrame'] = {
+    actionType: 'write',
+    goal: query || pendingInteraction?.title || '取消当前录入',
+    targetType: 'unknown',
+    targets: [],
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: [],
+    confidence: 0.9,
+    source: 'fallback',
+    fallbackReason: '取消等待态时从持久化补充卡恢复上下文。',
+  };
+  return {
+    actionType: 'write',
+    goal: legacyIntentFrame.goal,
+    target: { kind: 'unknown' },
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: [],
+    confidence: 0.9,
+    source: 'fallback',
+    fallbackReason: legacyIntentFrame.fallbackReason,
+    legacyIntentFrame,
+  };
+}
+
+function buildRecoveredCancelTaskPlan(toolCode?: string): TaskPlan {
+  return {
+    planId: `plan-${randomUUID().slice(0, 8)}`,
+    kind: 'tool_clarify',
+    title: '取消等待录入',
+    status: 'cancelled',
+    steps: [
+      {
+        key: 'cancel-pending-interaction',
+        title: '取消当前未确认录入',
+        actionType: 'meta',
+        toolRefs: [toolCode ?? 'meta.clarify_card'],
+        required: true,
+        skippable: false,
+        confirmationRequired: false,
+        status: 'skipped',
+      },
+    ],
+    evidenceRequired: false,
+  };
 }
 
 function buildRecoveredRuntimeState(input: {

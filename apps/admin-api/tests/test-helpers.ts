@@ -17,6 +17,7 @@ interface TestConfigOptions {
   imageModel?: string;
   imageTimeoutMs?: number;
   skillRuntimeBaseUrl?: string;
+  tongyiAudioServiceBaseUrl?: string;
   docmeeBaseUrl?: string;
   docmeeApiKey?: string | null;
   mongodbUri?: string;
@@ -195,6 +196,9 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
       },
       skillRuntime: {
         baseUrl: options.skillRuntimeBaseUrl ?? 'http://127.0.0.1:3012',
+      },
+      tongyiAudioService: {
+        baseUrl: options.tongyiAudioServiceBaseUrl ?? 'http://127.0.0.1:3018',
       },
     },
     meta: {

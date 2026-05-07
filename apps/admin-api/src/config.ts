@@ -257,6 +257,9 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
       skillRuntime: {
         baseUrl: (env.SKILL_RUNTIME_BASE_URL || 'http://127.0.0.1:3012').trim(),
       },
+      tongyiAudioService: {
+        baseUrl: (env.TONGYI_AUDIO_SERVICE_BASE_URL || 'http://127.0.0.1:3018').trim(),
+      },
     },
     meta: {
       configSource: '.env',

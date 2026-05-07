@@ -30,6 +30,29 @@ interface RunInsightTenantContext {
   appIdLabel: string;
 }
 
+interface RecordingInsightTask {
+  taskId: string;
+  fileName: string;
+  status: string;
+  localStatusText?: string;
+  stages: Array<{
+    key: string;
+    label: string;
+    status: string;
+  }>;
+  skillJobs: Array<{
+    skillCode: string;
+    label: string;
+    status: string;
+    errorMessage?: string | null;
+    jobId?: string;
+    artifacts?: Array<{
+      artifactId: string;
+      fileName: string;
+    }>;
+  }>;
+}
+
 interface RunInsightDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -39,6 +62,7 @@ interface RunInsightDrawerProps {
   tenantContext: RunInsightTenantContext;
   agentTrace?: AgentTrace;
   evidence?: AssistantEvidenceCard[];
+  recordingTasks?: RecordingInsightTask[];
   adminBaseUrl: string;
 }
 
@@ -161,6 +185,17 @@ function renderExecutionStatus(status?: string) {
   }
   const meta = executionStatusMeta[status] ?? { label: status, color: 'default' };
   return <Tag color={meta.color}>{meta.label}</Tag>;
+}
+
+function renderRecordingStatus(status?: string) {
+  const meta: Record<string, { label: string; color: string }> = {
+    queued: { label: '排队中', color: 'default' },
+    running: { label: '运行中', color: 'processing' },
+    succeeded: { label: '已完成', color: 'success' },
+    failed: { label: '失败', color: 'error' },
+  };
+  const item = meta[status || ''] ?? { label: status || '未知', color: 'default' };
+  return <Tag color={item.color}>{item.label}</Tag>;
 }
 
 function renderJson(value: unknown, className: string) {
@@ -485,6 +520,7 @@ export function RunInsightDrawer({
   tenantContext,
   agentTrace,
   evidence = [],
+  recordingTasks = [],
   adminBaseUrl,
 }: RunInsightDrawerProps) {
   const { styles } = useStyles();
@@ -499,6 +535,278 @@ export function RunInsightDrawer({
   const pendingInteraction = agentTrace?.pendingInteraction;
   const toolArbitration = agentTrace?.toolArbitration;
   const adminTraceUrl = traceId ? buildAdminTraceUrl(adminBaseUrl, traceId) : '';
+  const skillJobs = recordingTasks.flatMap((task) => (
+    task.skillJobs.map((job) => ({
+      ...job,
+      taskId: task.taskId,
+      fileName: task.fileName,
+    }))
+  ));
+  const defaultActiveKey = agentTrace ? 'agent' : recordingTasks.length ? 'recording' : 'raw';
+  const agentTaskPanel = agentTrace ? (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Card className={styles.insightCard} title="运行状态">
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Space wrap>
+            {renderExecutionStatus(executionState?.status)}
+            {traceId ? <Text copyable>{traceId}</Text> : null}
+          </Space>
+          <Text>{executionState?.message || '暂无执行摘要'}</Text>
+          <div className={styles.summaryGrid}>
+            <div className={styles.summaryItem}>
+              <Text type="secondary">当前步骤</Text>
+              <div><Text strong>{executionState?.currentStepKey || '-'}</Text></div>
+            </div>
+            <div className={styles.summaryItem}>
+              <Text type="secondary">计划类型</Text>
+              <div><Text strong>{taskPlan?.kind || '-'}</Text></div>
+            </div>
+          </div>
+        </Space>
+      </Card>
+      <Card className={styles.insightCard} title="当前上下文">
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Space wrap>
+            <Text strong>{scene.title}</Text>
+            <Tag color={scene.key === 'chat' ? 'cyan' : 'purple'}>{slashCommand}</Tag>
+          </Space>
+          <Text type="secondary">{scene.subtitle}</Text>
+          <Text>{scene.description}</Text>
+          <div className={styles.tagWrap}>
+            {sourceTags.map((item) => <Tag key={item} color="blue">{item}</Tag>)}
+          </div>
+          <Text type="secondary">
+            {tenantContext.tenantName} · eid: {tenantContext.eidLabel} · appId: {tenantContext.appIdLabel}
+          </Text>
+        </Space>
+      </Card>
+      <Card className={styles.insightCard} title="诊断流程图">
+        <RunInsightFlow agentTrace={agentTrace} styles={styles} />
+      </Card>
+      <Card className={styles.insightCard} title={taskPlan?.title || '任务计划'}>
+        {planSteps.length ? (
+          <ThoughtChain
+            line="dashed"
+            items={planSteps.map((step: any, index: number) => ({
+              key: step.key ?? `step-${index}`,
+              title: step.title ?? `步骤 ${index + 1}`,
+              description: Array.isArray(step.toolRefs) ? step.toolRefs.join(' / ') : step.status,
+              status: mapPlanStepStatus(step.status),
+              blink: step.status === 'running',
+            }))}
+          />
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无计划步骤" />
+        )}
+      </Card>
+      <Card className={styles.insightCard} title={<Space><ToolOutlined />工具调用</Space>}>
+        {toolCalls.length ? (
+          <List
+            dataSource={toolCalls}
+            renderItem={(item) => (
+              <List.Item>
+                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                  <Space wrap>
+                    <Text strong>{item.toolCode}</Text>
+                    <Tag color={item.status === 'succeeded' ? 'success' : item.status === 'failed' ? 'error' : 'processing'}>
+                      {item.status}
+                    </Tag>
+                  </Space>
+                  {item.inputSummary ? <Text type="secondary">输入：{item.inputSummary}</Text> : null}
+                  {item.outputSummary ? <Text>输出：{item.outputSummary}</Text> : null}
+                  {item.errorMessage ? <Alert type="error" showIcon message={item.errorMessage} /> : null}
+                </Space>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无工具调用" />
+        )}
+      </Card>
+      <Card className={styles.insightCard} title="证据">
+        {evidence.length ? (
+          <List
+            dataSource={evidence}
+            renderItem={(item) => (
+              <List.Item>
+                <List.Item.Meta
+                  title={<Space wrap><Text strong>{item.title}</Text><Tag>{item.sourceToolCode}</Tag></Space>}
+                  description={item.snippet}
+                />
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无证据引用" />
+        )}
+      </Card>
+      <Card className={styles.insightCard} title="确认 / 等待态">
+        {pendingConfirmation || pendingInteraction || agentTrace.continuationResolution ? (
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            {pendingConfirmation ? (
+              <>
+                <Space wrap>
+                  <Text strong>{pendingConfirmation.title}</Text>
+                  <Tag color="warning">{pendingConfirmation.status}</Tag>
+                </Space>
+                <Text>{pendingConfirmation.summary}</Text>
+                {renderSummaryRows(pendingConfirmation.userPreview?.summaryRows)}
+                {renderSummaryRows(pendingConfirmation.userPreview?.missingRequiredRows)}
+              </>
+            ) : null}
+            {pendingInteraction ? (
+              <>
+                <Space wrap>
+                  <Text strong>{pendingInteraction.title}</Text>
+                  <Tag>{pendingInteraction.kind}</Tag>
+                  <Tag color="warning">{pendingInteraction.status}</Tag>
+                </Space>
+                <Text>{pendingInteraction.summary}</Text>
+                {renderSummaryRows(pendingInteraction.missingRows)}
+                {renderSummaryRows(pendingInteraction.blockedRows)}
+              </>
+            ) : null}
+            {agentTrace.continuationResolution ? (
+              <Alert
+                type={agentTrace.continuationResolution.usedContinuation ? 'success' : 'info'}
+                showIcon
+                message={agentTrace.continuationResolution.action}
+                description={agentTrace.continuationResolution.reason}
+              />
+            ) : null}
+          </Space>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无等待态或承接记录" />
+        )}
+      </Card>
+      <Card className={styles.insightCard} title={<Space><SafetyCertificateOutlined />策略说明</Space>}>
+        {policyDecisions.length ? (
+          <List
+            size="small"
+            dataSource={policyDecisions}
+            renderItem={(item) => (
+              <List.Item>
+                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  <Space wrap>
+                    <Text strong>{item.policyCode}</Text>
+                    <Tag>{item.action}</Tag>
+                  </Space>
+                  <Text type="secondary">{item.reason}</Text>
+                </Space>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <div className={styles.mutedBlock}>暂无策略记录</div>
+        )}
+      </Card>
+      <Card className={styles.insightCard} title="工具语义仲裁">
+        {toolArbitration ? (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Space wrap>
+              <Tag color="blue">{toolArbitration.action}</Tag>
+              <Tag>{toolArbitration.conflictGroup}</Tag>
+              {toolArbitration.selectedToolCode ? <Tag color="success">{toolArbitration.selectedToolCode}</Tag> : null}
+            </Space>
+            <Text>{toolArbitration.reason}</Text>
+            <div className={styles.tagWrap}>
+              {toolArbitration.candidateTools.map((item) => (
+                <Tag key={item.toolCode}>{item.toolCode}</Tag>
+              ))}
+            </div>
+          </Space>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无工具语义仲裁记录" />
+        )}
+      </Card>
+    </Space>
+  ) : (
+    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="发送请求后会展示真实智能体运行洞察" />
+  );
+
+  const recordingTaskPanel = recordingTasks.length ? (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="录音处理洞察"
+        description="这里展示录音任务、资料包生成和处理阶段；同会话内的录单、追问等 Agent 任务请看“Agent 任务”。"
+      />
+      {recordingTasks.map((task) => (
+        <Card key={task.taskId} className={styles.insightCard} title={task.fileName}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <Space wrap>
+              {renderRecordingStatus(task.status)}
+              <Text copyable>{task.taskId}</Text>
+            </Space>
+            <Text type="secondary">{task.localStatusText || '录音处理服务任务'}</Text>
+            <List
+              size="small"
+              dataSource={task.stages}
+              renderItem={(stage) => (
+                <List.Item>
+                  <Space>
+                    {renderRecordingStatus(stage.status)}
+                    <Text>{stage.label}</Text>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </Space>
+        </Card>
+      ))}
+    </Space>
+  ) : (
+    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前会话暂无录音任务" />
+  );
+
+  const skillJobPanel = skillJobs.length ? (
+    <List
+      dataSource={skillJobs}
+      renderItem={(job) => (
+        <List.Item>
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Space wrap>
+              {renderRecordingStatus(job.status)}
+              <Text strong>{job.label}</Text>
+              <Tag>{job.fileName}</Tag>
+              {job.jobId ? <Text copyable type="secondary">{job.jobId}</Text> : null}
+            </Space>
+            {job.errorMessage ? <Text type="danger">{job.errorMessage}</Text> : null}
+            {job.artifacts?.length ? (
+              <Text type="secondary">
+                产物：{job.artifacts.map((artifact) => artifact.fileName).join('、')}
+              </Text>
+            ) : null}
+          </Space>
+        </List.Item>
+      )}
+    />
+  ) : (
+    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未触发下游外部技能" />
+  );
+  const tabItems = [
+    agentTrace ? {
+      key: 'agent',
+      label: 'Agent 任务',
+      children: agentTaskPanel,
+    } : null,
+    recordingTasks.length ? {
+      key: 'recording',
+      label: '录音任务',
+      children: recordingTaskPanel,
+    } : null,
+    recordingTasks.length ? {
+      key: 'skills',
+      label: '下游技能',
+      children: skillJobPanel,
+    } : null,
+    {
+      key: 'raw',
+      label: '原始 Trace',
+      children: renderJson({ agentTrace: agentTrace ?? null, recordingTasks }, styles.jsonText),
+    },
+  ].filter(Boolean) as NonNullable<Parameters<typeof Tabs>[0]['items']>;
 
   return (
     <Drawer
@@ -521,258 +829,10 @@ export function RunInsightDrawer({
         </Button>
       }
     >
-      {!agentTrace ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="发送请求后会展示真实智能体运行洞察" />
+      {tabItems.length ? (
+        <Tabs defaultActiveKey={defaultActiveKey} items={tabItems} />
       ) : (
-        <Tabs
-          items={[
-            {
-              key: 'overview',
-              label: '总览',
-              children: (
-                <>
-                  <Card className={styles.insightCard} title="运行状态">
-                    <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                      <Space wrap>
-                        {renderExecutionStatus(executionState?.status)}
-                        {traceId ? <Text copyable>{traceId}</Text> : null}
-                      </Space>
-                      <Text>{executionState?.message || '暂无执行摘要'}</Text>
-                      <div className={styles.summaryGrid}>
-                        <div className={styles.summaryItem}>
-                          <Text type="secondary">当前步骤</Text>
-                          <div><Text strong>{executionState?.currentStepKey || '-'}</Text></div>
-                        </div>
-                        <div className={styles.summaryItem}>
-                          <Text type="secondary">计划类型</Text>
-                          <div><Text strong>{taskPlan?.kind || '-'}</Text></div>
-                        </div>
-                      </div>
-                    </Space>
-                  </Card>
-                  <Card className={styles.insightCard} title="当前上下文">
-                    <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                      <Space wrap>
-                        <Text strong>{scene.title}</Text>
-                        <Tag color={scene.key === 'chat' ? 'cyan' : 'purple'}>{slashCommand}</Tag>
-                      </Space>
-                      <Text type="secondary">{scene.subtitle}</Text>
-                      <Text>{scene.description}</Text>
-                      <div className={styles.tagWrap}>
-                        {sourceTags.map((item) => <Tag key={item} color="blue">{item}</Tag>)}
-                      </div>
-                      <Text type="secondary">
-                        {tenantContext.tenantName} · eid: {tenantContext.eidLabel} · appId: {tenantContext.appIdLabel}
-                      </Text>
-                    </Space>
-                  </Card>
-                  <Card
-                    className={styles.insightCard}
-                    title={<Space><SafetyCertificateOutlined />策略说明</Space>}
-                  >
-                    {policyDecisions.length ? (
-                      <List
-                        size="small"
-                        dataSource={policyDecisions}
-                        renderItem={(item) => (
-                          <List.Item>
-                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                              <Space wrap>
-                                <Text strong>{item.policyCode}</Text>
-                                <Tag>{item.action}</Tag>
-                              </Space>
-                              <Text type="secondary">{item.reason}</Text>
-                            </Space>
-                          </List.Item>
-                        )}
-                      />
-                    ) : (
-                      <div className={styles.mutedBlock}>暂无策略记录</div>
-                    )}
-                  </Card>
-                </>
-              ),
-            },
-            {
-              key: 'flow',
-              label: '运行流程',
-              children: (
-                <Card className={styles.insightCard} title="诊断流程图">
-                  <RunInsightFlow agentTrace={agentTrace} styles={styles} />
-                </Card>
-              ),
-            },
-                  {
-                    key: 'plan',
-                    label: '计划',
-              children: (
-                <>
-                  <Card className={styles.insightCard} title={taskPlan?.title || '任务计划'}>
-                    {planSteps.length ? (
-                      <ThoughtChain
-                        line="dashed"
-                        items={planSteps.map((step: any, index: number) => ({
-                          key: step.key ?? `step-${index}`,
-                          title: step.title ?? `步骤 ${index + 1}`,
-                          description: Array.isArray(step.toolRefs) ? step.toolRefs.join(' / ') : step.status,
-                          status: mapPlanStepStatus(step.status),
-                          blink: step.status === 'running',
-                        }))}
-                      />
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无计划步骤" />
-                    )}
-                  </Card>
-                  <Card className={styles.insightCard} title="意图帧">
-                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                      <Text>{intentFrame?.goal || '-'}</Text>
-                      <Space wrap>
-                        <Tag>{intentFrame?.actionType || 'unknown'}</Tag>
-                        <Tag>{intentFrame?.targetType || 'unknown'}</Tag>
-                        {intentFrame?.source ? <Tag>{intentFrame.source}</Tag> : null}
-                      </Space>
-                      <div className={styles.tagWrap}>
-                        {(intentFrame?.targets ?? []).map((target: any, index: number) => (
-                          <Tag key={`${target.type}-${target.id}-${index}`} color="blue">
-                            {target.name || target.type}
-                          </Tag>
-                        ))}
-                        {(intentFrame?.missingSlots ?? []).map((slot: string) => (
-                          <Tag key={slot} color="warning">{slot}</Tag>
-                        ))}
-                      </div>
-                    </Space>
-                  </Card>
-                </>
-              ),
-            },
-            {
-              key: 'tools',
-              label: '工具 / 证据',
-              children: (
-                <>
-                  <Card className={styles.insightCard} title={<Space><ToolOutlined />工具调用</Space>}>
-                    {toolCalls.length ? (
-                      <List
-                        dataSource={toolCalls}
-                        renderItem={(item) => (
-                          <List.Item>
-                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                              <Space wrap>
-                                <Text strong>{item.toolCode}</Text>
-                                <Tag color={item.status === 'succeeded' ? 'success' : item.status === 'failed' ? 'error' : 'processing'}>
-                                  {item.status}
-                                </Tag>
-                              </Space>
-                              {item.inputSummary ? <Text type="secondary">输入：{item.inputSummary}</Text> : null}
-                              {item.outputSummary ? <Text>输出：{item.outputSummary}</Text> : null}
-                              {item.errorMessage ? <Alert type="error" showIcon message={item.errorMessage} /> : null}
-                            </Space>
-                          </List.Item>
-                        )}
-                      />
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无工具调用" />
-                    )}
-                  </Card>
-                  <Card className={styles.insightCard} title="证据">
-                    {evidence.length ? (
-                      <List
-                        dataSource={evidence}
-                        renderItem={(item) => (
-                          <List.Item>
-                            <List.Item.Meta
-                              title={<Space wrap><Text strong>{item.title}</Text><Tag>{item.sourceToolCode}</Tag></Space>}
-                              description={item.snippet}
-                            />
-                          </List.Item>
-                        )}
-                      />
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无证据引用" />
-                    )}
-                  </Card>
-                </>
-              ),
-            },
-            {
-              key: 'state',
-              label: '确认 / 等待',
-              children: (
-                <>
-                  <Card className={styles.insightCard} title="待确认写回">
-                    {pendingConfirmation ? (
-                      <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                        <Space wrap>
-                          <Text strong>{pendingConfirmation.title}</Text>
-                          <Tag color="warning">{pendingConfirmation.status}</Tag>
-                        </Space>
-                        <Text>{pendingConfirmation.summary}</Text>
-                        {renderSummaryRows(pendingConfirmation.userPreview?.summaryRows)}
-                        {renderSummaryRows(pendingConfirmation.userPreview?.missingRequiredRows)}
-                        {renderSummaryRows(pendingConfirmation.userPreview?.blockedRows)}
-                      </Space>
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无待确认写回" />
-                    )}
-                  </Card>
-                  <Card className={styles.insightCard} title="等待态 / 承接">
-                    {pendingInteraction || agentTrace.continuationResolution ? (
-                      <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                        {pendingInteraction ? (
-                          <>
-                            <Space wrap>
-                              <Text strong>{pendingInteraction.title}</Text>
-                              <Tag>{pendingInteraction.kind}</Tag>
-                              <Tag color="warning">{pendingInteraction.status}</Tag>
-                            </Space>
-                            <Text>{pendingInteraction.summary}</Text>
-                            {renderSummaryRows(pendingInteraction.missingRows)}
-                            {renderSummaryRows(pendingInteraction.blockedRows)}
-                          </>
-                        ) : null}
-                        {agentTrace.continuationResolution ? (
-                          <Alert
-                            type={agentTrace.continuationResolution.usedContinuation ? 'success' : 'info'}
-                            showIcon
-                            message={agentTrace.continuationResolution.action}
-                            description={agentTrace.continuationResolution.reason}
-                          />
-                        ) : null}
-                      </Space>
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无等待态或承接记录" />
-                    )}
-                  </Card>
-                  <Card className={styles.insightCard} title="工具语义仲裁">
-                    {toolArbitration ? (
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        <Space wrap>
-                          <Tag color="blue">{toolArbitration.action}</Tag>
-                          <Tag>{toolArbitration.conflictGroup}</Tag>
-                          {toolArbitration.selectedToolCode ? <Tag color="success">{toolArbitration.selectedToolCode}</Tag> : null}
-                        </Space>
-                        <Text>{toolArbitration.reason}</Text>
-                        <div className={styles.tagWrap}>
-                          {toolArbitration.candidateTools.map((item) => (
-                            <Tag key={item.toolCode}>{item.toolCode}</Tag>
-                          ))}
-                        </div>
-                      </Space>
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无工具语义仲裁记录" />
-                    )}
-                  </Card>
-                </>
-              ),
-            },
-            {
-              key: 'raw',
-              label: '原始追踪',
-              children: renderJson(agentTrace, styles.jsonText),
-            },
-          ]}
-        />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="发送请求后会展示真实智能体运行洞察" />
       )}
     </Drawer>
   );

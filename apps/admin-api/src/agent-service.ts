@@ -30,7 +30,7 @@ export class AgentService {
     const contextFrame = await this.options.repository.findContextFrame(request.conversationKey);
     const contextCandidates = await this.options.repository.findContextCandidates(request.conversationKey);
     const focusedName = contextFrame?.subject?.name ?? await this.options.repository.findFocusedCompany(request.conversationKey);
-    const resumeFallback = request.resume?.action === 'provide_input'
+    const resumeFallback = request.resume?.action === 'provide_input' || request.resume?.action === 'cancel_interaction'
       ? await this.options.repository.findPendingInteractionState({
           runId: request.resume.runId,
           conversationKey: request.conversationKey,

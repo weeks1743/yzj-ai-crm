@@ -144,10 +144,9 @@ export function inferFallbackIntent(
   if (hasAudio || query.includes('录音')) {
     return buildIntent({
       actionType: 'plan',
-      goal: '录音材料整理',
+      goal: '生成录音资料包',
       targetType: companyName ? 'company' : 'unknown',
       companyName,
-      missingSlots: ['文字纪要'],
       confidence: 0.72,
       reason,
     });
@@ -208,14 +207,14 @@ export function buildTaskPlan(intentFrame: IntentFrame): TaskPlan {
   if (intentFrame.missingSlots.includes('文字纪要') || intentFrame.goal.includes('录音')) {
     return {
       planId,
-      kind: 'audio_not_supported',
-      title: '录音整理 MVP 降级计划',
-      status: 'paused',
+      kind: 'recording_material',
+      title: '录音资料包处理计划',
+      status: 'running',
       steps: [
-        step('save-audio-placeholder', '保存附件占位', 'meta', ['meta.plan_builder'], 'succeeded'),
-        step('wait-note', '等待用户补充文字纪要', 'meta', ['meta.clarify_card'], 'pending'),
+        step('create-recording-task', '创建录音处理任务', 'query', ['artifact.recording_material.prepare'], 'pending'),
+        step('materialize-recording', '生成可消费录音资料包', 'query', ['artifact.recording_material.prepare'], 'pending'),
       ],
-      evidenceRequired: false,
+      evidenceRequired: true,
     };
   }
 
