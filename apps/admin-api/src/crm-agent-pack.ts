@@ -88,7 +88,8 @@ const META_QUESTION_OPTIONS_ENDPOINT = '/api/agent/meta-question-options' as con
 const DEFAULT_RECORD_SEARCH_PAGE_SIZE = 5;
 const DEFAULT_META_QUESTION_OPTION_PAGE_SIZE = 10;
 const COMPANY_RESEARCH_POLL_INTERVAL_MS = 1000;
-const COMPANY_RESEARCH_MAX_WAIT_MS = 420_000;
+const COMPANY_RESEARCH_MAX_WAIT_MS = 70_000;
+const COMPANY_RESEARCH_BACKGROUND_MAX_WAIT_MS = 420_000;
 const DUPLICATE_CHECK_MAX_ATTEMPTS = 2;
 const DUPLICATE_CHECK_RETRY_DELAY_MS = 300;
 const RECORDING_FOLLOWUP_REQUIRED_PARAMS = [
@@ -348,6 +349,7 @@ export interface CrmAgentPackOptions {
   artifactService: ArtifactService;
   recordingTaskService?: Pick<RecordingTaskService, 'archiveTask' | 'getTask'>;
   companyResearchMaxWaitMs?: number;
+  companyResearchBackgroundMaxWaitMs?: number;
 }
 
 const CRM_TOOL_ARBITRATION_RULES: ToolArbitrationRule[] = [
@@ -6863,6 +6865,12 @@ async function executeCompanyResearch(
     const waitResult = await waitForSkillJob(options, job.jobId);
     if (waitResult.status === 'still_running') {
       finishToolCall(skillCall, 'running', `job=${waitResult.job.jobId}, status=${waitResult.job.status}, 已超过同步等待窗口`);
+      scheduleCompanyResearchArtifactBackfill({
+        options,
+        companyName,
+        job: waitResult.job,
+        context,
+      });
       return buildCompanyResearchRunningResult(companyName, waitResult.job, options.companyResearchMaxWaitMs ?? COMPANY_RESEARCH_MAX_WAIT_MS, [lookupCall, skillCall]);
     }
 
@@ -7698,9 +7706,23 @@ function readFieldByTitles(
 }
 
 async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Promise<SkillJobWaitResult> {
-  let job = await options.externalSkillService.getSkillJob(jobId);
-  const maxWaitMs = options.companyResearchMaxWaitMs ?? COMPANY_RESEARCH_MAX_WAIT_MS;
-  const maxAttempts = Math.ceil(maxWaitMs / COMPANY_RESEARCH_POLL_INTERVAL_MS);
+  return waitForSkillJobWithin(options, {
+    jobId,
+    maxWaitMs: options.companyResearchMaxWaitMs ?? COMPANY_RESEARCH_MAX_WAIT_MS,
+    keepProcessAlive: true,
+  });
+}
+
+async function waitForSkillJobWithin(
+  options: CrmAgentPackOptions,
+  input: {
+    jobId: string;
+    maxWaitMs: number;
+    keepProcessAlive: boolean;
+  },
+): Promise<SkillJobWaitResult> {
+  let job = await options.externalSkillService.getSkillJob(input.jobId);
+  const maxAttempts = Math.ceil(Math.max(0, input.maxWaitMs) / COMPANY_RESEARCH_POLL_INTERVAL_MS);
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (job.status === 'succeeded') {
       return { status: 'succeeded', job };
@@ -7708,8 +7730,8 @@ async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Pro
     if (job.status === 'failed') {
       throw new Error(job.error?.message ?? '公司研究服务执行失败');
     }
-    await new Promise((resolve) => setTimeout(resolve, COMPANY_RESEARCH_POLL_INTERVAL_MS));
-    job = await options.externalSkillService.getSkillJob(jobId);
+    await delay(COMPANY_RESEARCH_POLL_INTERVAL_MS, input.keepProcessAlive);
+    job = await options.externalSkillService.getSkillJob(input.jobId);
   }
   if (job.status === 'succeeded') {
     return { status: 'succeeded', job };
@@ -7718,6 +7740,82 @@ async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Pro
     throw new Error(job.error?.message ?? '公司研究服务执行失败');
   }
   return { status: 'still_running', job };
+}
+
+function delay(ms: number, keepProcessAlive: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (!keepProcessAlive) {
+      timer.unref();
+    }
+  });
+}
+
+function scheduleCompanyResearchArtifactBackfill(input: {
+  options: CrmAgentPackOptions;
+  companyName: string;
+  job: ExternalSkillJobResponse;
+  context: AgentToolExecuteContext;
+}): void {
+  const maxWaitMs = input.options.companyResearchBackgroundMaxWaitMs ?? COMPANY_RESEARCH_BACKGROUND_MAX_WAIT_MS;
+  void backfillCompanyResearchArtifact(input.options, {
+    companyName: input.companyName,
+    jobId: input.job.jobId,
+    eid: input.context.eid,
+    appId: input.context.appId,
+    maxWaitMs,
+  }).catch((error) => {
+    console.warn(`[agent] company research background backfill failed: ${getErrorMessage(error)}`);
+  });
+}
+
+async function backfillCompanyResearchArtifact(
+  options: CrmAgentPackOptions,
+  input: {
+    companyName: string;
+    jobId: string;
+    eid: string;
+    appId: string;
+    maxWaitMs: number;
+  },
+): Promise<void> {
+  const waitResult = await waitForSkillJobWithin(options, {
+    jobId: input.jobId,
+    maxWaitMs: input.maxWaitMs,
+    keepProcessAlive: false,
+  });
+  if (waitResult.status === 'still_running') {
+    console.warn(`[agent] company research background backfill still running: job=${input.jobId}`);
+    return;
+  }
+
+  const reusableArtifact = await findReusableCompanyResearchArtifact(options, {
+    eid: input.eid,
+    appId: input.appId,
+    companyName: input.companyName,
+  });
+  if (reusableArtifact) {
+    return;
+  }
+
+  const markdown = await resolveMarkdownFromJob(options, waitResult.job);
+  const evaluation = evaluateCompanyResearchResult(input.companyName, markdown);
+  if (!evaluation.usable) {
+    console.warn(`[agent] company research background backfill skipped invalid result: job=${input.jobId}, reason=${evaluation.reason}`);
+    return;
+  }
+
+  await options.artifactService.createCompanyResearchArtifact({
+    eid: input.eid,
+    appId: input.appId,
+    title: `${input.companyName} 公司研究`,
+    markdown,
+    sourceToolCode: COMPANY_RESEARCH_RUNTIME_TOOL,
+    anchors: [buildCompanyAnchor(input.companyName)],
+    createdBy: 'agent-runtime-background',
+    summary: summarizeMarkdown(markdown),
+    sourceRefs: extractSourceRefs(markdown),
+  });
 }
 
 async function resolveMarkdownFromJob(options: CrmAgentPackOptions, job: ExternalSkillJobResponse): Promise<string> {
