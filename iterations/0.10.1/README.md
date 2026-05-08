@@ -17,8 +17,11 @@
 - 已完成：
   - `pnpm --filter @yzj-ai-crm/assistant-web test`
   - `pnpm --filter @yzj-ai-crm/assistant-web build`
-- 待完成：
   - 线上 Docker Compose 重建与健康检查
+  - `https://api.xiami66.com/api/health`
+  - `https://chat.xiami66.com/api/health`
+  - `https://chat.xiami66.com/chat`
+  - 线上 JS 静态资源已返回 `Cache-Control: public, max-age=2592000, immutable` 与 `content-encoding: gzip`
 
 ## 未完成项
 
