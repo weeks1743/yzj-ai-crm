@@ -135,6 +135,29 @@ interface ConfirmationAuditRow extends ConfirmationRow {
   trace_id: string | null;
 }
 
+interface BackgroundRunRow extends QueryResultRow {
+  run_id: string;
+  trace_id: string;
+  conversation_key: string;
+  scene_key: string;
+  intent_frame_json: unknown;
+  task_plan_json: unknown;
+  execution_state_json: unknown;
+  context_subject_json: unknown;
+}
+
+export interface BackgroundRunCompletionInput {
+  runId: string;
+  status: Extract<AgentExecutionStatus, 'completed' | 'failed' | 'tool_unavailable'>;
+  headline: string;
+  content: string;
+  references: string[];
+  evidence: AgentEvidenceCard[];
+  contextFrame?: ContextFrame | null;
+  toolCalls: AgentToolCall[];
+  currentStepKey?: string | null;
+}
+
 export class AgentRunRepository {
   constructor(private readonly database: DatabaseConnection) {}
 
@@ -617,6 +640,165 @@ export class AgentRunRepository {
     }
   }
 
+  async completeBackgroundRun(input: BackgroundRunCompletionInput): Promise<boolean> {
+    const now = new Date().toISOString();
+    const row = await this.database.queryMaybeOne<BackgroundRunRow>(
+      `
+        SELECT run_id, trace_id, conversation_key, scene_key, intent_frame_json, task_plan_json, execution_state_json, context_subject_json
+        FROM ${this.database.table('agent_runs')}
+        WHERE run_id = $1
+        LIMIT 1
+      `,
+      [input.runId],
+    );
+    if (!row) {
+      return false;
+    }
+
+    const existingPlan = parseJson<TaskPlan>(row.task_plan_json, fallbackTaskPlan());
+    const taskPlan = finishBackgroundTaskPlan(existingPlan, input.status);
+    const existingExecution = parseJson<ExecutionState>(
+      row.execution_state_json,
+      fallbackExecutionState({
+        ...row,
+        eid: '',
+        app_id: '',
+        user_input: '',
+        intent_frame_json: null,
+        evidence_refs_json: [],
+        status: input.status,
+        created_at: now,
+        updated_at: now,
+        tool_call_count: 0,
+        failed_tool_call_count: 0,
+        pending_confirmation_count: 0,
+      }),
+    );
+    const executionState: ExecutionState = {
+      ...existingExecution,
+      status: input.status,
+      currentStepKey: input.currentStepKey ?? null,
+      message: input.headline,
+      finishedAt: now,
+    };
+    const contextSubject = input.contextFrame?.subject ?? parseContextSubject(row.context_subject_json);
+    const intentFrame = parseJson<IntentFrame>(row.intent_frame_json, fallbackIntentFrame());
+    const message: AgentChatMessage = {
+      role: 'assistant',
+      content: input.content,
+      attachments: [],
+      extraInfo: {
+        feedback: 'default',
+        sceneKey: row.scene_key,
+        headline: input.headline,
+        references: input.references,
+        evidence: input.evidence,
+        uiSurfaces: [],
+        agentTrace: {
+          traceId: row.trace_id,
+          intentFrame,
+          taskPlan,
+          executionState,
+          toolCalls: input.toolCalls,
+          qdrantFilter: undefined,
+          pendingConfirmation: null,
+          pendingInteraction: null,
+          continuationResolution: null,
+          resolvedContext: null,
+          semanticResolution: null,
+          toolArbitration: null,
+          policyDecisions: [],
+        },
+      },
+    };
+
+    await this.database.transaction(async (transaction) => {
+      await transaction.query(
+        `
+          UPDATE ${transaction.table('agent_runs')}
+          SET task_plan_json = $2::jsonb,
+              execution_state_json = $3::jsonb,
+              evidence_refs_json = $4::jsonb,
+              context_subject_json = $5::jsonb,
+              status = $6,
+              updated_at = $7
+          WHERE run_id = $1
+        `,
+        [
+          input.runId,
+          JSON.stringify(taskPlan),
+          JSON.stringify(executionState),
+          JSON.stringify(input.evidence),
+          JSON.stringify(contextSubject ?? null),
+          input.status,
+          now,
+        ],
+      );
+
+      for (const toolCall of input.toolCalls) {
+        await transaction.query(
+          `
+            INSERT INTO ${transaction.table('agent_tool_calls')} (
+              tool_call_id, run_id, tool_code, status, input_summary, output_summary,
+              started_at, finished_at, error_message
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (tool_call_id) DO UPDATE SET
+              run_id = EXCLUDED.run_id,
+              tool_code = EXCLUDED.tool_code,
+              status = EXCLUDED.status,
+              input_summary = EXCLUDED.input_summary,
+              output_summary = EXCLUDED.output_summary,
+              started_at = EXCLUDED.started_at,
+              finished_at = EXCLUDED.finished_at,
+              error_message = EXCLUDED.error_message
+          `,
+          [
+            toolCall.id,
+            input.runId,
+            toolCall.toolCode,
+            toolCall.status,
+            toolCall.inputSummary,
+            toolCall.outputSummary,
+            toolCall.startedAt,
+            toolCall.finishedAt,
+            toolCall.errorMessage,
+          ],
+        );
+      }
+
+      await transaction.query(
+        `
+          INSERT INTO ${transaction.table('agent_messages')} (
+            message_id, run_id, conversation_key, role, content, attachments_json, extra_info_json, created_at
+          )
+          VALUES ($1, $2, $3, 'assistant', $4, $5::jsonb, $6::jsonb, $7)
+        `,
+        [
+          randomUUID(),
+          input.runId,
+          row.conversation_key,
+          message.content,
+          JSON.stringify([]),
+          JSON.stringify(message.extraInfo),
+          now,
+        ],
+      );
+
+      await transaction.query(
+        `
+          UPDATE ${transaction.table('agent_conversations')}
+          SET last_message = $2,
+              updated_label = '刚刚',
+              updated_at = $3
+          WHERE conversation_key = $1
+        `,
+        [row.conversation_key, input.headline, now],
+      );
+    });
+    return true;
+  }
+
   private async touchConversationFromRun(request: AgentChatRequest, now: string): Promise<void> {
     const operatorOpenId = request.tenantContext?.operatorOpenId?.trim();
     if (!operatorOpenId) {
@@ -942,6 +1124,22 @@ function fallbackExecutionState(row: AgentRunRow): ExecutionState {
     message: '历史运行记录缺少可解析 ExecutionState',
     startedAt: row.created_at,
     finishedAt: row.updated_at,
+  };
+}
+
+function finishBackgroundTaskPlan(plan: TaskPlan, status: AgentExecutionStatus): TaskPlan {
+  return {
+    ...plan,
+    status,
+    steps: plan.steps.map((item) => {
+      if (status === 'completed') {
+        return { ...item, status: item.status === 'pending' || item.status === 'running' ? 'succeeded' : item.status };
+      }
+      if (status === 'failed' || status === 'tool_unavailable') {
+        return { ...item, status: item.status === 'pending' || item.status === 'running' ? 'failed' : item.status };
+      }
+      return item;
+    }),
   };
 }
 

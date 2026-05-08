@@ -736,6 +736,7 @@ function RuntimeObservabilityView() {
   const [current, setCurrent] = useState<AgentRunDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [confirmationLoading, setConfirmationLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const loadRunDetail = useCallback(async (runId: string) => {
@@ -760,14 +761,10 @@ function RuntimeObservabilityView() {
       if (traceIdFromQuery) {
         query.set('traceId', traceIdFromQuery);
       }
-      const [runs, confirmations] = await Promise.all([
-        requestJson<AgentRunListResponse>(`/api/agent/runs?${query.toString()}`),
-        requestJson<AgentConfirmationListResponse>('/api/agent/confirmations?page=1&pageSize=20'),
-      ]);
+      const runs = await requestJson<AgentRunListResponse>(`/api/agent/runs?${query.toString()}`);
       setRunData(runs);
-      setConfirmationData(confirmations);
       if (traceIdFromQuery && runs.items[0]) {
-        await loadRunDetail(runs.items[0].runId);
+        void loadRunDetail(runs.items[0].runId);
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '智能体运行观测加载失败');
@@ -776,9 +773,21 @@ function RuntimeObservabilityView() {
     }
   }, [loadRunDetail, traceIdFromQuery]);
 
+  const loadConfirmations = useCallback(async () => {
+    setConfirmationLoading(true);
+    try {
+      setConfirmationData(await requestJson<AgentConfirmationListResponse>('/api/agent/confirmations?page=1&pageSize=20'));
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '确认审计加载失败');
+    } finally {
+      setConfirmationLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadData();
-  }, [loadData]);
+    void loadConfirmations();
+  }, [loadConfirmations, loadData]);
 
   const runs = runData?.items ?? [];
   const confirmations = confirmationData?.items ?? [];
@@ -910,8 +919,13 @@ function RuntimeObservabilityView() {
         <ProTable<AgentConfirmationAuditRow>
           rowKey="confirmationId"
           search={false}
-          toolBarRender={false}
+          toolBarRender={() => [
+            <Button key="refresh-confirmations" loading={confirmationLoading} onClick={() => void loadConfirmations()}>
+              刷新
+            </Button>,
+          ]}
           options={false}
+          loading={confirmationLoading && !confirmationData}
           pagination={false}
           columns={confirmationColumns}
           dataSource={confirmations}

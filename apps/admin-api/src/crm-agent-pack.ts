@@ -6905,6 +6905,7 @@ async function executeCompanyResearch(
         companyName,
         job: waitResult.job,
         context,
+        skillCall,
       });
       return buildCompanyResearchRunningResult(companyName, waitResult.job, options.companyResearchMaxWaitMs ?? COMPANY_RESEARCH_MAX_WAIT_MS, [lookupCall, skillCall]);
     }
@@ -8264,6 +8265,7 @@ function scheduleCompanyResearchArtifactBackfill(input: {
   companyName: string;
   job: ExternalSkillJobResponse;
   context: AgentToolExecuteContext;
+  skillCall: AgentToolExecutionResult['toolCalls'][number];
 }): void {
   const maxWaitMs = input.options.companyResearchBackgroundMaxWaitMs ?? COMPANY_RESEARCH_BACKGROUND_MAX_WAIT_MS;
   void backfillCompanyResearchArtifact(input.options, {
@@ -8271,6 +8273,9 @@ function scheduleCompanyResearchArtifactBackfill(input: {
     jobId: input.job.jobId,
     eid: input.context.eid,
     appId: input.context.appId,
+    runId: input.context.runId,
+    traceId: input.context.traceId,
+    skillCall: { ...input.skillCall },
     maxWaitMs,
   }).catch((error) => {
     console.warn(`[agent] company research background backfill failed: ${getErrorMessage(error)}`);
@@ -8284,6 +8289,9 @@ async function backfillCompanyResearchArtifact(
     jobId: string;
     eid: string;
     appId: string;
+    runId: string;
+    traceId: string;
+    skillCall: AgentToolExecutionResult['toolCalls'][number];
     maxWaitMs: number;
   },
 ): Promise<void> {
@@ -8303,6 +8311,15 @@ async function backfillCompanyResearchArtifact(
     companyName: input.companyName,
   });
   if (reusableArtifact) {
+    await completeCompanyResearchBackgroundRun(options, {
+      companyName: input.companyName,
+      runId: input.runId,
+      traceId: input.traceId,
+      skillCall: input.skillCall,
+      job: waitResult.job,
+      artifact: reusableArtifact,
+      summary: summarizeMarkdown(reusableArtifact.markdown) || reusableArtifact.summary?.trim() || '已有公司研究资料可供参考。',
+    });
     return;
   }
 
@@ -8313,7 +8330,7 @@ async function backfillCompanyResearchArtifact(
     return;
   }
 
-  await options.artifactService.createCompanyResearchArtifact({
+  const artifact = await options.artifactService.createCompanyResearchArtifact({
     eid: input.eid,
     appId: input.appId,
     title: `${input.companyName} 公司研究`,
@@ -8324,6 +8341,80 @@ async function backfillCompanyResearchArtifact(
     summary: summarizeMarkdown(markdown),
     sourceRefs: extractSourceRefs(markdown),
   });
+  await completeCompanyResearchBackgroundRun(options, {
+    companyName: input.companyName,
+    runId: input.runId,
+    traceId: input.traceId,
+    skillCall: input.skillCall,
+    job: waitResult.job,
+    artifact: { artifact: artifact.artifact, markdown, summary: summarizeMarkdown(markdown) },
+    summary: summarizeMarkdown(markdown),
+  });
+}
+
+async function completeCompanyResearchBackgroundRun(
+  options: CrmAgentPackOptions,
+  input: {
+    companyName: string;
+    runId: string;
+    traceId: string;
+    skillCall: AgentToolExecutionResult['toolCalls'][number];
+    job: ExternalSkillJobResponse;
+    artifact: ArtifactDetailResponse;
+    summary: string;
+  },
+): Promise<void> {
+  const skillCall = finishToolCall(
+    { ...input.skillCall },
+    'succeeded',
+    `job=${input.job.jobId}, artifacts=${input.job.artifacts.length}, background=true`,
+  );
+  const artifactCall = createToolCall(input.runId, 'artifact.company_research', input.companyName);
+  finishToolCall(artifactCall, 'succeeded', `公司研究资料已保存为第 ${input.artifact.artifact.version} 版`);
+  const evidence: AgentEvidenceCard[] = [
+    {
+      artifactId: input.artifact.artifact.artifactId,
+      versionId: input.artifact.artifact.versionId,
+      title: input.artifact.artifact.title,
+      version: input.artifact.artifact.version,
+      sourceToolCode: input.artifact.artifact.sourceToolCode,
+      anchorLabel: input.companyName,
+      snippet: input.summary,
+      vectorStatus: input.artifact.artifact.vectorStatus,
+    },
+  ];
+  await completeBackgroundRunWithRetry(options, {
+    runId: input.runId,
+    status: 'completed',
+    headline: '已生成公司研究资料',
+    content: [
+      '## 公司研究已完成',
+      `- 公司：**${input.companyName}**`,
+      `- 资料：${input.artifact.artifact.title} 第 ${input.artifact.artifact.version} 版`,
+      '',
+      '## 研究摘要',
+      input.summary,
+    ].join('\n'),
+    references: [COMPANY_RESEARCH_SERVICE_LABEL, input.artifact.artifact.title],
+    evidence,
+    contextFrame: buildCompanyContextFrame(input.companyName, input.runId),
+    toolCalls: [skillCall, artifactCall],
+    currentStepKey: null,
+  });
+}
+
+async function completeBackgroundRunWithRetry(
+  options: CrmAgentPackOptions,
+  input: Parameters<AgentRunRepository['completeBackgroundRun']>[0],
+): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const completed = await options.repository.completeBackgroundRun(input);
+    if (completed) {
+      return;
+    }
+    await delay(200, false);
+  }
+  console.warn(`[agent] company research background run missing after retries: run=${input.runId}`);
 }
 
 async function resolveMarkdownFromJob(options: CrmAgentPackOptions, job: ExternalSkillJobResponse): Promise<string> {

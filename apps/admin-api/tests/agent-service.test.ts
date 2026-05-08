@@ -43,6 +43,7 @@ function createAgentTestService(input: {
   artifactService?: unknown;
   shadowMetadataService?: unknown;
   companyResearchMaxWaitMs?: number;
+  companyResearchBackgroundMaxWaitMs?: number;
 }) {
   const config = input.config ?? createTestConfig();
   const runtimeParts = createCrmAgentRuntimeParts({
@@ -79,6 +80,7 @@ function createAgentTestService(input: {
       search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
     }) as any,
     companyResearchMaxWaitMs: input.companyResearchMaxWaitMs,
+    companyResearchBackgroundMaxWaitMs: input.companyResearchBackgroundMaxWaitMs,
   });
 
   return new AgentService({
@@ -598,6 +600,108 @@ test('AgentService keeps long-running company research as running instead of too
   assert.equal(runs[0]?.status, 'running');
   assert.equal(toolCalls.some((item) => item.status === 'skipped'), true);
   assert.equal(toolCalls.some((item) => item.status === 'running' && item.finished_at === null), true);
+});
+
+test('AgentService completes long-running company research after background artifact backfill', async () => {
+  const config = createTestConfig();
+  const database = createInMemoryDatabase();
+  const repository = new AgentRunRepository(database);
+  const runningJob = {
+    jobId: 'job-background-001',
+    skillCode: 'ext.company_research_pm',
+    runtimeSkillName: 'company-research',
+    model: 'deepseek-v4-flash',
+    status: 'running',
+    finalText: null,
+    events: [],
+    artifacts: [],
+    error: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  } as const;
+  const finishedJob = {
+    ...runningJob,
+    status: 'succeeded',
+    finalText: [
+      '# 上海松井机械有限公司 公司研究',
+      '',
+      '## 公司概览',
+      '上海松井机械有限公司是一家面向机械行业客户提供设备与服务的企业。',
+      '',
+      '## 业务定位',
+      '公司围绕机械设备、工业服务和客户交付能力形成经营基础。',
+      '',
+      '## 核心风险',
+      '需要关注行业周期、客户集中度与公开信息更新滞后风险。',
+    ].join('\n'),
+    artifacts: [],
+    updatedAt: new Date().toISOString(),
+  } as const;
+  let pollCount = 0;
+  const service = createAgentTestService({
+    config,
+    repository,
+    companyResearchMaxWaitMs: 0,
+    companyResearchBackgroundMaxWaitMs: 1_200,
+    intentFrameService: {
+      createIntentFrame: async () => companyIntent('上海松井机械有限公司'),
+    } as any,
+    externalSkillService: {
+      createSkillJob: async () => runningJob,
+      getSkillJob: async () => {
+        pollCount += 1;
+        return pollCount >= 2 ? finishedJob : runningJob;
+      },
+      getSkillJobArtifact: async () => {
+        throw new Error('not used when finalText is available');
+      },
+    } as any,
+    artifactService: {
+      findLatestCompanyResearchArtifact: async () => null,
+      createCompanyResearchArtifact: async () => ({
+        artifact: {
+          artifactId: 'artifact-background-001',
+          versionId: 'version-background-001',
+          version: 1,
+          title: '上海松井机械有限公司 公司研究',
+          sourceToolCode: 'ext.company_research_pm',
+          vectorStatus: 'indexed',
+          anchors: [{ type: 'company', id: '上海松井机械有限公司', name: '上海松井机械有限公司' }],
+          chunkCount: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+      search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
+    } as any,
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-agent-background-001',
+    sceneKey: 'chat',
+    query: '研究这家公司 上海松井机械有限公司',
+  });
+
+  assert.equal(response.success, true);
+  assert.equal(response.executionState.status, 'running');
+  await new Promise((resolve) => setTimeout(resolve, 1_350));
+
+  const runs = await database.query<{ status: string; evidence_refs_json: unknown }>(
+    `SELECT status, evidence_refs_json FROM ${database.table('agent_runs')}`,
+  );
+  const toolCalls = await database.query<{ tool_code: string; status: string; finished_at: string | null }>(
+    `SELECT tool_code, status, finished_at FROM ${database.table('agent_tool_calls')} ORDER BY started_at`,
+  );
+  const messages = await database.query<{ role: string; content: string; extra_info_json: unknown }>(
+    `SELECT role, content, extra_info_json FROM ${database.table('agent_messages')} ORDER BY created_at`,
+  );
+
+  assert.equal(runs[0]?.status, 'completed');
+  assert.match(JSON.stringify(runs[0]?.evidence_refs_json), /artifact-background-001/);
+  assert.equal(toolCalls.some((item) => item.tool_code === 'ext.company_research_pm' && item.status === 'succeeded' && item.finished_at), true);
+  assert.equal(toolCalls.some((item) => item.tool_code === 'artifact.company_research' && item.status === 'succeeded'), true);
+  assert.equal(messages.some((item) => item.role === 'assistant' && /公司研究已完成/.test(item.content)), true);
+  assert.match(JSON.stringify(messages.at(-1)?.extra_info_json), /artifact-background-001/);
 });
 
 test('AgentService surfaces company research dependency failure without degraded artifact', async () => {
