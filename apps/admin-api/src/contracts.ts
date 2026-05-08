@@ -335,7 +335,7 @@ export interface RecordingTaskResponse {
     source?: string | null;
   };
   archive?: {
-    status: 'unarchived' | 'archived';
+    status: 'unarchived' | 'pending' | 'archived';
     artifactId?: string;
     followupId?: string;
     customerId?: string;
@@ -1145,6 +1145,11 @@ export interface ExternalSkillCatalogItem {
 
 export interface ImageGenerationRequest {
   prompt: string;
+  size?: ImageGenerationSize;
+  quality?: ImageGenerationQuality;
+}
+
+export interface ArtifactImageGenerationRequest {
   size?: ImageGenerationSize;
   quality?: ImageGenerationQuality;
 }

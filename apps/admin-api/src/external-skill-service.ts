@@ -227,7 +227,7 @@ const STATIC_EXTERNAL_SKILLS: StaticExternalSkillDefinition[] = [
     trigger: 'Prompt / 品牌海报 / 场景配图',
     dependencies: ['LinkAPI Images API', 'b64_json 预览归一化'],
     owner: '平台集成组',
-    sla: 'P95 < 30 秒',
+    sla: '超时 150 秒',
     summary: '已接入真实图片生成 provider，当前支持文生图与后台即时预览。',
     provider: IMAGE_PROVIDER_CODE,
     model: 'gpt-image-2',
@@ -340,7 +340,7 @@ export class ExternalSkillService {
       provider: IMAGE_PROVIDER_CODE,
       model: this.options.config.external.image.model,
       owner: '平台集成组',
-      sla: 'P95 < 30 秒',
+      sla: '超时 150 秒',
       summary: imageConfigured
         ? '已接入真实图片生成 provider，当前支持文生图与后台即时预览。'
         : '图片技能已注册，但本地 .env 尚未配置图片 API Key，当前只能展示目录与报错提示。',
@@ -549,6 +549,34 @@ export class ExternalSkillService {
 
   async getSkillJob(jobId: string): Promise<ExternalSkillJobResponse> {
     return this.transformRuntimeJob(await this.skillRuntimeClient.getJob(jobId));
+  }
+
+  async listSkillJobs(input: {
+    skillCode?: string;
+    status?: ExternalSkillJobResponse['status'];
+    query?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}): Promise<{ jobs: ExternalSkillJobResponse[]; page: number; pageSize: number; total: number }> {
+    const runtimeSkill = input.skillCode?.trim()
+      ? this.getRuntimeSkillDefinition(input.skillCode.trim())
+      : null;
+    const result = await this.skillRuntimeClient.listJobs({
+      skillName: runtimeSkill?.runtimeSkillName,
+      status: input.status,
+      query: input.query,
+      page: input.page,
+      pageSize: input.pageSize,
+    });
+    const jobs = result.jobs
+      .map((job) => this.transformRuntimeJob(job))
+      .filter((job) => !input.skillCode?.trim() || job.skillCode === input.skillCode.trim());
+    return {
+      jobs,
+      page: result.page,
+      pageSize: result.pageSize,
+      total: result.total,
+    };
   }
 
   createPresentationSession(

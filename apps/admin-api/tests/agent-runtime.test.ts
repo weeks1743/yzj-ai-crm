@@ -362,6 +362,9 @@ function createAgentTestService(input: {
         throw new Error('not used');
       },
       search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
+      getArtifact: async () => {
+        throw new Error('not used');
+      },
 	    }) as any,
 	    recordingTaskService: input.recordingTaskService as any,
 	    companyResearchMaxWaitMs: input.companyResearchMaxWaitMs,
@@ -1427,6 +1430,574 @@ test('Agent runtime routes complex multi-source customer questions to context su
       assert.match(response.message.content, /分析结果/);
     });
   }
+});
+
+test('Agent runtime anchors visit demand summary with real customer name and focuses answer', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const artifactSearches: Array<{ kind: string; anchors: unknown; limit: number | undefined }> = [];
+  const buildEvidence = (
+    kind: 'company_research' | 'recording_material' | 'analysis_material',
+    index: number,
+    title: string,
+    sourceToolCode: string,
+    snippet: string,
+    score: number,
+  ) => ({
+    artifactId: `artifact-${sourceToolCode}-${index}`,
+    versionId: `version-${sourceToolCode}-${index}`,
+    kind,
+    title,
+    version: 1,
+    sourceToolCode,
+    anchorTypes: kind === 'company_research' ? ['company'] : ['customer'],
+    anchorIds: kind === 'company_research' ? ['绍兴贝斯美化工股份有限公司'] : ['customer-bsm-001'],
+    snippet,
+    score,
+  });
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'query', '贝斯美'),
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey) => {
+        if (objectKey === 'customer') {
+          return {
+            records: [{ formInstId: 'customer-bsm-001', fields: [{ title: '客户名称', value: '绍兴贝斯美化工股份有限公司' }] }],
+            totalElements: 1,
+          };
+        }
+        if (objectKey === 'opportunity') {
+          return {
+            records: [{ formInstId: 'opportunity-bsm-001', fields: [{ title: '商机名称', value: '云之家协同办公平台' }] }],
+            totalElements: 1,
+          };
+        }
+        if (objectKey === 'followup') {
+          return {
+            records: [{ formInstId: 'followup-bsm-001', fields: [{ title: '跟进记录', value: '基于录音资料包「贝斯美拜访.mp3」新增拜访记录' }] }],
+            totalElements: 1,
+          };
+        }
+        return { records: [], totalElements: 0 };
+      },
+      executeGet: async () => ({
+        record: {
+          formInstId: 'customer-bsm-001',
+          fields: [
+            { title: '客户名称', value: '绍兴贝斯美化工股份有限公司' },
+            { title: '客户状态', value: '商机阶段客户' },
+          ],
+        },
+      }),
+    },
+    artifactService: {
+      search: async (input: any) => {
+        const kind = input.kinds?.[0] ?? 'company_research';
+        artifactSearches.push({ kind, anchors: input.anchors, limit: input.limit });
+        const evidence = kind === 'analysis_material'
+          ? [
+              buildEvidence('analysis_material', 1, '贝斯美拜访 - 客户需求工作待办分析', 'ext.customer_needs_todo_analysis', [
+                '# 客户需求工作待办分析',
+                '## 项目/场景背景',
+                '客户需求：需要采购、合同、费用报销流程与 ERP 自动对接；关注海外员工多语言和移动端兼容；希望 AI 知识库降低重复咨询。',
+              ].join('\n'), 0.9),
+              buildEvidence('analysis_material', 2, '贝斯美拜访 - 客户价值定位', 'ext.customer_value_positioning_pm', '价值定位：云之家可围绕协同办公和流程统一提供价值。', 0.88),
+              buildEvidence('analysis_material', 3, '贝斯美拜访 - 拜访会话理解', 'ext.visit_conversation_understanding', '会话摘要：客户提出采购申请、费用报销、项目费用统计、海外多语言、AI 知识库等需求。', 0.86),
+              buildEvidence('analysis_material', 4, '贝斯美拜访 - 客户价值定位', 'ext.customer_value_positioning_pm', '定位声明：可从移动办公和全球组织协同切入。', 0.84),
+              buildEvidence('analysis_material', 5, '贝斯美拜访 - 客户价值定位', 'ext.customer_value_positioning_pm', '待补充的材料/证据：需销售后续补充预算与决策链。', 0.82),
+              buildEvidence('analysis_material', 6, '贝斯美拜访 - 问题陈述', 'ext.problem_statement_pm', [
+                '# 问题陈述',
+                '已确认的需求：客户希望打通采购、合同、费用报销流程与 ERP 自动对接。',
+                '关键问题：海外员工需要多语言和移动端兼容，AI 知识库要降低重复咨询。',
+              ].join('\n'), 0.8),
+            ]
+          : [
+              buildEvidence(
+                kind,
+                1,
+                kind === 'recording_material' ? '贝斯美拜访.mp3 录音资料包' : '绍兴贝斯美化工股份有限公司 公司研究',
+                'test',
+                kind === 'recording_material'
+                  ? '会话摘要：客户提出采购申请、费用报销、项目费用统计、海外多语言、AI 知识库等需求。'
+                  : '公司研究：贝斯美处于数字化和全球化经营阶段。',
+                0.9,
+              ),
+            ];
+        return {
+          query: input.query,
+          vectorStatus: 'searched',
+          qdrantFilter: {},
+          evidence: evidence.slice(0, input.limit ?? 5),
+        };
+      },
+      getArtifact: async (artifactId: string) => ({
+        artifact: {
+          artifactId,
+          versionId: `version-${artifactId}`,
+          version: 1,
+          kind: 'analysis_material',
+          title: '贝斯美拜访 - 客户需求工作待办分析',
+          sourceToolCode: 'ext.customer_needs_todo_analysis',
+          vectorStatus: 'indexed',
+          anchors: [],
+          chunkCount: 6,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        markdown: [
+          '# 客户需求工作待办分析',
+          '',
+          '## 一、客户核心需求',
+          '',
+          '### 需求 1：云之家与金蝶云星空 ERP 深度集成',
+          '- 背景：客户需要采购、合同、费用报销流程与 ERP 自动对接。',
+          '- 目标：减少重复录入，提升审批和财务处理效率。',
+          '',
+          '### 需求 2：全流程业务场景线上化覆盖',
+          '- 背景：客户希望覆盖采购申请、合同审批、费用报销、考勤等流程。',
+          '- 目标：把线下流程迁移到统一协同平台。',
+          '',
+          '### 需求 3：企业级 AI 知识库与智能化应用',
+          '- 背景：客户希望 AI 知识库降低重复咨询。',
+          '- 目标：让员工能自助获取制度、流程和业务知识。',
+          '',
+          '### 需求 4：多语言与海外分支适配',
+          '- 背景：海外员工需要多语言和移动端兼容。',
+          '- 关注点：海外组织使用体验和全球协同效率。',
+          '',
+          '### 需求 5：组织架构按投资关系设计，数据权限隔离',
+          '- 背景：客户存在集团、多主体和投资关系组织。',
+          '- 关注点：不同组织之间要做数据权限隔离。',
+          '',
+          '### 需求 6：研发项目费用化管理与财务系统打通',
+          '- 背景：客户需要统计研发项目费用。',
+          '- 目标：研发费用管理结果要能进入财务系统。',
+        ].join('\n'),
+      }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-context-visit-needs',
+    sceneKey: 'chat',
+    query: '贝斯美上次拜访客户主要提了什么需求',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'meta.context_summary');
+  assert.match(response.message.content, /拜访需求摘要/);
+  assert.match(response.message.content, /客户主要需求/);
+  assert.match(response.message.content, /需求 1：云之家与金蝶云星空 ERP 深度集成/);
+  assert.match(response.message.content, /需求 2：全流程业务场景线上化覆盖/);
+  assert.match(response.message.content, /需求 3：企业级 AI 知识库与智能化应用/);
+  assert.match(response.message.content, /需求 4：多语言与海外分支适配/);
+  assert.match(response.message.content, /需求 5：组织架构按投资关系设计，数据权限隔离/);
+  assert.match(response.message.content, /需求 6：研发项目费用化管理与财务系统打通/);
+  assert.match(response.message.content, /贝斯美拜访 - 问题陈述/);
+  assert.match(response.message.content, /贝斯美拜访 - 拜访会话理解/);
+  assert.doesNotMatch(response.message.content, /价值定位：云之家可围绕协同办公/);
+  assert.doesNotMatch(response.message.content, /项目\/场景背景/);
+  assert.doesNotMatch(response.message.content, /待补充的材料\/证据/);
+  assert.doesNotMatch(response.message.content, /客户编码/);
+  const analysisSearch = artifactSearches.find((item) => item.kind === 'analysis_material');
+  assert.equal(analysisSearch?.limit, 10);
+  const companySearch = artifactSearches.find((item) => item.kind === 'company_research');
+  assert.deepEqual(companySearch?.anchors, [
+    {
+      type: 'company',
+      id: '绍兴贝斯美化工股份有限公司',
+      name: '绍兴贝斯美化工股份有限公司',
+      role: 'primary',
+      confidence: 0.86,
+      bindingStatus: 'unbound',
+    },
+    {
+      type: 'company',
+      id: '贝斯美',
+      name: '贝斯美',
+      role: 'primary',
+      confidence: 0.86,
+      bindingStatus: 'unbound',
+    },
+  ]);
+});
+
+test('Agent runtime falls back to visit demand snippets when full analysis artifact cannot be read', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'query', '贝斯美'),
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey) => {
+        if (objectKey === 'customer') {
+          return {
+            records: [{ formInstId: 'customer-bsm-001', fields: [{ title: '客户名称', value: '贝斯美' }] }],
+            totalElements: 1,
+          };
+        }
+        return { records: [], totalElements: 0 };
+      },
+      executeGet: async () => ({
+        record: {
+          formInstId: 'customer-bsm-001',
+          fields: [{ title: '客户名称', value: '贝斯美' }],
+        },
+      }),
+    },
+    artifactService: {
+      search: async (input: any) => {
+        const kind = input.kinds?.[0] ?? 'company_research';
+        return {
+          query: input.query,
+          vectorStatus: 'searched',
+          qdrantFilter: {},
+          evidence: kind === 'analysis_material'
+            ? [{
+                artifactId: 'artifact-needs-fallback',
+                versionId: 'version-needs-fallback',
+                kind: 'analysis_material',
+                title: '贝斯美拜访 - 客户需求工作待办分析',
+                version: 1,
+                sourceToolCode: 'ext.customer_needs_todo_analysis',
+                anchorTypes: ['customer'],
+                anchorIds: ['customer-bsm-001'],
+                snippet: '客户需求：需要采购、合同、费用报销流程与 ERP 自动对接；关注海外员工多语言。',
+                score: 0.9,
+              }]
+            : [],
+        };
+      },
+      getArtifact: async () => {
+        throw new Error('artifact store offline');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-context-visit-needs-fallback',
+    sceneKey: 'chat',
+    query: '贝斯美上次拜访客户主要提了什么需求',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.match(response.message.content, /采购、合同、费用报销流程与 ERP 自动对接/);
+  assert.equal(
+    response.message.extraInfo.agentTrace.toolCalls.some((item) => item.toolCode === 'artifact.get' && item.status === 'failed'),
+    true,
+  );
+});
+
+test('Agent runtime routes visit focus question to context summary without clarification', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const customerSearchValues: string[] = [];
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: {
+      actionType: 'query',
+      goal: '了解贝斯美的拜访重点',
+      targetType: 'company',
+      targets: [],
+      inputMaterials: [],
+      constraints: [],
+      missingSlots: [],
+      confidence: 0.9,
+      source: 'llm',
+    },
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey, input: any) => {
+        if (objectKey === 'customer') {
+          customerSearchValues.push(String(input.filters?.[0]?.value ?? ''));
+          return {
+            records: [{ formInstId: 'customer-bsm-001', fields: [{ title: '客户名称', value: '绍兴贝斯美化工股份有限公司' }] }],
+            totalElements: 1,
+          };
+        }
+        if (objectKey === 'followup') {
+          return {
+            records: [{ formInstId: 'followup-bsm-001', fields: [{ title: '跟进记录', value: '客户重点关注 ERP 对接、多语言和 AI 知识库。' }] }],
+            totalElements: 1,
+          };
+        }
+        return { records: [], totalElements: 0 };
+      },
+      executeGet: async () => ({
+        record: {
+          formInstId: 'customer-bsm-001',
+          fields: [{ title: '客户名称', value: '绍兴贝斯美化工股份有限公司' }],
+        },
+      }),
+    },
+    artifactService: {
+      search: async (input: any) => {
+        const kind = input.kinds?.[0] ?? 'company_research';
+        return {
+          query: input.query,
+          vectorStatus: 'searched',
+          qdrantFilter: {},
+          evidence: kind === 'recording_material'
+            ? [
+                {
+                  artifactId: 'artifact-recording-bsm',
+                  versionId: 'version-recording-bsm',
+                  kind: 'recording_material',
+                  title: '贝斯美拜访.mp3 录音资料包',
+                  version: 1,
+                  sourceToolCode: 'tongyi.audio.recording_material',
+                  anchorTypes: ['customer'],
+                  anchorIds: ['customer-bsm-001'],
+                  snippet: '## 后续动作建议\n- 可基于本资料包继续执行拜访会话理解、客户需求工作待办分析。',
+                  score: 0.92,
+                },
+                {
+                  artifactId: 'artifact-recording-bsm',
+                  versionId: 'version-recording-bsm',
+                  kind: 'recording_material',
+                  title: '贝斯美拜访.mp3 录音资料包',
+                  version: 1,
+                  sourceToolCode: 'tongyi.audio.recording_material',
+                  anchorTypes: ['customer'],
+                  anchorIds: ['customer-bsm-001'],
+                  snippet: '## 关键主题\n- 云之家与金蝶 ERP 深度集成\n- 采购申请、合同审批和费用报销流程自动化\n- 多语言与海外分支适配\n- AI 知识库降低重复咨询',
+                  score: 0.86,
+                },
+              ]
+            : [],
+        };
+      },
+      getArtifact: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-visit-focus-question',
+    sceneKey: 'chat',
+    query: '贝斯美 拜访重点有哪些',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'meta.context_summary');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.input.summaryType, 'visit_needs');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.input.dataSourceScope, 'combined');
+  assert.equal(customerSearchValues[0], '贝斯美');
+  assert.match(response.message.content, /采购申请、合同审批和费用报销流程自动化/);
+  assert.match(response.message.content, /多语言与海外分支适配/);
+  assert.match(response.message.content, /当前未检索到正式拜访分析结果/);
+  assert.doesNotMatch(response.message.content, /目标对象或任务类型/);
+});
+
+test('Agent runtime carries unique customer lookup into visit needs summary in new conversations', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const conversationKey = 'conv-new-visit-needs-after-customer-lookup';
+  const customerId = 'customer-bsm-001';
+  const customerName = '绍兴贝斯美化工股份有限公司';
+  const customerSearchValues: string[] = [];
+  let customerSearchCount = 0;
+  const unknownIntent = (query: string): IntentFrame => ({
+    actionType: 'clarify',
+    goal: '澄清用户目标',
+    targetType: 'unknown',
+    targets: [],
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: ['目标对象或任务类型'],
+    confidence: 0.42,
+    source: 'fallback',
+    fallbackReason: `test:${query}`,
+  });
+  const customerRecord = {
+    formInstId: customerId,
+    important: { 标题: customerName },
+    fields: [{ title: '客户名称', value: customerName }],
+    fieldMap: {},
+    rawRecord: {},
+  };
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: ({ query }) => unknownIntent(query),
+    shadowMetadataService: {
+      getObject: (objectKey: ShadowObjectKey) => ({
+        fields: objectKey === 'customer' ? createCustomerSearchFields() : [],
+      }),
+      executeSearch: async (objectKey: ShadowObjectKey, input: any) => {
+        if (objectKey === 'customer') {
+          const value = String(input.filters?.[0]?.value ?? '');
+          customerSearchValues.push(value);
+          customerSearchCount += 1;
+          return {
+            objectKey,
+            operation: 'search',
+            mode: 'live',
+            requestBody: {},
+            pageNumber: 1,
+            pageSize: 5,
+            totalPages: customerSearchCount === 1 ? 0 : 1,
+            totalElements: customerSearchCount === 1 ? 0 : 1,
+            records: customerSearchCount === 1 ? [] : [customerRecord],
+          };
+        }
+        if (objectKey === 'opportunity') {
+          return {
+            objectKey,
+            operation: 'search',
+            mode: 'live',
+            requestBody: {},
+            pageNumber: 1,
+            pageSize: 5,
+            totalPages: 1,
+            totalElements: 1,
+            records: [{
+              formInstId: 'opportunity-bsm-001',
+              fields: [{ title: '商机名称', value: '贝斯美云之家协同项目' }],
+              fieldMap: {},
+              rawRecord: {},
+            }],
+          };
+        }
+        if (objectKey === 'followup') {
+          return {
+            objectKey,
+            operation: 'search',
+            mode: 'live',
+            requestBody: {},
+            pageNumber: 1,
+            pageSize: 5,
+            totalPages: 1,
+            totalElements: 1,
+            records: [{
+              formInstId: 'followup-bsm-001',
+              fields: [{ title: '跟进记录', value: '客户重点关注 ERP 对接、多语言和 AI 知识库。' }],
+              fieldMap: {},
+              rawRecord: {},
+            }],
+          };
+        }
+        return {
+          objectKey,
+          operation: 'search',
+          mode: 'live',
+          requestBody: {},
+          pageNumber: 1,
+          pageSize: 5,
+          totalPages: 0,
+          totalElements: 0,
+          records: [],
+        };
+      },
+      executeGet: async () => ({
+        objectKey: 'customer',
+        operation: 'get',
+        mode: 'live',
+        requestBody: {},
+        record: {
+          ...customerRecord,
+          fields: [
+            { title: '客户名称', value: customerName },
+            { title: '客户状态', value: '商机阶段客户' },
+          ],
+        },
+      }),
+    },
+    artifactService: {
+      search: async (input: any) => {
+        const kind = input.kinds?.[0] ?? 'company_research';
+        return {
+          query: input.query,
+          vectorStatus: 'searched',
+          qdrantFilter: {},
+          evidence: kind === 'analysis_material'
+            ? [{
+                artifactId: 'artifact-bsm-needs',
+                versionId: 'version-bsm-needs',
+                kind: 'analysis_material',
+                title: '贝斯美拜访 - 客户需求工作待办分析',
+                version: 1,
+                sourceToolCode: 'ext.customer_needs_todo_analysis',
+                anchorTypes: ['customer'],
+                anchorIds: [customerId],
+                snippet: '需求 4：多语言与海外分支适配。',
+                score: 0.92,
+              }]
+            : [],
+        };
+      },
+      getArtifact: async () => ({
+        artifact: {
+          artifactId: 'artifact-bsm-needs',
+          versionId: 'version-bsm-needs',
+          version: 1,
+          kind: 'analysis_material',
+          title: '贝斯美拜访 - 客户需求工作待办分析',
+          sourceToolCode: 'ext.customer_needs_todo_analysis',
+          vectorStatus: 'indexed',
+          anchors: [],
+          chunkCount: 6,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        markdown: [
+          '# 客户需求工作待办分析',
+          '',
+          '## 一、客户核心需求',
+          '',
+          '### 需求 1：云之家与 ERP 深度集成',
+          '- 背景：客户需要采购、合同、费用报销流程与 ERP 自动对接。',
+          '- 目标：减少重复录入。',
+          '',
+          '### 需求 2：企业级 AI 知识库',
+          '- 背景：客户希望 AI 知识库降低重复咨询。',
+          '- 目标：员工自助获取制度和流程知识。',
+        ].join('\n'),
+      }),
+    },
+  });
+
+  const first = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '贝斯美上次拜访客户主要提了什么需求',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(first.executionState.status, 'waiting_input');
+  assert.equal(first.message.extraInfo.agentTrace.selectedTool?.toolCode, 'meta.context_summary');
+  assert.equal(customerSearchValues[0], '贝斯美');
+
+  const lookup = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '查询 贝斯美客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(lookup.executionState.status, 'completed');
+  assert.equal(lookup.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.search');
+  assert.equal(customerSearchValues[1], '贝斯美');
+
+  const context = await repository.findContextFrame(conversationKey);
+  assert.equal(context?.subject?.type, 'customer');
+  assert.equal(context?.subject?.id, customerId);
+  assert.equal(context?.subject?.name, customerName);
+
+  const followup = await service.chat({
+    conversationKey,
+    sceneKey: 'chat',
+    query: '贝斯美上次拜访客户主要提了什么需求',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(followup.executionState.status, 'completed');
+  assert.equal(followup.message.extraInfo.agentTrace.selectedTool?.toolCode, 'meta.context_summary');
+  assert.equal(
+    followup.message.extraInfo.agentTrace.toolCalls.some((item) => item.toolCode === 'record.customer.search'),
+    false,
+  );
+  assert.match(followup.message.content, /需求 1：云之家与 ERP 深度集成/);
+  assert.match(followup.message.content, /需求 2：企业级 AI 知识库/);
+  assert.doesNotMatch(followup.message.content, /需要先确定客户主体/);
 });
 
 test('Agent runtime returns A2UI surfaces for empty, single, and multi record search results', async () => {

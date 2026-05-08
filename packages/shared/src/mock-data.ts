@@ -1327,7 +1327,7 @@ export const externalSkillRows: ExternalSkillCatalogItem[] = [
     provider: 'linkapi_images_provider',
     model: 'gpt-image-2',
     owner: '平台集成组',
-    sla: 'P95 < 30 秒',
+    sla: '超时 150 秒',
     summary: '通过 HTTP provider 调用图片生成接口，当前只支持文生图和后台即时预览。',
   },
   {

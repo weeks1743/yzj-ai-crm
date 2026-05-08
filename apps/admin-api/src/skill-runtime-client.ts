@@ -59,6 +59,13 @@ interface SkillRuntimeJobResponse {
   updatedAt: string;
 }
 
+interface SkillRuntimeJobListResponse {
+  jobs: SkillRuntimeJobResponse[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 interface SkillRuntimeCreateJobRequest extends ExternalSkillJobRequest {
   templateId?: string;
   presentationPrompt?: string;
@@ -206,6 +213,33 @@ export class SkillRuntimeClient {
 
   getJob(jobId: string): Promise<SkillRuntimeJobResponse> {
     return this.fetchJson<SkillRuntimeJobResponse>(`/api/jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  listJobs(input: {
+    skillName?: string;
+    status?: SkillRuntimeJobResponse['status'];
+    query?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}): Promise<SkillRuntimeJobListResponse> {
+    const params = new URLSearchParams();
+    if (input.skillName?.trim()) {
+      params.set('skillName', input.skillName.trim());
+    }
+    if (input.status?.trim()) {
+      params.set('status', input.status.trim());
+    }
+    if (input.query?.trim()) {
+      params.set('query', input.query.trim());
+    }
+    if (input.page) {
+      params.set('page', String(input.page));
+    }
+    if (input.pageSize) {
+      params.set('pageSize', String(input.pageSize));
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.fetchJson<SkillRuntimeJobListResponse>(`/api/jobs${suffix}`);
   }
 
   createPresentationSession(

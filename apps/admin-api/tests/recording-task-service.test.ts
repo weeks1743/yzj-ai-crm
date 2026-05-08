@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import type { RecordingTaskRecord } from '../src/recording-task-repository.js';
 import { RecordingTaskService } from '../src/recording-task-service.js';
 import { createTestConfig } from './test-helpers.js';
@@ -249,6 +250,261 @@ test('archiveTask saves recording_material only after followup commit with forma
     ],
   );
   assert.doesNotMatch(artifactInput.markdown, /transcription\.json|translations\.json|textPolish\.json/);
+});
+
+test('requestArchiveTask stores pending archive when recording is not complete', async () => {
+  const config = createTestConfig({ embeddingApiKey: null });
+  const record: RecordingTaskRecord = {
+    taskId: 'recording-task-pending-archive',
+    eid: config.yzj.eid,
+    appId: config.yzj.appId,
+    serviceTaskId: 'audio-task-pending-archive',
+    providerDataId: 'DATA-PENDING',
+    fixtureTaskId: null,
+    status: 'running',
+    file: {
+      fileName: '贝斯美拜访.mp3',
+      mimeType: 'audio/mpeg',
+      size: 456,
+      md5: 'md5-pending-archive',
+    },
+    anchors: {},
+    servicePayload: {},
+    artifactId: null,
+    materialPath: null,
+    materialSource: null,
+    errorMessage: null,
+    createdBy: 'tester',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const service = new RecordingTaskService({
+    config,
+    repository: {
+      getTask: async () => record,
+      updateFromService: async (input: any) => {
+        Object.assign(record, {
+          status: input.status,
+          providerDataId: input.providerDataId ?? record.providerDataId,
+          fixtureTaskId: input.fixtureTaskId ?? record.fixtureTaskId,
+          anchors: input.anchors ?? record.anchors,
+          servicePayload: input.servicePayload,
+          materialPath: input.materialPath ?? record.materialPath,
+          materialSource: input.materialSource ?? record.materialSource,
+          errorMessage: input.errorMessage ?? null,
+        });
+        return record;
+      },
+    } as any,
+    client: {
+      getTask: async () => ({
+        taskId: record.serviceTaskId,
+        provider: 'tongyi-tingwu',
+        status: 'running',
+        providerDataId: record.providerDataId,
+        fixtureTaskId: null,
+        file: record.file,
+        anchors: record.anchors,
+        stages: [],
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      }),
+    } as any,
+    artifactService: {
+      createRecordingMaterialArtifact: async () => {
+        throw new Error('should not archive before task succeeds');
+      },
+    } as any,
+  });
+
+  const response = await service.requestArchiveTask({
+    taskId: record.taskId,
+    customerId: 'customer-bsm-001',
+    opportunityId: 'opportunity-bsm-001',
+    followupId: 'followup-bsm-001',
+    createdBy: 'operator-001',
+  });
+
+  assert.equal(response.archive?.status, 'pending');
+  assert.equal(response.archive?.customerId, 'customer-bsm-001');
+  assert.equal(response.archive?.opportunityId, 'opportunity-bsm-001');
+  assert.equal(response.archive?.followupId, 'followup-bsm-001');
+  assert.deepEqual(record.anchors, {
+    customer: 'customer-bsm-001',
+    opportunity: 'opportunity-bsm-001',
+    followup: 'followup-bsm-001',
+  });
+  assert.deepEqual((record.servicePayload.pendingArchive as any).customerId, 'customer-bsm-001');
+});
+
+test('requestArchiveTask repairs downstream analysis for already archived recording association', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-archived-repair-'));
+  try {
+    const materialPath = join(tempDir, 'recording-material.md');
+    writeFileSync(materialPath, '# 录音资料包\n\n客户关注采购、合同和费用报销断点。', 'utf8');
+    const config = createTestConfig({ embeddingApiKey: null });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-archived-repair',
+      eid: config.yzj.eid,
+      appId: config.yzj.appId,
+      serviceTaskId: 'audio-task-archived-repair',
+      providerDataId: 'DATA-ARCHIVED-REPAIR',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: '贝斯美拜访.mp3',
+        mimeType: 'audio/mpeg',
+        size: 456,
+        md5: 'md5-archived-repair',
+      },
+      anchors: {
+        customer: 'customer-bsm-001',
+        opportunity: 'opportunity-bsm-001',
+        followup: 'followup-bsm-001',
+      },
+      servicePayload: {
+        archivedArtifactId: 'artifact-recording-formal',
+        archivedFollowupId: 'followup-bsm-001',
+      },
+      artifactId: 'artifact-recording-formal',
+      materialPath,
+      materialSource: 'generated',
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const skillRequests: Array<{ skillCode: string; input: any }> = [];
+    const analysisInputs: any[] = [];
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+        updateFromService: async (input: any) => {
+          record.materialPath = input.materialPath ?? record.materialPath;
+          record.materialSource = input.materialSource ?? record.materialSource;
+          record.servicePayload = input.servicePayload ?? record.servicePayload;
+          return record;
+        },
+        attachArtifact: async () => {
+          throw new Error('already archived recording should not rewrite recording artifact');
+        },
+      } as any,
+      client: {
+        getTask: async () => ({
+          taskId: record.serviceTaskId,
+          provider: 'tongyi-tingwu',
+          status: 'succeeded',
+          providerDataId: record.providerDataId,
+          fixtureTaskId: null,
+          file: record.file,
+          anchors: record.anchors,
+          stages: [],
+          material: {
+            available: true,
+            path: materialPath,
+            source: 'generated',
+            markdown: readFileSync(materialPath, 'utf8'),
+          },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }),
+        materialize: async () => ({
+          taskId: record.serviceTaskId,
+          provider: 'tongyi-tingwu',
+          status: 'succeeded',
+          providerDataId: record.providerDataId,
+          fixtureTaskId: null,
+          file: record.file,
+          anchors: record.anchors,
+          stages: [],
+          material: {
+            available: true,
+            path: materialPath,
+            source: 'generated',
+            markdown: readFileSync(materialPath, 'utf8'),
+          },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }),
+      } as any,
+      artifactService: {
+        createAnalysisMaterialArtifact: async (input: any) => {
+          analysisInputs.push(input);
+          return { artifact: { artifactId: `artifact-${input.skillCode}` } };
+        },
+      } as any,
+      externalSkillService: {
+        listSkillJobs: async (input: any) => {
+          if (input.status === 'succeeded' && input.query === record.file.fileName) {
+            return {
+              page: 1,
+              pageSize: 25,
+              total: 1,
+              jobs: [
+                {
+                  jobId: 'job-old-problem-001',
+                  skillCode: 'ext.problem_statement_pm',
+                  runtimeSkillName: 'problem-statement',
+                  model: 'deepseek-v4-flash',
+                  status: 'succeeded',
+                  finalText: '# 问题陈述\n\n旧分析已完成，客户关注采购、合同和费用报销断点。',
+                  events: [],
+                  artifacts: [],
+                  error: null,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                },
+              ],
+            };
+          }
+          return { page: 1, pageSize: 25, total: 0, jobs: [] };
+        },
+        createSkillJob: async (skillCode: string, input: any) => {
+          skillRequests.push({ skillCode, input });
+          return {
+            jobId: `job-rerun-${skillCode}`,
+            skillCode,
+            runtimeSkillName: 'problem-statement',
+            model: 'deepseek-v4-flash',
+            status: 'succeeded',
+            finalText: '# 问题陈述\n\n客户需要解决采购、合同和费用报销流程断点。',
+            events: [],
+            artifacts: [],
+            error: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      } as any,
+    });
+
+    const response = await service.requestArchiveTask({
+      taskId: record.taskId,
+      customerId: record.anchors.customer!,
+      opportunityId: record.anchors.opportunity!,
+      followupId: record.anchors.followup!,
+      createdBy: 'operator-001',
+    });
+
+    assert.equal(response.archive?.status, 'archived');
+    assert.equal(skillRequests.length, 1);
+    assert.equal(skillRequests[0].skillCode, 'ext.problem_statement_pm');
+    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
+    assert.equal(analysisInputs.length, 1);
+    assert.equal(analysisInputs[0].skillCode, 'ext.problem_statement_pm');
+    assert.deepEqual(
+      analysisInputs[0].anchors.map((item: any) => `${item.type}:${item.id}:${item.bindingStatus ?? ''}`),
+      [
+        'source_file:md5-archived-repair:',
+        'customer:customer-bsm-001:bound',
+        'opportunity:opportunity-bsm-001:bound',
+        'followup:followup-bsm-001:bound',
+      ],
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('uploadTask falls back to completed md5 cache when audio service sync is unavailable', async () => {
@@ -780,6 +1036,822 @@ test('getSkillJob upserts one formal analysis_material when archived recording j
         'followup:followup-bsm-001:bound',
       ],
     );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('archiveCompletedSkillJobs persists succeeded downstream jobs after recording archive', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-completed-job-archive-'));
+  try {
+    const materialPath = join(tempDir, 'recording-material.md');
+    writeFileSync(materialPath, '# 录音资料包\n\n客户关注采购和报销流程。', 'utf8');
+    const envPath = join(tempDir, '.env');
+    writeFileSync(envPath, '', 'utf8');
+    mkdirSync(join(tempDir, '.local'), { recursive: true });
+    const runtimeDbPath = join(tempDir, '.local', 'skill-runtime.sqlite');
+    const runtimeDb = new DatabaseSync(runtimeDbPath);
+    runtimeDb.exec(`
+      CREATE TABLE jobs (
+        job_id TEXT PRIMARY KEY,
+        skill_name TEXT NOT NULL,
+        model TEXT NOT NULL,
+        request_text TEXT NOT NULL,
+        attachments_json TEXT NOT NULL,
+        working_directory TEXT,
+        status TEXT NOT NULL,
+        final_text TEXT,
+        error_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
+    `);
+    runtimeDb.prepare(`
+      INSERT INTO jobs (
+        job_id, skill_name, model, request_text, attachments_json, working_directory,
+        status, final_text, error_json, created_at, updated_at, started_at, finished_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, ?)
+    `).run(
+      'job-needs-001',
+      'customer-needs-todo-analysis',
+      'deepseek-v4-flash',
+      '输入材料是附件中的通义结构化录音分析文件和录音资料包，来源录音文件：贝斯美拜访.mp3。建议关联上下文：客户：customer-bsm-001；商机：opportunity-bsm-001；跟进记录：followup-bsm-001。',
+      '[]',
+      'succeeded',
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+    runtimeDb.close();
+
+    const config = createTestConfig({ embeddingApiKey: null, envFilePath: envPath });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-archive-completed',
+      eid: config.yzj.eid,
+      appId: config.yzj.appId,
+      serviceTaskId: 'audio-task-archive-completed',
+      providerDataId: 'DATA-ARCHIVE',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: '贝斯美拜访.mp3',
+        mimeType: 'audio/mpeg',
+        size: 123,
+        md5: 'md5-archive-completed',
+      },
+      anchors: {
+        customer: 'customer-bsm-001',
+        opportunity: 'opportunity-bsm-001',
+        followup: 'followup-bsm-001',
+      },
+      servicePayload: {},
+      artifactId: 'artifact-recording-formal',
+      materialPath,
+      materialSource: 'generated',
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const analysisInputs: any[] = [];
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+        updateFromService: async () => record,
+      } as any,
+      client: {
+        getTask: async () => {
+          throw new Error('audio service offline during completed job archive');
+        },
+      } as any,
+      artifactService: {
+        createAnalysisMaterialArtifact: async (input: any) => {
+          analysisInputs.push(input);
+          return { artifact: { artifactId: 'artifact-analysis-needs' } };
+        },
+      } as any,
+      externalSkillService: {
+        getSkillJob: async (jobId: string) => ({
+          jobId,
+          skillCode: 'ext.customer_needs_todo_analysis',
+          runtimeSkillName: 'customer-needs-todo-analysis',
+          model: 'deepseek-v4-flash',
+          status: 'succeeded',
+          finalText: '# 客户需求工作待办分析\n\n客户需要打通采购、合同和报销流程。',
+          events: [],
+          artifacts: [],
+          error: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      } as any,
+    });
+
+    const count = await service.archiveCompletedSkillJobs(record.taskId);
+
+    assert.equal(count, 1);
+    assert.equal(analysisInputs.length, 1);
+    assert.equal(analysisInputs[0].skillCode, 'ext.customer_needs_todo_analysis');
+    assert.equal(analysisInputs[0].sourceJobId, 'job-needs-001');
+    assert.equal(analysisInputs[0].title, '贝斯美拜访 - 客户需求工作待办分析');
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('rerunCompletedSkillJobs waits for rerun and persists formal problem statement', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-problem-rerun-'));
+  try {
+    const materialPath = join(tempDir, 'recording-material.md');
+    writeFileSync(materialPath, '# 录音资料包\n\n客户关注采购和报销流程。', 'utf8');
+    const envPath = join(tempDir, '.env');
+    writeFileSync(envPath, '', 'utf8');
+    mkdirSync(join(tempDir, '.local'), { recursive: true });
+    const runtimeDbPath = join(tempDir, '.local', 'skill-runtime.sqlite');
+    const runtimeDb = new DatabaseSync(runtimeDbPath);
+    runtimeDb.exec(`
+      CREATE TABLE jobs (
+        job_id TEXT PRIMARY KEY,
+        skill_name TEXT NOT NULL,
+        model TEXT NOT NULL,
+        request_text TEXT NOT NULL,
+        attachments_json TEXT NOT NULL,
+        working_directory TEXT,
+        status TEXT NOT NULL,
+        final_text TEXT,
+        error_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
+    `);
+    runtimeDb.prepare(`
+      INSERT INTO jobs (
+        job_id, skill_name, model, request_text, attachments_json, working_directory,
+        status, final_text, error_json, created_at, updated_at, started_at, finished_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, ?)
+    `).run(
+      'job-problem-old',
+      'problem-statement',
+      'deepseek-v4-flash',
+      '输入材料是附件中的通义结构化录音分析文件和录音资料包，来源录音文件：贝斯美拜访.mp3。建议关联上下文：客户：customer-bsm-001；商机：opportunity-bsm-001；跟进记录：followup-bsm-001。',
+      '[]',
+      'succeeded',
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+    runtimeDb.close();
+
+    const config = createTestConfig({ embeddingApiKey: null, envFilePath: envPath });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-problem-rerun',
+      eid: config.yzj.eid,
+      appId: config.yzj.appId,
+      serviceTaskId: 'audio-task-problem-rerun',
+      providerDataId: 'DATA-PROBLEM',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: '贝斯美拜访.mp3',
+        mimeType: 'audio/mpeg',
+        size: 123,
+        md5: 'md5-problem-rerun',
+      },
+      anchors: {
+        customer: 'customer-bsm-001',
+        opportunity: 'opportunity-bsm-001',
+        followup: 'followup-bsm-001',
+      },
+      servicePayload: {},
+      artifactId: 'artifact-recording-formal',
+      materialPath,
+      materialSource: 'generated',
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const skillRequests: Array<{ skillCode: string; input: any }> = [];
+    const analysisInputs: any[] = [];
+    let getCreatedJobCount = 0;
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+        updateFromService: async () => record,
+      } as any,
+      client: {
+        getTask: async () => {
+          throw new Error('audio service offline during problem statement rerun');
+        },
+        materialize: async () => ({
+          taskId: record.serviceTaskId,
+          provider: 'tongyi-tingwu',
+          status: 'succeeded',
+          providerDataId: record.providerDataId,
+          fixtureTaskId: null,
+          file: record.file,
+          anchors: record.anchors,
+          stages: [],
+          material: {
+            available: true,
+            path: materialPath,
+            source: 'generated',
+            markdown: readFileSync(materialPath, 'utf8'),
+          },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }),
+      } as any,
+      artifactService: {
+        createAnalysisMaterialArtifact: async (input: any) => {
+          analysisInputs.push(input);
+          return { artifact: { artifactId: 'artifact-problem-formal' } };
+        },
+      } as any,
+      externalSkillService: {
+        getSkillJob: async (jobId: string) => {
+          if (jobId === 'job-problem-old') {
+            return {
+              jobId,
+              skillCode: 'ext.problem_statement_pm',
+              runtimeSkillName: 'problem-statement',
+              model: 'deepseek-v4-flash',
+              status: 'succeeded',
+              finalText: '# 问题陈述\n\n> 上下文状态：待绑定上下文\n\n录音未关联正式客户/商机。',
+              events: [],
+              artifacts: [],
+              error: null,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+          }
+          getCreatedJobCount += 1;
+          return {
+            jobId,
+            skillCode: 'ext.problem_statement_pm',
+            runtimeSkillName: 'problem-statement',
+            model: 'deepseek-v4-flash',
+            status: getCreatedJobCount === 1 ? 'running' : 'succeeded',
+            finalText: getCreatedJobCount === 1
+              ? null
+              : '# 问题陈述\n\n客户需要打通采购、合同和报销流程。',
+            events: [],
+            artifacts: [],
+            error: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+        createSkillJob: async (skillCode: string, input: any) => {
+          skillRequests.push({ skillCode, input });
+          return {
+            jobId: 'job-problem-rerun',
+            skillCode,
+            runtimeSkillName: 'problem-statement',
+            model: 'deepseek-v4-flash',
+            status: 'running',
+            finalText: null,
+            events: [],
+            artifacts: [],
+            error: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      } as any,
+    });
+
+    const count = await service.rerunCompletedSkillJobs(record.taskId);
+
+    assert.equal(count, 1);
+    assert.deepEqual(skillRequests.map((item) => item.skillCode), ['ext.problem_statement_pm']);
+    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
+    assert.equal(analysisInputs.length, 1);
+    assert.equal(analysisInputs[0].skillCode, 'ext.problem_statement_pm');
+    assert.equal(analysisInputs[0].sourceJobId, 'job-problem-rerun');
+    assert.equal(analysisInputs[0].title, '贝斯美拜访 - 问题陈述');
+    assert.doesNotMatch(analysisInputs[0].markdown, /待绑定上下文|未关联正式客户\/商机/);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ensureCoreAnalysisMaterials reruns visit understanding, needs analysis, and problem statement for archived recording', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-core-analysis-'));
+  try {
+    const materialPath = join(tempDir, 'recording-material.md');
+    writeFileSync(materialPath, '# 录音资料包\n\n## 会话摘要\n客户关注 ERP 对接、采购合同报销和多语言。', 'utf8');
+    const config = createTestConfig({ embeddingApiKey: null });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-core-analysis',
+      eid: config.yzj.eid,
+      appId: config.yzj.appId,
+      serviceTaskId: 'audio-task-core-analysis',
+      providerDataId: 'DATA-CORE-ANALYSIS',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: '贝斯美拜访.mp3',
+        mimeType: 'audio/mpeg',
+        size: 123,
+        md5: 'md5-core-analysis',
+      },
+      anchors: {
+        customer: 'customer-bsm-001',
+        opportunity: 'opportunity-bsm-001',
+        followup: 'followup-bsm-001',
+      },
+      servicePayload: {},
+      artifactId: 'artifact-recording-formal',
+      materialPath,
+      materialSource: 'generated',
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const skillRequests: Array<{ skillCode: string; input: any }> = [];
+    const analysisInputs: any[] = [];
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+        updateFromService: async () => record,
+      } as any,
+      client: {
+        getTask: async () => {
+          throw new Error('audio service offline during core analysis repair');
+        },
+        materialize: async () => ({
+          taskId: record.serviceTaskId,
+          provider: 'tongyi-tingwu',
+          status: 'succeeded',
+          providerDataId: record.providerDataId,
+          fixtureTaskId: null,
+          file: record.file,
+          anchors: record.anchors,
+          stages: [],
+          material: {
+            available: true,
+            path: materialPath,
+            source: 'generated',
+            markdown: readFileSync(materialPath, 'utf8'),
+          },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }),
+      } as any,
+      artifactService: {
+        createAnalysisMaterialArtifact: async (input: any) => {
+          analysisInputs.push(input);
+          return { artifact: { artifactId: `artifact-${input.skillCode}` } };
+        },
+      } as any,
+      externalSkillService: {
+        createSkillJob: async (skillCode: string, input: any) => {
+          skillRequests.push({ skillCode, input });
+          return {
+            jobId: `job-${skillCode}`,
+            skillCode,
+            runtimeSkillName: skillCode === 'ext.visit_conversation_understanding'
+              ? 'visit-conversation-understanding'
+              : skillCode === 'ext.problem_statement_pm'
+                ? 'problem-statement'
+                : 'customer-needs-todo-analysis',
+            model: 'deepseek-v4-flash',
+            status: 'succeeded',
+            finalText: skillCode === 'ext.visit_conversation_understanding'
+              ? '# 拜访会话理解\n\n客户重点关注 ERP 对接和多语言。'
+              : skillCode === 'ext.problem_statement_pm'
+                ? '# 问题陈述\n\n客户需要解决采购、合同和费用报销流程断点。'
+                : '# 客户需求工作待办分析\n\n## 一、客户核心需求\n\n### 需求 1：ERP 对接\n- 背景：客户需要采购、合同、费用报销流程与 ERP 自动对接。',
+            events: [],
+            artifacts: [],
+            error: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      } as any,
+    });
+
+    const count = await service.ensureCoreAnalysisMaterials(record.taskId);
+
+    assert.equal(count, 3);
+    assert.deepEqual(skillRequests.map((item) => item.skillCode), [
+      'ext.visit_conversation_understanding',
+      'ext.customer_needs_todo_analysis',
+      'ext.problem_statement_pm',
+    ]);
+    assert.equal(analysisInputs.length, 3);
+    assert.deepEqual(analysisInputs.map((item) => item.skillCode), [
+      'ext.visit_conversation_understanding',
+      'ext.customer_needs_todo_analysis',
+      'ext.problem_statement_pm',
+    ]);
+    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
+    assert.deepEqual(
+      analysisInputs[1].anchors.map((item: any) => `${item.type}:${item.id}:${item.bindingStatus ?? ''}`),
+      [
+        'source_file:md5-core-analysis:',
+        'customer:customer-bsm-001:bound',
+        'opportunity:opportunity-bsm-001:bound',
+        'followup:followup-bsm-001:bound',
+      ],
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('getTask completes pending archive and reruns existing downstream analysis with formal anchors', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-pending-auto-archive-'));
+  try {
+    const materialPath = join(tempDir, 'recording-material.md');
+    writeFileSync(materialPath, '# 录音资料包\n\n客户关注采购和报销流程。', 'utf8');
+    const envPath = join(tempDir, '.env');
+    writeFileSync(envPath, '', 'utf8');
+    mkdirSync(join(tempDir, '.local'), { recursive: true });
+    const runtimeDbPath = join(tempDir, '.local', 'skill-runtime.sqlite');
+    const runtimeDb = new DatabaseSync(runtimeDbPath);
+    runtimeDb.exec(`
+      CREATE TABLE jobs (
+        job_id TEXT PRIMARY KEY,
+        skill_name TEXT NOT NULL,
+        model TEXT NOT NULL,
+        request_text TEXT NOT NULL,
+        attachments_json TEXT NOT NULL,
+        working_directory TEXT,
+        status TEXT NOT NULL,
+        final_text TEXT,
+        error_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
+    `);
+    runtimeDb.prepare(`
+      INSERT INTO jobs (
+        job_id, skill_name, model, request_text, attachments_json, working_directory,
+        status, final_text, error_json, created_at, updated_at, started_at, finished_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, ?)
+    `).run(
+      'job-old-needs-001',
+      'customer-needs-todo-analysis',
+      'deepseek-v4-flash',
+      '来源录音文件：贝斯美拜访.mp3。当前录音未绑定客户/商机。',
+      '[]',
+      'succeeded',
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+    runtimeDb.close();
+
+    const config = createTestConfig({ embeddingApiKey: null, envFilePath: envPath });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-pending-auto',
+      eid: config.yzj.eid,
+      appId: config.yzj.appId,
+      serviceTaskId: 'audio-task-pending-auto',
+      providerDataId: 'DATA-PENDING-AUTO',
+      fixtureTaskId: null,
+      status: 'running',
+      file: {
+        fileName: '贝斯美拜访.mp3',
+        mimeType: 'audio/mpeg',
+        size: 123,
+        md5: 'md5-pending-auto',
+      },
+      anchors: {},
+      servicePayload: {
+        pendingArchive: {
+          customerId: 'customer-bsm-001',
+          opportunityId: 'opportunity-bsm-001',
+          followupId: 'followup-bsm-001',
+          createdBy: 'operator-001',
+          requestedAt: new Date().toISOString(),
+        },
+      },
+      artifactId: null,
+      materialPath,
+      materialSource: 'generated',
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const recordingInputs: any[] = [];
+    const analysisInputs: any[] = [];
+    const skillRequests: any[] = [];
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+        updateFromService: async (input: any) => {
+          Object.assign(record, {
+            status: input.status,
+            providerDataId: input.providerDataId ?? record.providerDataId,
+            fixtureTaskId: input.fixtureTaskId ?? record.fixtureTaskId,
+            anchors: input.anchors ? { ...record.anchors, ...input.anchors } : record.anchors,
+            servicePayload: input.servicePayload,
+            materialPath: input.materialPath ?? record.materialPath,
+            materialSource: input.materialSource ?? record.materialSource,
+            errorMessage: input.errorMessage ?? null,
+          });
+          return record;
+        },
+        attachArtifact: async (input: any) => {
+          record.artifactId = input.artifactId;
+          record.materialPath = input.materialPath ?? record.materialPath;
+          record.materialSource = input.materialSource ?? record.materialSource;
+          record.servicePayload = input.servicePayload;
+          return record;
+        },
+      } as any,
+      client: {
+        getTask: async () => ({
+          taskId: record.serviceTaskId,
+          provider: 'tongyi-tingwu',
+          status: 'succeeded',
+          providerDataId: record.providerDataId,
+          fixtureTaskId: null,
+          file: record.file,
+          anchors: record.anchors,
+          stages: [],
+          material: {
+            available: true,
+            path: materialPath,
+            source: 'generated',
+            markdown: readFileSync(materialPath, 'utf8'),
+          },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }),
+        materialize: async (input: any) => ({
+          taskId: record.serviceTaskId,
+          provider: 'tongyi-tingwu',
+          status: 'succeeded',
+          providerDataId: record.providerDataId,
+          fixtureTaskId: null,
+          file: record.file,
+          anchors: input.anchors,
+          stages: [],
+          material: {
+            available: true,
+            path: materialPath,
+            source: 'generated',
+            markdown: '# 录音资料包\n\n## 会话摘要\n客户确认采购和报销流程需要打通。',
+          },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }),
+      } as any,
+      artifactService: {
+        createRecordingMaterialArtifact: async (input: any) => {
+          recordingInputs.push(input);
+          return {
+            artifact: {
+              artifactId: 'artifact-recording-pending-auto',
+              versionId: 'version-recording-pending-auto',
+              version: 1,
+              kind: 'recording_material',
+              title: input.title,
+              sourceToolCode: input.sourceToolCode,
+              vectorStatus: 'pending_config',
+              anchors: input.anchors,
+              chunkCount: 1,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          };
+        },
+        createAnalysisMaterialArtifact: async (input: any) => {
+          analysisInputs.push(input);
+          return { artifact: { artifactId: 'artifact-analysis-rerun' } };
+        },
+      } as any,
+      externalSkillService: {
+        getSkillJob: async (jobId: string) => ({
+          jobId,
+          skillCode: 'ext.customer_needs_todo_analysis',
+          runtimeSkillName: 'customer-needs-todo-analysis',
+          model: 'deepseek-v4-flash',
+          status: 'succeeded',
+          finalText: '# 客户需求工作待办分析\n\n客户需要采购、合同和费用报销流程。',
+          events: [],
+          artifacts: [],
+          error: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+        createSkillJob: async (skillCode: string, input: any) => {
+          skillRequests.push({ skillCode, input });
+          return {
+            jobId: 'job-new-needs-001',
+            skillCode,
+            runtimeSkillName: 'customer-needs-todo-analysis',
+            model: 'deepseek-v4-flash',
+            status: 'succeeded',
+            finalText: '# 客户需求工作待办分析\n\n客户需要采购、合同和费用报销流程。',
+            events: [],
+            artifacts: [],
+            error: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      } as any,
+    });
+
+    const response = await service.getTask(record.taskId);
+
+    assert.equal(response.archive?.status, 'archived');
+    assert.equal(response.archive?.artifactId, 'artifact-recording-pending-auto');
+    assert.equal(record.servicePayload.pendingArchive, undefined);
+    assert.equal(recordingInputs.length, 1);
+    assert.equal(skillRequests.length, 1);
+    assert.match(skillRequests[0].input.requestText, /不得输出“未关联客户\/商机”“未关联商机”“录音未绑定”/);
+    assert.equal(analysisInputs.length, 1);
+    assert.deepEqual(
+      analysisInputs[0].anchors.map((item: any) => `${item.type}:${item.id}:${item.bindingStatus ?? ''}`),
+      [
+        'source_file:md5-pending-auto:',
+        'customer:customer-bsm-001:bound',
+        'opportunity:opportunity-bsm-001:bound',
+        'followup:followup-bsm-001:bound',
+      ],
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('formal analysis material blocks stale unbound context markdown', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-stale-analysis-'));
+  try {
+    const materialPath = join(tempDir, 'recording-material.md');
+    writeFileSync(materialPath, '# 录音资料包\n\n客户关注预算。', 'utf8');
+    const config = createTestConfig({ embeddingApiKey: null });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-stale-analysis',
+      eid: config.yzj.eid,
+      appId: config.yzj.appId,
+      serviceTaskId: 'audio-task-stale-analysis',
+      providerDataId: 'DATA-STALE',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: '贝斯美拜访.mp3',
+        mimeType: 'audio/mpeg',
+        size: 123,
+        md5: 'md5-stale-analysis',
+      },
+      anchors: {
+        customer: 'customer-bsm-001',
+        opportunity: 'opportunity-bsm-001',
+        followup: 'followup-bsm-001',
+      },
+      servicePayload: {},
+      artifactId: 'artifact-recording-formal',
+      materialPath,
+      materialSource: 'generated',
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    let createAnalysisCalled = false;
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+        updateFromService: async () => record,
+      } as any,
+      client: {
+        getTask: async () => {
+          throw new Error('audio service offline during stale guard');
+        },
+      } as any,
+      artifactService: {
+        createAnalysisMaterialArtifact: async () => {
+          createAnalysisCalled = true;
+          throw new Error('should not persist stale markdown');
+        },
+      } as any,
+      externalSkillService: {
+        getSkillJob: async (jobId: string) => ({
+          jobId,
+          skillCode: 'ext.customer_value_positioning_pm',
+          runtimeSkillName: 'customer-value-positioning',
+          model: 'deepseek-v4-flash',
+          status: 'succeeded',
+          finalText: '# 客户价值定位：贝斯美（未关联商机）\n\n当前录音未绑定客户/商机。',
+          events: [],
+          artifacts: [],
+          error: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      } as any,
+    });
+
+    await assert.rejects(
+      () => service.getSkillJob(record.taskId, 'ext.customer_value_positioning_pm', 'job-stale-001'),
+      /旧上下文文案/,
+    );
+    assert.equal(createAnalysisCalled, false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('archiveCompletedSkillJobs recovers markdown artifacts when runtime job index is missing', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-artifact-recovery-'));
+  try {
+    const envPath = join(tempDir, '.env');
+    writeFileSync(envPath, '', 'utf8');
+    const artifactRoot = join(tempDir, '.local', 'skill-runtime-artifacts');
+    const jobId = 'job-recovered-needs-001';
+    mkdirSync(join(artifactRoot, jobId), { recursive: true });
+    mkdirSync(join(artifactRoot, '_jobs', jobId, 'inputs'), { recursive: true });
+    writeFileSync(
+      join(artifactRoot, jobId, `customer-needs-todo-analysis-${jobId}.md`),
+      '# 客户需求工作待办分析\n\n客户需要打通采购、合同和报销流程。',
+      'utf8',
+    );
+    writeFileSync(
+      join(artifactRoot, '_jobs', jobId, 'inputs', 'recording-material.md'),
+      '# 录音资料包\n\n来源文件：贝斯美拜访.mp3。\n录音任务：recording-task-artifact-recovery。\n客户需要采购、合同和报销流程。',
+      'utf8',
+    );
+
+    const config = createTestConfig({ embeddingApiKey: null, envFilePath: envPath });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-artifact-recovery',
+      eid: config.yzj.eid,
+      appId: config.yzj.appId,
+      serviceTaskId: 'audio-task-artifact-recovery',
+      providerDataId: 'DATA-ARTIFACT-RECOVERY',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: '贝斯美拜访.mp3',
+        mimeType: 'audio/mpeg',
+        size: 123,
+        md5: 'md5-artifact-recovery',
+      },
+      anchors: {
+        customer: 'customer-bsm-001',
+        opportunity: 'opportunity-bsm-001',
+        followup: 'followup-bsm-001',
+      },
+      servicePayload: {},
+      artifactId: 'artifact-recording-formal',
+      materialPath: null,
+      materialSource: null,
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const analysisInputs: any[] = [];
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+        updateFromService: async () => record,
+      } as any,
+      client: {
+        getTask: async () => {
+          throw new Error('audio service offline during artifact recovery');
+        },
+      } as any,
+      artifactService: {
+        createAnalysisMaterialArtifact: async (input: any) => {
+          analysisInputs.push(input);
+          return { artifact: { artifactId: 'artifact-analysis-recovered' } };
+        },
+      } as any,
+    });
+
+    const count = await service.archiveCompletedSkillJobs(record.taskId);
+
+    assert.equal(count, 1);
+    assert.equal(analysisInputs.length, 1);
+    assert.equal(analysisInputs[0].skillCode, 'ext.customer_needs_todo_analysis');
+    assert.equal(analysisInputs[0].sourceJobId, jobId);
+    assert.match(analysisInputs[0].markdown, /采购、合同和报销流程/);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

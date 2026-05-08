@@ -208,6 +208,50 @@ test('ExternalSkillService forwards runtime jobs and rewrites artifact download 
   assert.equal(receivedTemplateId, undefined);
 });
 
+test('ExternalSkillService lists runtime jobs for downstream recording repair', async () => {
+  const service = new ExternalSkillService({
+    config: createTestConfig(),
+    fetchImpl: (async (input) => {
+      const url = String(input);
+      assert.match(url, /\/api\/jobs\?/);
+      assert.match(url, /skillName=problem-statement/);
+      assert.match(url, /status=succeeded/);
+      assert.match(url, /query=%E8%B4%9D%E6%96%AF%E7%BE%8E/);
+      return jsonResponse({
+        page: 1,
+        pageSize: 25,
+        total: 1,
+        jobs: [
+          {
+            jobId: 'job-problem-001',
+            skillName: 'problem-statement',
+            model: 'deepseek-v4-flash',
+            status: 'succeeded',
+            finalText: '# 问题陈述',
+            events: [],
+            artifacts: [],
+            error: null,
+            createdAt: '2026-05-08T10:00:00.000Z',
+            updatedAt: '2026-05-08T10:01:00.000Z',
+          },
+        ],
+      });
+    }) as FetchLike,
+  });
+
+  const result = await service.listSkillJobs({
+    skillCode: 'ext.problem_statement_pm',
+    status: 'succeeded',
+    query: '贝斯美',
+    pageSize: 25,
+  });
+
+  assert.equal(result.total, 1);
+  assert.equal(result.jobs.length, 1);
+  assert.equal(result.jobs[0]?.skillCode, 'ext.problem_statement_pm');
+  assert.equal(result.jobs[0]?.runtimeSkillName, 'problem-statement');
+});
+
 test('ExternalSkillService injects active enterprise template for ext.super_ppt jobs', async () => {
   let receivedTemplateId: string | undefined;
   let receivedPresentationPrompt: string | undefined;

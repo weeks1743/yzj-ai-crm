@@ -145,6 +145,13 @@ export interface JobResponse {
   updatedAt: string;
 }
 
+export interface JobListResponse {
+  jobs: JobResponse[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface StoredJobRecord {
   jobId: string;
   skillName: string;

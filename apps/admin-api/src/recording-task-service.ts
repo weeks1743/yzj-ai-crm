@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, extname, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import type {
   AppConfig,
   ArtifactAnchor,
@@ -28,7 +28,11 @@ const DOWNSTREAM_RECORDING_SKILLS = {
   'ext.problem_statement_pm': '问题陈述',
   'ext.customer_value_positioning_pm': '客户价值定位',
 } as const;
+
+const CORE_ANALYSIS_JOB_WAIT_TIMEOUT_MS = 180_000;
+const CORE_ANALYSIS_JOB_POLL_INTERVAL_MS = 1_000;
 type DownstreamRecordingSkillCode = keyof typeof DOWNSTREAM_RECORDING_SKILLS;
+type FormalRecordingAnchors = Required<Pick<RecordingAnchorInput, 'customer' | 'opportunity' | 'followup'>>;
 const PROCESS_ONLY_FILE_NAMES = [
   'transcription.json',
   'translations.json',
@@ -43,6 +47,15 @@ const STRUCTURED_ANALYSIS_FILE_NAMES = [
   'meetingAssistance.json',
   'autoChapters.json',
 ];
+const STALE_UNBOUND_CONTEXT_PATTERN = /(未关联客户\/商机|未关联客户|未关联商机|录音未绑定|未绑定客户\/商机|录音未绑定客户\/商机)/;
+
+interface PendingArchivePayload {
+  customerId: string;
+  opportunityId: string;
+  followupId: string;
+  createdBy: string;
+  requestedAt: string;
+}
 
 export class RecordingTaskService {
   constructor(
@@ -243,7 +256,7 @@ export class RecordingTaskService {
       providerDataId: serviceTask.providerDataId,
       fixtureTaskId: serviceTask.fixtureTaskId,
       anchors,
-      servicePayload: serviceTask as unknown as Record<string, unknown>,
+      servicePayload: mergeServicePayload(current.servicePayload, serviceTask as unknown as Record<string, unknown>),
       errorMessage: serviceTask.errorMessage,
       materialPath,
       materialSource,
@@ -269,20 +282,84 @@ export class RecordingTaskService {
     followupId: string;
     createdBy?: string;
   }): Promise<RecordingTaskResponse> {
-    const formalAnchors = normalizeAnchors({
+    const formalAnchors = normalizeFormalArchiveAnchors({
       customer: input.customerId,
       opportunity: input.opportunityId,
       followup: input.followupId,
     });
-    if (!formalAnchors.customer || !formalAnchors.opportunity || !formalAnchors.followup) {
-      throw new BadRequestError('录音资料正式归档前必须绑定客户、商机和拜访记录');
-    }
 
     const current = await this.refreshTaskRecord(await this.options.repository.getTask(input.taskId));
     if (current.status !== 'succeeded') {
       throw new BadRequestError('录音任务尚未完成，不能正式归档');
     }
 
+    const archived = await this.archiveSucceededTask({
+      record: current,
+      formalAnchors,
+      createdBy: input.createdBy,
+    });
+    await this.rerunCompletedSkillJobsSafely(archived);
+    return toRecordingTaskResponse(archived);
+  }
+
+  async requestArchiveTask(input: {
+    taskId: string;
+    customerId: string;
+    opportunityId: string;
+    followupId: string;
+    createdBy?: string;
+  }): Promise<RecordingTaskResponse> {
+    const formalAnchors = normalizeFormalArchiveAnchors({
+      customer: input.customerId,
+      opportunity: input.opportunityId,
+      followup: input.followupId,
+    });
+
+    const current = await this.refreshTaskRecord(await this.options.repository.getTask(input.taskId));
+    if (current.artifactId && current.anchors.followup === formalAnchors.followup) {
+      await this.ensureLinkedAnalysisMaterials(current);
+      return toRecordingTaskResponse(current);
+    }
+    if (current.status === 'succeeded') {
+      const archived = await this.archiveSucceededTask({
+        record: current,
+        formalAnchors,
+        createdBy: input.createdBy,
+      });
+      await this.rerunCompletedSkillJobsSafely(archived);
+      return toRecordingTaskResponse(archived);
+    }
+
+    const pendingArchive: PendingArchivePayload = {
+      customerId: formalAnchors.customer,
+      opportunityId: formalAnchors.opportunity,
+      followupId: formalAnchors.followup,
+      createdBy: input.createdBy?.trim() || current.createdBy || 'assistant-web',
+      requestedAt: new Date().toISOString(),
+    };
+    const updated = await this.options.repository.updateFromService({
+      taskId: current.taskId,
+      status: current.status,
+      providerDataId: current.providerDataId,
+      fixtureTaskId: current.fixtureTaskId,
+      anchors: formalAnchors,
+      servicePayload: mergeServicePayload(current.servicePayload, {
+        pendingArchive,
+      }),
+      errorMessage: current.errorMessage,
+      materialPath: current.materialPath,
+      materialSource: current.materialSource,
+    });
+    return toRecordingTaskResponse(updated);
+  }
+
+  private async archiveSucceededTask(input: {
+    record: RecordingTaskRecord;
+    formalAnchors: FormalRecordingAnchors;
+    createdBy?: string;
+  }): Promise<RecordingTaskRecord> {
+    const current = input.record;
+    const formalAnchors = input.formalAnchors;
     const serviceTask = await this.options.client.materialize({
       taskId: current.serviceTaskId,
       preferredSource: 'auto',
@@ -302,7 +379,7 @@ export class RecordingTaskService {
       providerDataId: serviceTask.providerDataId,
       fixtureTaskId: serviceTask.fixtureTaskId,
       anchors: formalAnchors,
-      servicePayload: serviceTask as unknown as Record<string, unknown>,
+      servicePayload: mergeServicePayload(current.servicePayload, serviceTask as unknown as Record<string, unknown>),
       errorMessage: serviceTask.errorMessage,
       materialPath,
       materialSource,
@@ -332,13 +409,13 @@ export class RecordingTaskService {
       artifactId: artifact.artifact.artifactId,
       materialPath,
       materialSource,
-      servicePayload: {
-        ...(serviceTask as unknown as Record<string, unknown>),
+      servicePayload: removePendingArchive({
+        ...mergeServicePayload(updated.servicePayload, serviceTask as unknown as Record<string, unknown>),
         archivedArtifactId: artifact.artifact.artifactId,
         archivedFollowupId: formalAnchors.followup,
-      },
+      }),
     });
-    return toRecordingTaskResponse(finalRecord);
+    return finalRecord;
   }
 
   async getMeetingViewerUrl(taskId: string): Promise<string> {
@@ -388,6 +465,37 @@ export class RecordingTaskService {
     return this.persistAnalysisMaterialIfFormal(record, skillCode, job);
   }
 
+  async archiveCompletedSkillJobs(taskId: string): Promise<number> {
+    const record = await this.refreshTaskRecord(await this.options.repository.getTask(taskId));
+    if (!record.artifactId || !record.anchors.customer || !record.anchors.opportunity || !record.anchors.followup) {
+      return 0;
+    }
+
+    const jobs = await this.findCompletedSkillJobsForTask(record);
+    let archivedCount = 0;
+    for (const job of jobs) {
+      const persisted = await this.persistAnalysisMaterialIfFormal(record, job.skillCode, job);
+      if (persisted.status === 'succeeded') {
+        archivedCount += 1;
+      }
+    }
+    return archivedCount;
+  }
+
+  async ensureCoreAnalysisMaterials(taskId: string): Promise<number> {
+    const record = await this.refreshTaskRecord(await this.options.repository.getTask(taskId));
+    return this.ensureAnalysisMaterialsForRecord(record, [
+      'ext.visit_conversation_understanding',
+      'ext.customer_needs_todo_analysis',
+      'ext.problem_statement_pm',
+    ]);
+  }
+
+  async rerunCompletedSkillJobs(taskId: string): Promise<number> {
+    const record = await this.refreshTaskRecord(await this.options.repository.getTask(taskId));
+    return this.rerunCompletedSkillJobsForRecord(record);
+  }
+
   private async persistAnalysisMaterialIfFormal(
     record: RecordingTaskRecord,
     skillCode: DownstreamRecordingSkillCode,
@@ -399,15 +507,14 @@ export class RecordingTaskService {
     if (!record.artifactId || !record.anchors.customer || !record.anchors.opportunity || !record.anchors.followup) {
       return job;
     }
-    if (!this.options.externalSkillService) {
-      return job;
-    }
-
     const markdown = await this.resolveSkillJobMarkdown(job);
     if (!markdown.trim()) {
       return job;
     }
     assertProcessFilesExcluded(markdown);
+    if (hasStaleUnboundContextMarkdown(markdown)) {
+      throw new BadRequestError('下游分析仍包含未关联客户/商机等旧上下文文案，已阻止保存，请使用正式客户、商机、跟进记录上下文重跑分析');
+    }
 
     const label = DOWNSTREAM_RECORDING_SKILLS[skillCode];
     await this.options.artifactService.createAnalysisMaterialArtifact({
@@ -433,6 +540,114 @@ export class RecordingTaskService {
     return job;
   }
 
+  private async findCompletedSkillJobsForTask(record: RecordingTaskRecord): Promise<Array<ExternalSkillJobResponse & { skillCode: DownstreamRecordingSkillCode }>> {
+    const sourceSignals = buildRecordingJobSourceSignals(record);
+    const jobs: Array<ExternalSkillJobResponse & { skillCode: DownstreamRecordingSkillCode }> = [];
+    const seen = new Set<DownstreamRecordingSkillCode>();
+
+    for (const remoteJob of await this.findCompletedRemoteSkillJobsForTask(sourceSignals)) {
+      if (seen.has(remoteJob.skillCode)) {
+        continue;
+      }
+      jobs.push(remoteJob);
+      seen.add(remoteJob.skillCode);
+    }
+
+    const runtimeSqlitePath = resolve(dirname(this.options.config.meta.envFilePath), '.local/skill-runtime.sqlite');
+    let rows: Array<{ job_id: string; skill_name: string; request_text: string; status: string }> = [];
+    try {
+      const { DatabaseSync } = await import('node:sqlite');
+      const database = new DatabaseSync(runtimeSqlitePath, { readOnly: true });
+      try {
+        rows = database.prepare(`
+          SELECT job_id, skill_name, request_text, status
+          FROM jobs
+          WHERE status = 'succeeded'
+          ORDER BY updated_at DESC
+        `).all() as Array<{ job_id: string; skill_name: string; request_text: string; status: string }>;
+      } finally {
+        database.close();
+      }
+    } catch {
+      rows = [];
+    }
+
+    const candidates = rows.filter((row) => {
+      const skillCode = runtimeSkillNameToDownstreamSkillCode(row.skill_name);
+      return skillCode
+        && sourceSignals.some((signal) => row.request_text.includes(signal));
+    });
+
+    for (const candidate of candidates) {
+      const skillCode = runtimeSkillNameToDownstreamSkillCode(candidate.skill_name);
+      if (!skillCode || seen.has(skillCode)) {
+        continue;
+      }
+      try {
+        const job = this.options.externalSkillService
+          ? await this.options.externalSkillService.getSkillJob(candidate.job_id)
+          : null;
+        if (job?.status === 'succeeded' && job.skillCode === skillCode) {
+          const markdown = await this.resolveSkillJobMarkdown(job);
+          jobs.push({
+            ...job,
+            finalText: markdown || job.finalText,
+            artifacts: markdown ? [] : job.artifacts,
+            skillCode,
+          });
+          seen.add(skillCode);
+        }
+      } catch {
+        const artifactJob = this.resolveArchivedSkillRuntimeArtifact(candidate.job_id, candidate.skill_name);
+        if (artifactJob?.status === 'succeeded') {
+          jobs.push({ ...artifactJob, skillCode });
+          seen.add(skillCode);
+        }
+      }
+    }
+
+    for (const artifactJob of this.findCompletedSkillRuntimeArtifactJobsForTask(record)) {
+      if (seen.has(artifactJob.skillCode)) {
+        continue;
+      }
+      jobs.push(artifactJob);
+      seen.add(artifactJob.skillCode);
+    }
+    return jobs;
+  }
+
+  private async findCompletedRemoteSkillJobsForTask(
+    sourceSignals: string[],
+  ): Promise<Array<ExternalSkillJobResponse & { skillCode: DownstreamRecordingSkillCode }>> {
+    if (!this.options.externalSkillService || typeof this.options.externalSkillService.listSkillJobs !== 'function') {
+      return [];
+    }
+
+    const jobs: Array<ExternalSkillJobResponse & { skillCode: DownstreamRecordingSkillCode }> = [];
+    const seen = new Set<DownstreamRecordingSkillCode>();
+    for (const signal of sourceSignals) {
+      let result: { jobs: ExternalSkillJobResponse[] } | null = null;
+      try {
+        result = await this.options.externalSkillService.listSkillJobs({
+          status: 'succeeded',
+          query: signal,
+          pageSize: 25,
+        });
+      } catch {
+        continue;
+      }
+      for (const job of result.jobs) {
+        const skillCode = job.skillCode;
+        if (!isDownstreamRecordingSkillCode(skillCode) || seen.has(skillCode)) {
+          continue;
+        }
+        jobs.push({ ...job, skillCode });
+        seen.add(skillCode);
+      }
+    }
+    return jobs;
+  }
+
   private async resolveSkillJobMarkdown(job: ExternalSkillJobResponse): Promise<string> {
     const markdownArtifact = job.artifacts.find((item) =>
       item.mimeType.toLowerCase().includes('markdown') || extname(item.fileName).toLowerCase() === '.md'
@@ -444,25 +659,110 @@ export class RecordingTaskService {
     return job.finalText ?? '';
   }
 
+  private findCompletedSkillRuntimeArtifactJobsForTask(
+    record: RecordingTaskRecord,
+  ): Array<ExternalSkillJobResponse & { skillCode: DownstreamRecordingSkillCode }> {
+    const artifactRoot = resolve(dirname(this.options.config.meta.envFilePath), '.local/skill-runtime-artifacts');
+    const stat = statSync(artifactRoot, { throwIfNoEntry: false });
+    if (!stat?.isDirectory()) {
+      return [];
+    }
+
+    const sourceSignals = buildRecordingJobSourceSignals(record);
+    const jobs: Array<ExternalSkillJobResponse & { skillCode: DownstreamRecordingSkillCode }> = [];
+
+    for (const jobId of readdirSync(artifactRoot).sort()) {
+      const jobDir = join(artifactRoot, jobId);
+      const jobStat = statSync(jobDir, { throwIfNoEntry: false });
+      if (!jobStat?.isDirectory() || jobId === '_jobs') {
+        continue;
+      }
+      for (const fileName of readdirSync(jobDir).sort()) {
+        const filePath = join(jobDir, fileName);
+        const fileStat = statSync(filePath, { throwIfNoEntry: false });
+        if (!fileStat?.isFile() || extname(fileName).toLowerCase() !== '.md') {
+          continue;
+        }
+        const runtimeSkillName = parseRuntimeSkillNameFromArtifactFileName(fileName, jobId);
+        const skillCode = runtimeSkillNameToDownstreamSkillCode(runtimeSkillName);
+        if (!skillCode) {
+          continue;
+        }
+        const markdown = readFileSync(filePath, 'utf8');
+        const inputText = readArchivedSkillRuntimeJobInputText(artifactRoot, jobId);
+        const searchText = `${inputText}\n${markdown}`;
+        if (!sourceSignals.some((signal) => searchText.includes(signal))) {
+          continue;
+        }
+        jobs.push(buildRecoveredSkillJob({
+          jobId,
+          runtimeSkillName,
+          skillCode,
+          markdown,
+          fileName,
+          fileStat,
+        }));
+      }
+    }
+
+    return jobs;
+  }
+
+  private resolveArchivedSkillRuntimeArtifact(
+    jobId: string,
+    runtimeSkillName: string,
+  ): (ExternalSkillJobResponse & { skillCode: DownstreamRecordingSkillCode }) | null {
+    const skillCode = runtimeSkillNameToDownstreamSkillCode(runtimeSkillName);
+    if (!skillCode) {
+      return null;
+    }
+    const artifactRoot = resolve(dirname(this.options.config.meta.envFilePath), '.local/skill-runtime-artifacts');
+    const jobDir = join(artifactRoot, jobId);
+    const stat = statSync(jobDir, { throwIfNoEntry: false });
+    if (!stat?.isDirectory()) {
+      return null;
+    }
+    for (const fileName of readdirSync(jobDir).sort()) {
+      const filePath = join(jobDir, fileName);
+      const fileStat = statSync(filePath, { throwIfNoEntry: false });
+      if (!fileStat?.isFile() || extname(fileName).toLowerCase() !== '.md') {
+        continue;
+      }
+      if (parseRuntimeSkillNameFromArtifactFileName(fileName, jobId) !== runtimeSkillName) {
+        continue;
+      }
+      return buildRecoveredSkillJob({
+        jobId,
+        runtimeSkillName,
+        skillCode,
+        markdown: readFileSync(filePath, 'utf8'),
+        fileName,
+        fileStat,
+      });
+    }
+    return null;
+  }
+
   private async refreshTaskRecord(record: RecordingTaskRecord): Promise<RecordingTaskRecord> {
     let serviceTask: TongyiAudioServiceTask;
     try {
       serviceTask = await this.options.client.getTask(record.serviceTaskId);
     } catch {
-      return record;
+      return this.tryCompletePendingArchive(record);
     }
 
-    return this.options.repository.updateFromService({
+    const refreshed = await this.options.repository.updateFromService({
       taskId: record.taskId,
       status: serviceTask.status,
       providerDataId: serviceTask.providerDataId,
       fixtureTaskId: serviceTask.fixtureTaskId,
       anchors: serviceTask.anchors,
-      servicePayload: serviceTask as unknown as Record<string, unknown>,
+      servicePayload: mergeServicePayload(record.servicePayload, serviceTask as unknown as Record<string, unknown>),
       errorMessage: serviceTask.errorMessage,
       materialPath: serviceTask.material?.path,
       materialSource: serviceTask.material?.source,
     });
+    return this.tryCompletePendingArchive(refreshed);
   }
 
   private async reuseExistingTask(record: RecordingTaskRecord): Promise<RecordingTaskRecord> {
@@ -489,7 +789,7 @@ export class RecordingTaskService {
         providerDataId: serviceTask.providerDataId,
         fixtureTaskId: serviceTask.fixtureTaskId,
         anchors: serviceTask.anchors,
-        servicePayload: serviceTask as unknown as Record<string, unknown>,
+        servicePayload: mergeServicePayload(record.servicePayload, serviceTask as unknown as Record<string, unknown>),
         errorMessage: serviceTask.errorMessage,
         materialPath: serviceTask.material?.path,
         materialSource: serviceTask.material?.source,
@@ -497,6 +797,142 @@ export class RecordingTaskService {
     } catch {
       return record;
     }
+  }
+
+  private async tryCompletePendingArchive(record: RecordingTaskRecord): Promise<RecordingTaskRecord> {
+    const pendingArchive = readPendingArchivePayload(record.servicePayload.pendingArchive);
+    if (!pendingArchive || record.artifactId || record.status !== 'succeeded') {
+      return record;
+    }
+    const formalAnchors = normalizeAnchors({
+      customer: pendingArchive.customerId,
+      opportunity: pendingArchive.opportunityId,
+      followup: pendingArchive.followupId,
+    });
+    if (!formalAnchors.customer || !formalAnchors.opportunity || !formalAnchors.followup) {
+      return record;
+    }
+    const completeFormalAnchors: FormalRecordingAnchors = {
+      customer: formalAnchors.customer,
+      opportunity: formalAnchors.opportunity,
+      followup: formalAnchors.followup,
+    };
+    const archived = await this.archiveSucceededTask({
+      record: {
+        ...record,
+        anchors: { ...record.anchors, ...completeFormalAnchors },
+      },
+      formalAnchors: completeFormalAnchors,
+      createdBy: pendingArchive.createdBy,
+    });
+    await this.rerunCompletedSkillJobsSafely(archived);
+    return archived;
+  }
+
+  private async rerunCompletedSkillJobsSafely(record: RecordingTaskRecord): Promise<number> {
+    try {
+      return await this.rerunCompletedSkillJobsForRecord(record);
+    } catch {
+      return 0;
+    }
+  }
+
+  private async ensureLinkedAnalysisMaterials(record: RecordingTaskRecord): Promise<number> {
+    if (!record.artifactId || !record.anchors.customer || !record.anchors.opportunity || !record.anchors.followup) {
+      return 0;
+    }
+    const rerunCount = await this.rerunCompletedSkillJobsSafely(record);
+    if (rerunCount > 0) {
+      return rerunCount;
+    }
+    try {
+      return await this.ensureCoreAnalysisMaterials(record.taskId);
+    } catch {
+      return 0;
+    }
+  }
+
+  private async rerunCompletedSkillJobsForRecord(record: RecordingTaskRecord): Promise<number> {
+    if (!this.options.externalSkillService) {
+      return 0;
+    }
+    if (!record.artifactId || !record.anchors.customer || !record.anchors.opportunity || !record.anchors.followup) {
+      return 0;
+    }
+    const jobs = await this.findCompletedSkillJobsForTask(record);
+    const skillCodes = Array.from(new Set(jobs.map((job) => job.skillCode)));
+    if (!skillCodes.length) {
+      return 0;
+    }
+    const materialRecord = await this.ensureGeneratedMaterialForSkill(record);
+    if (!materialRecord.artifactId) {
+      materialRecord.artifactId = record.artifactId;
+    }
+    materialRecord.anchors = record.anchors;
+    const attachments = resolveConsumableRecordingSkillAttachmentPaths(materialRecord);
+    let startedCount = 0;
+    for (const skillCode of skillCodes) {
+      const label = DOWNSTREAM_RECORDING_SKILLS[skillCode];
+      const createdJob = await this.options.externalSkillService.createSkillJob(skillCode, {
+        requestText: buildRecordingSkillRequestText(label, materialRecord),
+        attachments,
+      });
+      const job = await this.waitForDownstreamSkillJob(createdJob);
+      await this.persistAnalysisMaterialIfFormal(materialRecord, skillCode, job);
+      if (job.status === 'succeeded') {
+        startedCount += 1;
+      }
+    }
+    return startedCount;
+  }
+
+  private async ensureAnalysisMaterialsForRecord(
+    record: RecordingTaskRecord,
+    skillCodes: DownstreamRecordingSkillCode[],
+  ): Promise<number> {
+    if (!this.options.externalSkillService) {
+      return 0;
+    }
+    if (!record.artifactId || !record.anchors.customer || !record.anchors.opportunity || !record.anchors.followup) {
+      return 0;
+    }
+
+    const materialRecord = await this.ensureGeneratedMaterialForSkill(record);
+    if (!materialRecord.artifactId) {
+      materialRecord.artifactId = record.artifactId;
+    }
+    materialRecord.anchors = record.anchors;
+    const attachments = resolveConsumableRecordingSkillAttachmentPaths(materialRecord);
+    let completedCount = 0;
+    for (const skillCode of Array.from(new Set(skillCodes))) {
+      const label = DOWNSTREAM_RECORDING_SKILLS[skillCode];
+      const createdJob = await this.options.externalSkillService.createSkillJob(skillCode, {
+        requestText: buildRecordingSkillRequestText(label, materialRecord),
+        attachments,
+      });
+      const job = await this.waitForDownstreamSkillJob(createdJob);
+      await this.persistAnalysisMaterialIfFormal(materialRecord, skillCode, job);
+      if (job.status === 'succeeded') {
+        completedCount += 1;
+      }
+    }
+    return completedCount;
+  }
+
+  private async waitForDownstreamSkillJob(job: ExternalSkillJobResponse): Promise<ExternalSkillJobResponse> {
+    if (!this.options.externalSkillService || job.status === 'succeeded' || job.status === 'failed') {
+      return job;
+    }
+    const deadline = Date.now() + CORE_ANALYSIS_JOB_WAIT_TIMEOUT_MS;
+    let latest = job;
+    while (Date.now() < deadline) {
+      await sleep(CORE_ANALYSIS_JOB_POLL_INTERVAL_MS);
+      latest = await this.options.externalSkillService.getSkillJob(job.jobId);
+      if (latest.status === 'succeeded' || latest.status === 'failed') {
+        return latest;
+      }
+    }
+    return latest;
   }
 
   private normalizeCreateInput(input: RecordingTaskCreateRequest): Required<Pick<RecordingTaskCreateRequest, 'eid' | 'appId' | 'createdBy' | 'anchors'>> &
@@ -532,6 +968,74 @@ function normalizeAnchors(input?: RecordingAnchorInput): RecordingAnchorInput {
     }
   }
   return anchors;
+}
+
+function normalizeFormalArchiveAnchors(input: {
+  customer?: string;
+  opportunity?: string;
+  followup?: string;
+}): FormalRecordingAnchors {
+  const anchors = normalizeAnchors(input);
+  if (!anchors.customer || !anchors.opportunity || !anchors.followup) {
+    throw new BadRequestError('录音资料正式归档前必须绑定客户、商机和拜访记录');
+  }
+  return {
+    customer: anchors.customer,
+    opportunity: anchors.opportunity,
+    followup: anchors.followup,
+  };
+}
+
+function mergeServicePayload(
+  previous: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...previous, ...next };
+  if (previous.pendingArchive && !next.pendingArchive) {
+    merged.pendingArchive = previous.pendingArchive;
+  }
+  return merged;
+}
+
+function removePendingArchive(payload: Record<string, unknown>): Record<string, unknown> {
+  const { pendingArchive: _pendingArchive, ...rest } = payload;
+  return rest;
+}
+
+function readPendingArchivePayload(value: unknown): PendingArchivePayload | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const payload = value as Record<string, unknown>;
+  const customerId = readPayloadString(payload.customerId);
+  const opportunityId = readPayloadString(payload.opportunityId);
+  const followupId = readPayloadString(payload.followupId);
+  if (!customerId || !opportunityId || !followupId) {
+    return null;
+  }
+  return {
+    customerId,
+    opportunityId,
+    followupId,
+    createdBy: readPayloadString(payload.createdBy) || 'assistant-web',
+    requestedAt: readPayloadString(payload.requestedAt) || new Date(0).toISOString(),
+  };
+}
+
+function readPayloadString(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function hasStaleUnboundContextMarkdown(markdown: string): boolean {
+  const head = markdown
+    .split(/\r?\n/)
+    .slice(0, 24)
+    .join('\n');
+  return STALE_UNBOUND_CONTEXT_PATTERN.test(head);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildRecordingArtifactAnchors(
@@ -580,8 +1084,97 @@ function assertProcessFilesExcluded(markdown: string): void {
   }
 }
 
+function buildRecordingJobSourceSignals(record: RecordingTaskRecord): string[] {
+  return [
+    record.taskId,
+    record.serviceTaskId,
+    record.providerDataId ?? '',
+    record.file.fileName,
+    record.file.md5,
+    record.anchors.customer ?? '',
+    record.anchors.opportunity ?? '',
+    record.anchors.followup ?? '',
+  ].filter((item): item is string => Boolean(item));
+}
+
 function isDownstreamRecordingSkillCode(skillCode: string): skillCode is keyof typeof DOWNSTREAM_RECORDING_SKILLS {
   return Object.prototype.hasOwnProperty.call(DOWNSTREAM_RECORDING_SKILLS, skillCode);
+}
+
+function runtimeSkillNameToDownstreamSkillCode(skillName: string): DownstreamRecordingSkillCode | null {
+  switch (skillName) {
+    case 'visit-conversation-understanding':
+      return 'ext.visit_conversation_understanding';
+    case 'customer-needs-todo-analysis':
+      return 'ext.customer_needs_todo_analysis';
+    case 'problem-statement':
+      return 'ext.problem_statement_pm';
+    case 'customer-value-positioning':
+      return 'ext.customer_value_positioning_pm';
+    default:
+      return null;
+  }
+}
+
+function parseRuntimeSkillNameFromArtifactFileName(fileName: string, jobId: string): string {
+  const suffix = `-${jobId}.md`;
+  return fileName.endsWith(suffix)
+    ? fileName.slice(0, -suffix.length)
+    : fileName.replace(/\.md$/i, '');
+}
+
+function readArchivedSkillRuntimeJobInputText(artifactRoot: string, jobId: string): string {
+  const inputsDir = join(artifactRoot, '_jobs', jobId, 'inputs');
+  const stat = statSync(inputsDir, { throwIfNoEntry: false });
+  if (!stat?.isDirectory()) {
+    return '';
+  }
+  return readdirSync(inputsDir)
+    .sort()
+    .map((fileName) => {
+      const filePath = join(inputsDir, fileName);
+      const fileStat = statSync(filePath, { throwIfNoEntry: false });
+      return fileStat?.isFile()
+        ? readFileSync(filePath, 'utf8')
+        : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function buildRecoveredSkillJob(input: {
+  jobId: string;
+  runtimeSkillName: string;
+  skillCode: DownstreamRecordingSkillCode;
+  markdown: string;
+  fileName: string;
+  fileStat: { size: number; mtime?: Date; birthtime?: Date };
+}): ExternalSkillJobResponse & { skillCode: DownstreamRecordingSkillCode } {
+  const updatedAt = (input.fileStat.mtime ?? new Date()).toISOString();
+  const createdAt = (input.fileStat.birthtime ?? input.fileStat.mtime ?? new Date()).toISOString();
+  return {
+    jobId: input.jobId,
+    skillCode: input.skillCode,
+    runtimeSkillName: input.runtimeSkillName,
+    model: null,
+    status: 'succeeded',
+    finalText: input.markdown,
+    events: [],
+    artifacts: [
+      {
+        artifactId: input.fileName,
+        jobId: input.jobId,
+        fileName: input.fileName,
+        mimeType: 'text/markdown',
+        byteSize: input.fileStat.size,
+        createdAt,
+        downloadPath: '',
+      },
+    ],
+    error: null,
+    createdAt,
+    updatedAt,
+  };
 }
 
 function resolveConsumableRecordingMaterialPath(record: RecordingTaskRecord): string {
@@ -691,10 +1284,14 @@ function buildRecordingSkillRequestText(label: string, record: RecordingTaskReco
     record.anchors.opportunity ? `商机：${record.anchors.opportunity}` : '',
     record.anchors.followup ? `跟进记录：${record.anchors.followup}` : '',
   ].filter(Boolean);
+  const hasFormalContext = Boolean(record.anchors.customer && record.anchors.opportunity && record.anchors.followup);
   return [
     `请执行「${label}」。`,
     `输入材料是附件中的通义结构化录音分析文件和录音资料包，来源录音文件：${record.file.fileName}。`,
     anchors.length ? `建议关联上下文：${anchors.join('；')}。` : '当前录音未绑定客户/商机，请仅基于资料包内容输出分析结论。',
+    hasFormalContext
+      ? '本次请求已提供正式客户、商机和跟进记录锚点；Markdown 标题和正文不得输出“未关联客户/商机”“未关联商机”“录音未绑定”等旧上下文描述。'
+      : '如缺少正式客户或商机锚点，请在标题和结论中明确标记为待绑定上下文。',
     '必须优先读取附件中的通义结构化分析 JSON（mindMapSummary.json、summarization.json、meetingAssistance.json、autoChapters.json），再参考 recording-material.md 或 profile-analysis/*.md，并据此抽取具体需求、待办和风险；只有附件确实没有对应内容时，才标记为待澄清。',
     '只读取“可用输入文件”清单中的具体附件；不要读取 transcription.json、translations.json、textPolish.json、task-result.json、create-task.json、summary.txt 等原始过程文件。',
     '请输出结构化 Markdown，并保留可继续被后续拜访分析能力消费的标题层级。',

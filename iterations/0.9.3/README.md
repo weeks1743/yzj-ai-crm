@@ -23,8 +23,9 @@
 
 - [x] `pnpm --filter @yzj-ai-crm/admin-api exec tsx --test tests/agent-service.test.ts`
 - [x] `pnpm --filter @yzj-ai-crm/admin-api build`
-- [ ] 服务器 Docker 镜像重建并重启 `admin-api` / `web`
-- [ ] 线上 `https://chat.xiami66.com/chat` 执行公司研究不再出现 HTTP 524
+- [x] 服务器 Docker 镜像重建并重启 `admin-api` / `web`
+- [x] 线上 `https://chat.xiami66.com/chat` 执行公司研究不再出现 HTTP 524
+- [x] 首次研究 `江苏亚威机床股份有限公司` 75 秒返回 `running`，随后后台补偿写入公司研究 Artifact，二次访问复用资料并返回 `completed`。
 
 ## 未完成项
 

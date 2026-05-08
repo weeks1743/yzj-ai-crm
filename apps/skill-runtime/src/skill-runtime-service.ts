@@ -4,7 +4,9 @@ import type {
   AppConfig,
   CreateJobRequest,
   HealthResponse,
+  JobListResponse,
   JobResponse,
+  JobStatus,
   ModelDescriptor,
   PresentationSessionCloseRequest,
   PresentationSessionCloseResponse,
@@ -189,6 +191,22 @@ export class SkillRuntimeService {
 
   async getJob(jobId: string): Promise<JobResponse> {
     return this.options.repository.toJobResponse(jobId);
+  }
+
+  async listJobs(input: {
+    skillName?: string | null;
+    status?: JobStatus | null;
+    query?: string | null;
+    page?: number;
+    pageSize?: number;
+  } = {}): Promise<JobListResponse> {
+    const result = await this.options.repository.listJobs(input);
+    return {
+      jobs: await this.options.repository.toJobResponses(result.jobs),
+      page: result.page,
+      pageSize: result.pageSize,
+      total: result.total,
+    };
   }
 
   async getArtifact(jobId: string, artifactId: string) {

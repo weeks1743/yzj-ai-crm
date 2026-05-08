@@ -165,6 +165,66 @@ export class JobRepository {
     return mapJob(row);
   }
 
+  async listJobs(input: {
+    skillName?: string | null;
+    status?: JobStatus | null;
+    query?: string | null;
+    page?: number;
+    pageSize?: number;
+  } = {}): Promise<{ jobs: StoredJobRecord[]; total: number; page: number; pageSize: number }> {
+    const page = Math.max(1, Math.floor(input.page ?? 1));
+    const pageSize = Math.min(Math.max(1, Math.floor(input.pageSize ?? 20)), 100);
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    const addParam = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+
+    if (input.skillName?.trim()) {
+      conditions.push(`skill_name = ${addParam(input.skillName.trim())}`);
+    }
+    if (input.status?.trim()) {
+      conditions.push(`status = ${addParam(input.status.trim())}`);
+    }
+    if (input.query?.trim()) {
+      const pattern = `%${input.query.trim()}%`;
+      conditions.push(`(
+        request_text ILIKE ${addParam(pattern)}
+        OR job_id ILIKE ${addParam(pattern)}
+        OR EXISTS (
+          SELECT 1
+          FROM ${this.database.table('job_artifacts')} artifact
+          WHERE artifact.job_id = ${this.database.table('jobs')}.job_id
+            AND artifact.file_name ILIKE ${addParam(pattern)}
+        )
+      )`);
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const totalRow = await this.database.queryOne<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM ${this.database.table('jobs')} ${whereClause}`,
+      params,
+    );
+    const rows = await this.database.query<JobRow>(
+      `
+        SELECT * FROM ${this.database.table('jobs')}
+        ${whereClause}
+        ORDER BY updated_at DESC, job_id DESC
+        LIMIT ${addParam(pageSize)}
+        OFFSET ${addParam((page - 1) * pageSize)}
+      `,
+      params,
+    );
+
+    return {
+      jobs: rows.map(mapJob),
+      total: Number(totalRow.total || 0),
+      page,
+      pageSize,
+    };
+  }
+
   async listEvents(jobId: string): Promise<JobEvent[]> {
     const rows = await this.database.query<JobEventRow>(
       `
@@ -328,10 +388,18 @@ export class JobRepository {
 
   async toJobResponse(jobId: string): Promise<JobResponse> {
     const job = await this.getJob(jobId);
+    return this.toResponse(job);
+  }
+
+  async toJobResponses(jobs: StoredJobRecord[]): Promise<JobResponse[]> {
+    return Promise.all(jobs.map((job) => this.toResponse(job)));
+  }
+
+  private async toResponse(job: StoredJobRecord): Promise<JobResponse> {
     return {
       ...job,
-      events: await this.listEvents(jobId),
-      artifacts: (await this.listArtifacts(jobId)).map(({ filePath: _filePath, ...artifact }) => artifact),
+      events: await this.listEvents(job.jobId),
+      artifacts: (await this.listArtifacts(job.jobId)).map(({ filePath: _filePath, ...artifact }) => artifact),
     };
   }
 }

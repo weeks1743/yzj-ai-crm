@@ -260,6 +260,77 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
   }
 });
 
+test('GET /api/jobs lists completed jobs for downstream repair lookup', async () => {
+  const tempRoot = createTempDir('skill-runtime-http-job-list-');
+  const skillDir = resolve(REPO_ROOT, '3rdSkill');
+  const sourcePath = writeTextFixture(
+    tempRoot,
+    'inputs/problem-context.md',
+    '# 贝斯美拜访\n\n录音任务：recording-task-f4aed9d9\n客户关注采购、合同和报销流程。',
+  );
+
+  const chatClient = new QueueChatClient([
+    {
+      content: null,
+      toolCalls: [
+        {
+          id: 'text-1',
+          name: 'write_text_artifact',
+          arguments: JSON.stringify({
+            fileName: 'problem-statement.md',
+            content: '# 问题陈述\n\n贝斯美需要打通采购、合同和费用报销流程。',
+          }),
+        },
+      ],
+    },
+    {
+      content: 'Problem statement generated.',
+      toolCalls: [],
+    },
+  ]);
+
+  const harness = await createRuntimeHarness({
+    config: createTestConfig({
+      rootDir: tempRoot,
+      skillDirs: [skillDir],
+      allowedRoots: [tempRoot, REPO_ROOT],
+      artifactDir: join(tempRoot, 'artifacts'),
+    }),
+    dependencySnapshot: createDependencySnapshot(),
+    chatClient,
+  });
+
+  try {
+    const response = await fetch(`${harness.baseUrl}/api/jobs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        skillName: 'problem-statement',
+        requestText: `来源录音：贝斯美拜访.mp3\n录音任务：recording-task-f4aed9d9`,
+        attachments: [sourcePath],
+      }),
+    });
+    assert.equal(response.status, 202);
+    const createdJob = await response.json();
+    await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
+
+    const listResponse = await fetch(
+      `${harness.baseUrl}/api/jobs?skillName=problem-statement&status=succeeded&query=${encodeURIComponent('recording-task-f4aed9d9')}&pageSize=10`,
+    );
+    assert.equal(listResponse.status, 200);
+    const result = await listResponse.json();
+    assert.equal(result.total, 1);
+    assert.equal(result.jobs.length, 1);
+    assert.equal(result.jobs[0].jobId, createdJob.jobId);
+    assert.equal(result.jobs[0].skillName, 'problem-statement');
+    assert.equal(result.jobs[0].artifacts.length, 1);
+  } finally {
+    await harness.close();
+  }
+});
+
 test('POST /api/jobs runs super-ppt without model and creates presentation session', async () => {
   const tempRoot = createTempDir('skill-runtime-http-super-ppt-');
   const skillDir = resolve(REPO_ROOT, '3rdSkill');

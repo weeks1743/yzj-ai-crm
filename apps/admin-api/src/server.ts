@@ -18,6 +18,7 @@ import { createAdminApiServer } from './app.js';
 import { loadAppConfig } from './config.js';
 import { createCrmAgentRuntimeParts } from './crm-agent-pack.js';
 import { openDatabase } from './database.js';
+import { ConfigError } from './errors.js';
 import { DashScopeEmbeddingService } from './dashscope-embedding-service.js';
 import { DeepSeekChatClient } from './deepseek-chat-client.js';
 import { DictionaryResolver } from './dictionary-resolver.js';
@@ -49,7 +50,71 @@ function describePostgresConnection(connectionString: string, schema: string): s
   }
 }
 
-const config = loadAppConfig();
+function loadConfigForStartup() {
+  try {
+    return loadAppConfig();
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      logStartupConfigError(error);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+function logStartupConfigError(error: ConfigError): void {
+  const details = readConfigErrorDetails(error.details);
+  console.error(`[admin-api] 配置加载失败: ${error.message}`);
+  if (details.envFilePath) {
+    console.error(`[admin-api] env 文件: ${details.envFilePath}`);
+  }
+  if (details.missingKeys.length) {
+    console.error(`[admin-api] 缺失或为空: ${details.missingKeys.join(', ')}`);
+  }
+  if (details.placeholderKeys.length) {
+    console.error(`[admin-api] 仍为示例占位值: ${details.placeholderKeys.join(', ')}`);
+  }
+  if (details.invalidKeys.length) {
+    console.error(`[admin-api] 格式无效: ${details.invalidKeys.join(', ')}`);
+  }
+  for (const hint of details.hints) {
+    console.error(`[admin-api] 提示: ${hint}`);
+  }
+}
+
+function readConfigErrorDetails(details: unknown): {
+  envFilePath: string | null;
+  missingKeys: string[];
+  placeholderKeys: string[];
+  invalidKeys: string[];
+  hints: string[];
+} {
+  if (!details || typeof details !== 'object') {
+    return {
+      envFilePath: null,
+      missingKeys: [],
+      placeholderKeys: [],
+      invalidKeys: [],
+      hints: [],
+    };
+  }
+  const record = details as Record<string, unknown>;
+  return {
+    envFilePath: typeof record.envFilePath === 'string' ? record.envFilePath : null,
+    missingKeys: readStringList(record.missingKeys),
+    placeholderKeys: readStringList(record.placeholderKeys),
+    invalidKeys: readStringList(record.invalidKeys),
+    hints: readStringList(record.hints),
+  };
+}
+
+function readStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+const config = loadConfigForStartup();
 const database = await openDatabase(config.storage.postgresUrl, config.storage.postgresSchema);
 
 const orgSyncRepository = new OrgSyncRepository(database);

@@ -42,8 +42,37 @@ function buildArtifactDetail(): ArtifactDetailResponse {
       createdAt: '2026-04-28T00:00:00.000Z',
       updatedAt: '2026-04-28T00:00:00.000Z',
     },
-    markdown: '# 上海松井机械有限公司 公司研究\n\n## 公司概览\n测试内容',
+    markdown: [
+      '# 上海松井机械有限公司 公司研究',
+      '',
+      '> **研究日期：** 2026年4月28日',
+      '> **数据截至：** 2025年年报',
+      '> **研究目的：** 了解公司业务结构',
+      '',
+      '---',
+      '',
+      '## 公司概览',
+      '测试内容',
+      '',
+      '## 业务定位',
+      '主营业务需要进入图片生成上下文。',
+      '',
+      '## 核心风险',
+      '风险判断不能被摘要片段裁掉。',
+      '',
+      '## 来源引用',
+      '- 官网：https://example.com/company',
+    ].join('\n'),
   };
+}
+
+function extractPromptMarkdown(prompt: string): string {
+  const startMarker = '资料原文（已去除元信息和来源引用，控制在3800字以内）：\n';
+  const start = prompt.indexOf(startMarker);
+  const end = prompt.indexOf('\n\n画面要求：', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  return prompt.slice(start + startMarker.length, end);
 }
 
 test('ArtifactImageService stores image binary on local filesystem and metadata in database', async () => {
@@ -51,6 +80,7 @@ test('ArtifactImageService stores image binary on local filesystem and metadata 
   const database = createInMemoryDatabase();
   const detail = buildArtifactDetail();
   let generateCalls = 0;
+  let capturedPrompt = '';
   const service = new ArtifactImageService({
     config: buildConfig(tempDir),
     repository: new ArtifactImageRepository(database),
@@ -60,6 +90,7 @@ test('ArtifactImageService stores image binary on local filesystem and metadata 
     externalSkillService: {
       generateImage: async (input: any) => {
         generateCalls += 1;
+        capturedPrompt = input.prompt;
         return {
           skillCode: 'ext.image_generate',
           model: 'gpt-image-2',
@@ -77,13 +108,19 @@ test('ArtifactImageService stores image binary on local filesystem and metadata 
 
   try {
     const generated = await service.generateImage('artifact-001', {
-      prompt: '生成一张公司研究配图',
       size: '1536x1024',
       quality: 'auto',
     });
 
     assert.equal(generated.status, 'succeeded');
-    assert.equal(generated.prompt, '生成一张公司研究配图');
+    assert.match(generated.prompt ?? '', /公司研究正文/);
+    assert.match(generated.prompt ?? '', /## 公司概览\n测试内容/);
+    assert.match(generated.prompt ?? '', /## 业务定位\n主营业务需要进入图片生成上下文。/);
+    assert.match(generated.prompt ?? '', /## 核心风险\n风险判断不能被摘要片段裁掉。/);
+    const promptMarkdown = extractPromptMarkdown(generated.prompt ?? '');
+    assert.doesNotMatch(promptMarkdown, /研究日期|数据截至|研究目的/);
+    assert.doesNotMatch(promptMarkdown, /来源引用|example\.com/);
+    assert.equal(capturedPrompt, generated.prompt);
     assert.equal(generated.mimeType, 'image/png');
     assert.equal(generated.byteSize, Buffer.byteLength('fake-image-1'));
     assert.match(generated.previewUrl ?? '', /^\/api\/artifact-images\/.+\/file/);
@@ -103,8 +140,77 @@ test('ArtifactImageService stores image binary on local filesystem and metadata 
 
     const loaded = await service.getImage('artifact-001');
     assert.equal(loaded.status, 'succeeded');
-    assert.equal(loaded.prompt, '生成一张公司研究配图');
+    assert.equal(loaded.prompt, generated.prompt);
     assert.equal(loaded.generationId, generated.generationId);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactImageService trims image prompt markdown metadata, references, and length', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-artifact-image-'));
+  const database = createInMemoryDatabase();
+  const detail = {
+    ...buildArtifactDetail(),
+    markdown: [
+      '# 上海松井机械有限公司 公司研究',
+      '',
+      '> **研究日期：** 2026年4月28日',
+      '> **数据截至：** 2025年年报',
+      '> **研究目的：** 了解公司业务结构',
+      '',
+      '---',
+      '',
+      '## 一、公司概览',
+      '主营业务需要进入图片生成上下文。',
+      '',
+      '## 二、成长驱动',
+      Array.from({ length: 90 }, (_, index) => `成长驱动${index + 1}：销售图需要聚焦业务价值、增长逻辑、行业洞察和推进策略。`).join('\n'),
+      '',
+      '## 六、来源引用',
+      '| 序号 | 来源 | 链接 | 引用日期 |',
+      '|---|---|---|---|',
+      '| 1 | 官网 | https://example.com/company | 2026-04-28 |',
+      '',
+      '*本报告基于公开信息整理，仅供参考，不构成投资建议。*',
+    ].join('\n'),
+  };
+  let capturedPrompt = '';
+  const service = new ArtifactImageService({
+    config: buildConfig(tempDir),
+    repository: new ArtifactImageRepository(database),
+    artifactService: {
+      getArtifact: async () => detail,
+    } as any,
+    externalSkillService: {
+      generateImage: async (input: any) => {
+        capturedPrompt = input.prompt;
+        return {
+          skillCode: 'ext.image_generate',
+          model: 'gpt-image-2',
+          provider: 'linkapi_images_provider',
+          size: input.size,
+          quality: input.quality,
+          previewDataUrl: `data:image/png;base64,${Buffer.from('fake-image').toString('base64')}`,
+          mimeType: 'image/png',
+          latencyMs: 123,
+          generatedAt: '2026-04-28T09:00:00.000Z',
+        };
+      },
+    } as any,
+  });
+
+  try {
+    await service.generateImage('artifact-001', {
+      size: '1536x1024',
+      quality: 'auto',
+    });
+
+    const promptMarkdown = extractPromptMarkdown(capturedPrompt);
+    assert.ok(Array.from(promptMarkdown).length <= 3800);
+    assert.match(promptMarkdown, /主营业务需要进入图片生成上下文。/);
+    assert.doesNotMatch(promptMarkdown, /研究日期|数据截至|研究目的/);
+    assert.doesNotMatch(promptMarkdown, /来源引用|example\.com|不构成投资建议/);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -162,6 +268,39 @@ test('ArtifactImageService marks stale queued image generations as failed on sta
 
     assert.equal(loaded.status, 'failed');
     assert.equal(loaded.errorMessage, '图片生成任务超时或已中断，请重新生成');
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactImageService rejects image generation when artifact markdown is empty', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-artifact-image-'));
+  const database = createInMemoryDatabase();
+  const detail = {
+    ...buildArtifactDetail(),
+    markdown: '   ',
+  };
+  const service = new ArtifactImageService({
+    config: buildConfig(tempDir),
+    repository: new ArtifactImageRepository(database),
+    artifactService: {
+      getArtifact: async () => detail,
+    } as any,
+    externalSkillService: {
+      generateImage: async () => {
+        throw new Error('should not call image provider without research markdown');
+      },
+    } as any,
+  });
+
+  try {
+    await assert.rejects(
+      service.generateImage('artifact-001', {
+        size: '1536x1024',
+        quality: 'auto',
+      }),
+      /公司研究资料为空，无法生成图片/,
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

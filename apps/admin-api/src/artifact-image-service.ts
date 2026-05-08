@@ -3,11 +3,11 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import type {
   AppConfig,
+  ArtifactImageGenerationRequest,
   ArtifactDetailResponse,
   ArtifactImageResponse,
   ArtifactImageStatus,
   ImageGenerationQuality,
-  ImageGenerationRequest,
   ImageGenerationSize,
 } from './contracts.js';
 import type {
@@ -19,7 +19,7 @@ import type { ExternalSkillService } from './external-skill-service.js';
 import { BadRequestError, NotFoundError, getErrorMessage } from './errors.js';
 
 const IMAGE_STALE_QUEUE_BUFFER_MS = 30_000;
-
+const IMAGE_PROMPT_MARKDOWN_MAX_CHARS = 3_800;
 export interface ArtifactImageFile {
   fileName: string;
   mimeType: string;
@@ -52,14 +52,10 @@ export class ArtifactImageService {
 
   async generateImage(
     artifactId: string,
-    input: ImageGenerationRequest,
+    input: ArtifactImageGenerationRequest,
   ): Promise<ArtifactImageResponse> {
-    const prompt = input.prompt?.trim();
-    if (!prompt) {
-      throw new BadRequestError('图片生成必须提供 prompt');
-    }
-
     const detail = await this.options.artifactService.getArtifact(artifactId);
+    const prompt = buildCompanyResearchImagePrompt(detail);
     const size = (input.size ?? 'auto') as ImageGenerationSize;
     const quality = (input.quality ?? 'auto') as ImageGenerationQuality;
     await this.options.repository.reserve({
@@ -236,4 +232,134 @@ function buildImageFileName(detail: ArtifactDetailResponse, extension: string): 
 
 function safePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'item';
+}
+
+function buildCompanyResearchImagePrompt(detail: ArtifactDetailResponse): string {
+  const company = detail.artifact.anchors.find((item) => item.type === 'company')?.name?.trim()
+    || detail.artifact.anchors.find((item) => item.type === 'company')?.id?.trim()
+    || detail.artifact.title.replace(/\s*公司研究\s*$/, '').trim()
+    || detail.artifact.title;
+  const markdown = normalizePromptMarkdown(detail.markdown);
+  if (!markdown) {
+    throw new BadRequestError('公司研究资料为空，无法生成图片');
+  }
+
+  return [
+    '请基于下面公司研究正文生成一张适合销售汇报或客户洞察页使用的商务配图。',
+    `公司：${company}`,
+    `资料标题：${detail.artifact.title}`,
+    '',
+    '资料原文（已去除元信息和来源引用，控制在3800字以内）：',
+    markdown,
+    '',
+    '画面要求：专业、清晰、偏真实商务视觉，优先覆盖资料中的行业洞察、业务定位、成长驱动、核心风险和销售推进信息；可以用信息分区、图标、标题和标签组织重点；不要展示URL、引用表或技术界面截图。',
+  ].join('\n');
+}
+
+function normalizePromptMarkdown(markdown: string): string {
+  return truncatePromptMarkdown(
+    removeStandaloneSourceLines(
+      removeSourceReferenceSections(
+        removeOpeningMetadata(markdown.trim()),
+      ),
+    ),
+  );
+}
+
+function removeOpeningMetadata(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  if (lines[0]?.trim().startsWith('# ')) {
+    lines.shift();
+  }
+  while (lines[0]?.trim() === '') {
+    lines.shift();
+  }
+
+  const metadataLines: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const trimmed = lines[index]?.trim() ?? '';
+    if (!trimmed || trimmed.startsWith('>')) {
+      metadataLines.push(trimmed);
+      index += 1;
+      continue;
+    }
+    break;
+  }
+
+  if (metadataLines.some((line) => /研究日期|数据截至|研究目的/.test(line))) {
+    lines.splice(0, index);
+    while (/^\s*$|^\s*-{3,}\s*$/.test(lines[0] ?? '')) {
+      lines.shift();
+    }
+  }
+
+  return lines.join('\n').trim();
+}
+
+function removeSourceReferenceSections(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const kept: string[] = [];
+  let skippingLevel: number | null = null;
+
+  for (const line of lines) {
+    const heading = line.match(/^(#{2,6})\s*(.+?)\s*$/);
+    if (heading) {
+      const level = heading[1].length;
+      if (skippingLevel !== null && level <= skippingLevel) {
+        skippingLevel = null;
+      }
+      if (isSourceReferenceHeading(heading[2])) {
+        skippingLevel = level;
+        continue;
+      }
+    }
+
+    if (skippingLevel === null) {
+      kept.push(line);
+    }
+  }
+
+  return kept.join('\n').trim();
+}
+
+function isSourceReferenceHeading(title: string): boolean {
+  const normalized = title
+    .replace(/^[一二三四五六七八九十百\d]+[、.．]?\s*/, '')
+    .trim();
+  return /^(来源引用|引用来源|数据来源|信息来源|参考来源|参考资料)$/.test(normalized);
+}
+
+function removeStandaloneSourceLines(markdown: string): string {
+  return markdown
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !/^[-*]?\s*(?:\*{0,2})?来源[:：]/.test(trimmed)
+        && !/仅供参考|不构成投资建议/.test(trimmed);
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function truncatePromptMarkdown(markdown: string): string {
+  const trimmed = markdown.trim();
+  const chars = Array.from(trimmed);
+  if (chars.length <= IMAGE_PROMPT_MARKDOWN_MAX_CHARS) {
+    return trimmed;
+  }
+
+  const sliced = chars.slice(0, IMAGE_PROMPT_MARKDOWN_MAX_CHARS).join('');
+  const paragraphBoundary = sliced.lastIndexOf('\n\n');
+  if (paragraphBoundary > IMAGE_PROMPT_MARKDOWN_MAX_CHARS * 0.8) {
+    return sliced.slice(0, paragraphBoundary).trim();
+  }
+
+  const lineBoundary = sliced.lastIndexOf('\n');
+  if (lineBoundary > IMAGE_PROMPT_MARKDOWN_MAX_CHARS * 0.9) {
+    return sliced.slice(0, lineBoundary).trim();
+  }
+
+  return sliced.trim();
 }

@@ -34,6 +34,7 @@ interface TestConfigOptions {
   deepseekDefaultModel?: AppConfig['deepseek']['defaultModel'];
   postgresUrl?: string;
   postgresSchema?: string;
+  envFilePath?: string;
 }
 
 const DEFAULT_POSTGRES_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev';
@@ -192,7 +193,7 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
         baseUrl: options.imageBaseUrl ?? 'https://api.linkapi.org',
         apiKey: options.imageApiKey ?? null,
         model: options.imageModel ?? 'gpt-image-2',
-        timeoutMs: options.imageTimeoutMs ?? 60000,
+        timeoutMs: options.imageTimeoutMs ?? 150000,
       },
       skillRuntime: {
         baseUrl: options.skillRuntimeBaseUrl ?? 'http://127.0.0.1:3012',
@@ -203,7 +204,7 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
     },
     meta: {
       configSource: '.env',
-      envFilePath: '.env',
+      envFilePath: options.envFilePath ?? '.env',
     },
   };
 }

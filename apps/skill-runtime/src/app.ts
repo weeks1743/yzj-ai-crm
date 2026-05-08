@@ -100,6 +100,17 @@ export function createSkillRuntimeServer(options: {
         return;
       }
 
+      if (method === 'GET' && url.pathname === '/api/jobs') {
+        writeJson(response, 200, await options.service.listJobs({
+          skillName: url.searchParams.get('skillName'),
+          status: url.searchParams.get('status') as any,
+          query: url.searchParams.get('query'),
+          page: parsePositiveInteger(url.searchParams.get('page'), 1),
+          pageSize: parsePositiveInteger(url.searchParams.get('pageSize'), 20),
+        }));
+        return;
+      }
+
       if (url.pathname.startsWith('/api/jobs/')) {
         const parts = url.pathname.split('/').filter(Boolean);
         const jobId = parts[2];
@@ -173,4 +184,12 @@ export function createSkillRuntimeServer(options: {
       writeError(response, error);
     }
   });
+}
+
+function parsePositiveInteger(value: string | null, fallbackValue: number): number {
+  if (!value?.trim()) {
+    return fallbackValue;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallbackValue;
 }

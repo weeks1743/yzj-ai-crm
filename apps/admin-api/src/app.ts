@@ -9,6 +9,7 @@ import type {
   AgentMetaQuestionOptionsRequest,
   AgentRecordSearchPageRequest,
   ArtifactSearchRequest,
+  ArtifactImageGenerationRequest,
   CompanyResearchArtifactRequest,
   EnterprisePptTemplatePromptResponse,
   EnterprisePptTemplateUploadResponse,
@@ -543,6 +544,7 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           writeJson(response, 200, await options.recordingTaskService.getSkillJob(taskId, skillCode, jobId));
           return;
         }
+
       }
 
       if (method === 'POST' && url.pathname === '/api/external-skills/image-generate') {
@@ -701,7 +703,7 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
             throw new ServiceUnavailableError('Artifact 图片生成服务未启用');
           }
           const artifactId = decodeURIComponent(parts[2] ?? '');
-          const payload = await readJsonBody<ImageGenerationRequest>(request);
+          const payload = await readJsonBody<ArtifactImageGenerationRequest>(request);
           writeJson(response, 202, await options.artifactImageService.generateImage(artifactId, payload));
           return;
         }

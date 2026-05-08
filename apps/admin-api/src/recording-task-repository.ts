@@ -274,6 +274,7 @@ export function toRecordingTaskResponse(record: RecordingTaskRecord): RecordingT
     : { available: false };
   const archivedFollowupId = readPayloadString(servicePayload.archivedFollowupId) || record.anchors.followup;
   const archivedArtifactId = readPayloadString(servicePayload.archivedArtifactId) || record.artifactId || undefined;
+  const pendingArchive = readPendingArchivePayload(servicePayload.pendingArchive);
   const archive: RecordingTaskResponse['archive'] = archivedFollowupId && archivedArtifactId
     ? {
         status: 'archived',
@@ -283,6 +284,14 @@ export function toRecordingTaskResponse(record: RecordingTaskRecord): RecordingT
         opportunityId: record.anchors.opportunity,
         sourceFileMd5: record.file.md5,
       }
+    : pendingArchive
+      ? {
+          status: 'pending',
+          followupId: pendingArchive.followupId,
+          customerId: pendingArchive.customerId,
+          opportunityId: pendingArchive.opportunityId,
+          sourceFileMd5: record.file.md5,
+        }
     : {
         status: 'unarchived',
         sourceFileMd5: record.file.md5,
@@ -315,6 +324,23 @@ export function toRecordingTaskResponse(record: RecordingTaskRecord): RecordingT
 
 function readPayloadString(value: unknown): string {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function readPendingArchivePayload(value: unknown): {
+  customerId: string;
+  opportunityId: string;
+  followupId: string;
+} | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const payload = value as Record<string, unknown>;
+  const customerId = readPayloadString(payload.customerId);
+  const opportunityId = readPayloadString(payload.opportunityId);
+  const followupId = readPayloadString(payload.followupId);
+  return customerId && opportunityId && followupId
+    ? { customerId, opportunityId, followupId }
+    : null;
 }
 
 function mapRow(row: RecordingTaskRow): RecordingTaskRecord {

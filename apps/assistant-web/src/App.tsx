@@ -79,10 +79,10 @@ import type {
   AgentRunDetailResponse,
   AgentRunListResponse,
   AgentUiSurface,
+  ArtifactImageGenerationRequest,
   ConversationSession,
   ExternalSkillJobResponse,
   ExternalSkillJobStatus,
-  ImageGenerationRequest,
   ShadowObjectKey,
 } from '@shared/types';
 import { brandTitle } from '@shared/brand';
@@ -256,8 +256,7 @@ const recordingSkillLabels = Object.fromEntries(
 type OpenArtifactHandler = (evidence: AssistantEvidenceCard) => void;
 type PresentationTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title'>;
 type GeneratePresentationHandler = (target: PresentationTarget) => void;
-type ImageGenerationTarget = PresentationTarget & Pick<AssistantEvidenceCard, 'snippet' | 'anchorLabel'>;
-type GenerateImageHandler = (target: ImageGenerationTarget) => void;
+type GenerateImageHandler = (target: PresentationTarget) => void;
 type MetaQuestionSubmitHandler = (input: {
   runId: string;
   interactionId: string;
@@ -360,6 +359,13 @@ interface ArtifactDetailPayload {
     title: string;
     sourceToolCode: string;
     vectorStatus: string;
+    anchors?: Array<{
+      type: string;
+      id: string;
+      name?: string;
+      role?: string;
+      bindingStatus?: 'bound' | 'unbound' | 'suggested';
+    }>;
     chunkCount: number;
     updatedAt: string;
   };
@@ -410,7 +416,7 @@ interface RecordingTaskPayload {
     excludedProcessFiles?: string[];
   };
   archive?: {
-    status: 'unarchived' | 'archived';
+    status: 'unarchived' | 'pending' | 'archived';
     artifactId?: string;
     followupId?: string;
     customerId?: string;
@@ -1214,8 +1220,7 @@ const useStyles = createStyles(({ token, css }) => ({
     img {
       display: block;
       width: 100%;
-      aspect-ratio: 3 / 2;
-      object-fit: cover;
+      height: auto;
       background: ${token.colorFillQuaternary};
     }
   `,
@@ -1474,18 +1479,6 @@ function getImageButtonLabel(image?: ArtifactImagePayload) {
     return '重新生成图片';
   }
   return '重新生成图片';
-}
-
-function buildCompanyResearchImagePrompt(target: ImageGenerationTarget) {
-  const company = target.anchorLabel?.trim() || target.title.replace(/\s*公司研究\s*$/, '').trim();
-  const summary = (target.snippet || '').replace(/\s+/g, ' ').trim();
-  return [
-    '请生成一张适合销售汇报或客户洞察页使用的商务配图。',
-    `公司：${company || target.title}`,
-    `资料标题：${target.title}`,
-    summary ? `研究摘要：${summary}` : '',
-    '画面要求：专业、清晰、偏真实商务视觉，体现行业洞察、业务机会、风险判断和销售推进，不要包含小字长文，不要出现技术界面截图。',
-  ].filter(Boolean).join('\n');
 }
 
 function getBrowserStorage() {
@@ -3413,6 +3406,14 @@ function RecordingTaskCard({
             }}>重试处理</Button> : undefined}
           />
         ) : null}
+        {task.archive?.status === 'pending' ? (
+          <Alert
+            style={{ marginTop: 12 }}
+            type="info"
+            showIcon
+            message="拜访记录已写入，录音完成后自动归档"
+          />
+        ) : null}
         {completed ? (
           <div className={styles.recordingActions} onClick={(event) => event.stopPropagation()}>
             {recordingSkillActions.map((action) => {
@@ -3897,6 +3898,13 @@ function ArtifactMarkdownDrawer({
   onGeneratePresentation: GeneratePresentationHandler;
   onClose: () => void;
 }) {
+  const anchorTags = buildArtifactAnchorTags(state.artifact?.anchors);
+  const staleWarning = Boolean(
+    state.artifact
+    && state.markdown
+    && hasBoundBusinessArtifactAnchors(state.artifact.anchors)
+    && hasStaleUnboundArtifactText(state.markdown),
+  );
   return (
     <Drawer
       title={
@@ -3961,7 +3969,18 @@ function ArtifactMarkdownDrawer({
                 <Space wrap>
                   <Tag color="geekblue">第 {state.artifact.version} 版</Tag>
                   <Tag>{state.artifact.updatedAt}</Tag>
+                  {anchorTags.map((anchor) => (
+                    <Tag key={anchor.key} color={anchor.color}>{anchor.label}</Tag>
+                  ))}
                 </Space>
+                {staleWarning ? (
+                  <Alert
+                    style={{ marginTop: 12, marginBottom: 12 }}
+                    type="warning"
+                    showIcon
+                    message="正文生成早于正式关联，建议重跑分析"
+                  />
+                ) : null}
               </>
             ) : null}
             <XMarkdown paragraphTag="div" className={markdownClassName}>
@@ -3972,6 +3991,39 @@ function ArtifactMarkdownDrawer({
       </div>
     </Drawer>
   );
+}
+
+function buildArtifactAnchorTags(anchors?: ArtifactDetailPayload['artifact']['anchors']) {
+  const labels: Record<string, string> = {
+    customer: '客户',
+    opportunity: '商机',
+    followup: '跟进记录',
+    source_file: '来源文件',
+  };
+  const colors: Record<string, string> = {
+    customer: 'blue',
+    opportunity: 'green',
+    followup: 'cyan',
+    source_file: 'default',
+  };
+  return (anchors ?? [])
+    .filter((anchor) => labels[anchor.type])
+    .map((anchor) => ({
+      key: `${anchor.type}:${anchor.id}`,
+      label: `${labels[anchor.type]}：${anchor.name || anchor.id}`,
+      color: colors[anchor.type] ?? 'default',
+    }));
+}
+
+function hasBoundBusinessArtifactAnchors(anchors?: ArtifactDetailPayload['artifact']['anchors']) {
+  return (anchors ?? []).some((anchor) => (
+    (anchor.type === 'customer' || anchor.type === 'opportunity' || anchor.type === 'followup')
+    && anchor.bindingStatus === 'bound'
+  ));
+}
+
+function hasStaleUnboundArtifactText(markdown: string) {
+  return /未关联客户\/商机|未关联客户|未关联商机|录音未绑定/.test(markdown.slice(0, 1200));
 }
 
 function AssistantConversationRuntime({
@@ -4694,7 +4746,6 @@ function AssistantConversationRuntime({
         return;
       }
 
-      const prompt = buildCompanyResearchImagePrompt(evidence);
       setImageByArtifactId((current) => ({
         ...current,
         [evidence.artifactId]: {
@@ -4702,13 +4753,11 @@ function AssistantConversationRuntime({
           versionId: evidence.versionId,
           title: evidence.title,
           status: 'queued',
-          prompt,
         },
       }));
 
       try {
-        const request: ImageGenerationRequest = {
-          prompt,
+        const request: ArtifactImageGenerationRequest = {
           size: '1536x1024',
           quality: 'auto',
         };
@@ -4726,7 +4775,7 @@ function AssistantConversationRuntime({
           ...current,
           [evidence.artifactId]: {
             ...payload,
-            prompt: payload.prompt ?? prompt,
+            prompt: payload.prompt,
           },
         }));
         if (payload.status === 'succeeded') {
@@ -4746,7 +4795,6 @@ function AssistantConversationRuntime({
             versionId: evidence.versionId,
             title: evidence.title,
             status: 'failed',
-            prompt,
             errorMessage,
           },
         }));
@@ -5737,6 +5785,8 @@ function AssistantWorkspace() {
       ?? getConversationKeyByRoute(location.pathname),
   });
   const conversationsRef = useRef<ConversationSession[]>(defaultConversations);
+  const activeConversationKeyRef = useRef(activeConversationKey);
+  const locationPathnameRef = useRef(location.pathname);
   const conversationCacheWritableRef = useRef(false);
   const activeConversation = conversations.find(
     (item) => item.key === activeConversationKey,
@@ -5747,6 +5797,14 @@ function AssistantWorkspace() {
   }, [conversations]);
 
   useEffect(() => {
+    activeConversationKeyRef.current = activeConversationKey;
+  }, [activeConversationKey]);
+
+  useEffect(() => {
+    locationPathnameRef.current = location.pathname;
+  }, [location.pathname]);
+
+  useEffect(() => {
     let cancelled = false;
 
     void fetchRemoteConversations().then((remoteConversations) => {
@@ -5755,8 +5813,23 @@ function AssistantWorkspace() {
       }
 
       const remoteAvailable = remoteConversations !== null;
+      const currentActiveKey = activeConversationKeyRef.current;
+      const currentPathname = locationPathnameRef.current;
+      const remoteKeys = new Set(
+        (remoteConversations ?? [])
+          .map((item) => (item && typeof item === 'object' ? (item as { key?: unknown }).key : null))
+          .filter((key): key is string => typeof key === 'string'),
+      );
+      const protectedLocalConversations = conversationsRef.current.filter((conversation) => (
+        isUserCreatedConversationKey(conversation.key)
+        && (conversation.key === currentActiveKey || isBlankUserConversation(conversation))
+        && !remoteKeys.has(conversation.key)
+      ));
       const nextConversations = remoteAvailable
-        ? mergeRemoteConversations(baseConversations, remoteConversations)
+        ? mergeRemoteConversations(baseConversations, [
+            ...protectedLocalConversations,
+            ...remoteConversations,
+          ])
         : mergePersistedConversations(baseConversations);
       conversationCacheWritableRef.current = true;
       setConversations(nextConversations);
@@ -5768,11 +5841,11 @@ function AssistantWorkspace() {
       const allowedKeys = nextConversations.map((item) => item.key);
       const nextActiveConversationKey = resolveSyncedActiveConversationKey({
         validConversationKeys: allowedKeys,
-        currentActiveKey: activeConversationKey,
+        currentActiveKey,
         storedActiveKey: getStoredActiveConversationKey(allowedKeys),
-        fallbackKey: getConversationKeyByRoute(location.pathname),
+        fallbackKey: getConversationKeyByRoute(currentPathname),
       });
-      if (nextActiveConversationKey !== activeConversationKey) {
+      if (nextActiveConversationKey !== currentActiveKey) {
         setActiveConversationKey(nextActiveConversationKey);
       } else {
         persistActiveConversationKey(nextActiveConversationKey);
@@ -5785,13 +5858,14 @@ function AssistantWorkspace() {
   }, [
     baseConversations,
     getConversationKeyByRoute,
-    activeConversationKey,
-    location.pathname,
     setActiveConversationKey,
     setConversations,
   ]);
 
   useEffect(() => {
+    if (location.pathname === '/chat' && isUserCreatedConversationKey(activeConversationKey)) {
+      return;
+    }
     if (activeConversation?.route === location.pathname) {
       return;
     }
@@ -5909,6 +5983,7 @@ function AssistantWorkspace() {
     )) as ConversationSession | undefined;
     if (existingBlankConversation) {
       setActiveConversationKey(existingBlankConversation.key);
+      persistActiveConversationKey(existingBlankConversation.key);
       navigate('/chat');
       return;
     }
@@ -5928,8 +6003,15 @@ function AssistantWorkspace() {
     pendingBlankConversationSubmitRef.current[conversationKey] = '';
     setBlankConversationKeys((current) => new Set(current).add(conversationKey));
     persistMessages(conversationKey, []);
+    const nextConversations = [
+      newConversation,
+      ...conversationsRef.current.filter((item) => item.key !== conversationKey),
+    ];
+    conversationsRef.current = nextConversations;
     addConversation(newConversation, 'prepend');
+    persistCustomConversations(nextConversations, baseConversations);
     setActiveConversationKey(conversationKey);
+    persistActiveConversationKey(conversationKey);
     navigate('/chat');
   };
 

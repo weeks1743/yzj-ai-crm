@@ -82,6 +82,20 @@ const RECORDING_MATERIAL_TOOL = 'artifact.recording_material.prepare';
 const CONTEXT_SUMMARY_TOOL = 'meta.context_summary';
 const EXTERNAL_INFO_SOURCE_LABEL = '外部信息';
 const INTERNAL_RECORDS_SOURCE_LABEL = '系统内记录';
+const RECORDING_NEEDS_SUMMARY_LABEL = '拜访需求摘要';
+const DEFAULT_EXTERNAL_INFO_SEARCH_LIMIT = 5;
+const VISIT_NEEDS_ANALYSIS_SEARCH_LIMIT = 10;
+const VISIT_NEEDS_PRIMARY_ANALYSIS_LIMIT = 4;
+const VISIT_NEEDS_EVIDENCE_SOURCE_LIMIT = 6;
+const VISIT_NEEDS_ANALYSIS_SOURCE_ORDER = [
+  { sourceToolCode: 'ext.customer_needs_todo_analysis', titleKeyword: '客户需求工作待办分析' },
+  { sourceToolCode: 'ext.problem_statement_pm', titleKeyword: '问题陈述' },
+  { sourceToolCode: 'ext.visit_conversation_understanding', titleKeyword: '拜访会话理解' },
+  { sourceToolCode: 'ext.customer_value_positioning_pm', titleKeyword: '客户价值定位' },
+];
+const VISIT_NEEDS_PRIMARY_ANALYSIS_SOURCE_CODE = 'ext.customer_needs_todo_analysis';
+const VISIT_NEEDS_DEMAND_KEYWORDS = /(需求|诉求|痛点|关注|希望|需要|要求|提出|建议|期望|问题|待办|流程|审批|报销|采购|合同|考勤|项目|费用|多语言|海外|AI|知识库|ERP|集成|对接|权限|组织|资产|发票)/;
+const VISIT_NEEDS_SIGNAL_NOISE_KEYWORDS = /(基本信息|录音任务|生成时间|来源文件|关联客户|关联商机|关联跟进记录|后续动作建议|可基于本资料包|正式写入前|录音查看页|资料边界|项目\/场景背景|待补充|材料\/证据|证据不足|需销售后续补充|缺乏|无法确认)/;
 const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1' as const;
 const RECORD_RESULT_PAGE_ENDPOINT = '/api/agent/record-search-page' as const;
 const META_QUESTION_OPTIONS_ENDPOINT = '/api/agent/meta-question-options' as const;
@@ -347,7 +361,7 @@ export interface CrmAgentPackOptions {
   orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>;
   externalSkillService: ExternalSkillService;
   artifactService: ArtifactService;
-  recordingTaskService?: Pick<RecordingTaskService, 'archiveTask' | 'getTask'>;
+  recordingTaskService?: Pick<RecordingTaskService, 'archiveTask' | 'requestArchiveTask' | 'archiveCompletedSkillJobs' | 'ensureCoreAnalysisMaterials' | 'rerunCompletedSkillJobs' | 'getTask'>;
   companyResearchMaxWaitMs?: number;
   companyResearchBackgroundMaxWaitMs?: number;
 }
@@ -902,6 +916,7 @@ function cleanupCustomerRecordLookupName(value: string): string {
   return cleanupCompanyName(value)
     .replace(/(?:的)?(?:客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|客户资料|客户信息|客户详情)$/g, '')
     .replace(/(?:处于什么状态|是什么状态|状态是什么|状态)$/g, '')
+    .replace(/(?:的)?客户$/g, '')
     .replace(/^(?:这个|该|当前)(?:客户|公司)$/g, '')
     .replace(/[？?。！!]+$/g, '')
     .trim();
@@ -6562,19 +6577,39 @@ async function archiveRecordingMaterialAfterFollowupCommit(input: {
   }
 
   try {
-    const archived = await input.options.recordingTaskService.archiveTask({
-      taskId: source.recordingTaskId,
-      customerId,
-      opportunityId,
-      followupId: input.followupId,
-      createdBy: input.context.operatorOpenId ?? 'assistant-web',
-    });
+    const archived = input.options.recordingTaskService.requestArchiveTask
+      ? await input.options.recordingTaskService.requestArchiveTask({
+          taskId: source.recordingTaskId,
+          customerId,
+          opportunityId,
+          followupId: input.followupId,
+          createdBy: input.context.operatorOpenId ?? 'assistant-web',
+        })
+      : await input.options.recordingTaskService.archiveTask({
+          taskId: source.recordingTaskId,
+          customerId,
+          opportunityId,
+          followupId: input.followupId,
+          createdBy: input.context.operatorOpenId ?? 'assistant-web',
+        });
+    if (archived.archive?.status === 'pending') {
+      finishToolCall(call, 'succeeded', `pending followup=${input.followupId}`);
+      return {
+        toolCalls: [call],
+        contentLines: [
+          '## 录音资料归档',
+          '- 拜访记录已写入；录音任务尚未完成，系统已记录客户/商机/拜访记录关联。',
+          '- 录音处理完成后会自动归档录音资料，并重跑已生成过的下游拜访分析。',
+        ],
+      };
+    }
     finishToolCall(call, 'succeeded', `artifact=${archived.material?.artifactId ?? '-'}, followup=${input.followupId}`);
     return {
       toolCalls: [call],
       contentLines: [
         '## 录音资料归档',
         `- 已将录音资料包归档到本次拜访记录：${archived.file.fileName}`,
+        '- 已触发已生成拜访分析的正式客户/商机上下文重跑；未生成过的分析不会自动补跑。',
       ],
     };
   } catch (error) {
@@ -7080,11 +7115,11 @@ function registerMetaTools(registry: AgentToolRegistry, options: CrmAgentPackOpt
 }
 
 function isContextSummaryQuery(query: string): boolean {
-  return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下|拜访前摘要|商机进展|机会进展|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统|值不值得|重点推进|赢单概率|下次拜访|怎么开场|价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|需求|问题陈述|价值主张)/.test(query);
+  return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下|拜访前摘要|拜访重点|回访重点|沟通重点|会议重点|主要关注点|客户关注点|客户主要关注|商机进展|机会进展|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统|值不值得|重点推进|赢单概率|下次拜访|怎么开场|价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|需求|问题陈述|价值主张)/.test(query);
 }
 
 function isComplexContextSummaryQuery(query: string): boolean {
-  return /(结合|综合|融合|同时看|一起看|值不值得|重点推进|赢单概率|下次拜访|怎么开场|问哪些问题|推什么价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|问题陈述|价值主张|价值定位|行动建议|主要提了什么需求|需求.*待办)/.test(query);
+  return /(结合|综合|融合|同时看|一起看|值不值得|重点推进|拜访重点|回访重点|沟通重点|会议重点|(?:拜访|回访|沟通|会议).*重点|重点.*(?:拜访|回访|沟通|会议)|主要关注点|客户关注点|客户主要关注|赢单概率|下次拜访|怎么开场|问哪些问题|推什么价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|问题陈述|价值主张|价值定位|行动建议|主要提了什么需求|需求.*待办)/.test(query);
 }
 
 function isSimpleCustomerRecordLookupQuery(query: string): boolean {
@@ -7099,8 +7134,22 @@ function isSimpleCustomerRecordLookupQuery(query: string): boolean {
     || /(?:客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|客户资料|客户信息|客户详情)\s*[？?。！!]*$/.test(normalized);
 }
 
-function inferContextSummaryType(query: string): 'journey' | 'next_step' {
+type ContextSummaryType = 'journey' | 'next_step' | 'visit_needs';
+
+function inferContextSummaryType(query: string): ContextSummaryType {
+  if (isVisitNeedsSummaryQuery(query)) {
+    return 'visit_needs';
+  }
   return /(下一步|怎么推进|推进建议|下次拜访|怎么开场|问哪些问题|推什么价值点)/.test(query) ? 'next_step' : 'journey';
+}
+
+function isVisitNeedsSummaryQuery(query: string): boolean {
+  return /(?:上次|最近|这次|本次)?(?:拜访|回访|沟通|会议).*(?:需求|诉求|痛点|问题|关注|要什么|提了什么)/.test(query)
+    || /(?:需求|诉求|痛点|问题|关注).*(?:上次|最近|这次|本次)?(?:拜访|回访|沟通|会议)/.test(query)
+    || /(?:上次|最近|这次|本次|上回|近期)?(?:拜访|回访|沟通|会议).*(?:重点|关注点)/.test(query)
+    || /(?:重点|关注点).*(?:上次|最近|这次|本次|上回|近期)?(?:拜访|回访|沟通|会议)/.test(query)
+    || /(?:客户)?(?:主要)?关注点/.test(query)
+    || /主要提了什么需求/.test(query);
 }
 
 function hasContextSummarySubject(input: AgentPlannerInput): boolean {
@@ -7122,7 +7171,10 @@ async function executeContextSummaryTool(
   context: AgentToolExecuteContext,
 ): Promise<AgentToolExecutionResult> {
   const query = String(input.selectedTool.input.query || input.request.query).trim();
-  const summaryType = String(input.selectedTool.input.summaryType || 'journey') === 'next_step' ? 'next_step' : 'journey';
+  const rawSummaryType = String(input.selectedTool.input.summaryType || 'journey');
+  const summaryType: ContextSummaryType = rawSummaryType === 'next_step' || rawSummaryType === 'visit_needs'
+    ? rawSummaryType
+    : 'journey';
   const dataSourceScope = normalizeDataSourceScope(input.selectedTool.input.dataSourceScope);
   const toolCalls = [createToolCall(context.runId, CONTEXT_SUMMARY_TOOL, JSON.stringify(input.selectedTool.input))];
   const rootSubject = context.resolvedContext?.usedContext
@@ -7166,11 +7218,18 @@ async function executeContextSummaryTool(
   });
   finishToolCall(customerGetCall, 'succeeded', 'record loaded');
   toolCalls.push(customerGetCall);
+  const customerDisplayName = readLiveRecordDisplayName(customerDetail.record, CRM_RECORD_CAPABILITIES.customer)
+    || readFieldByTitles(customerDetail.record, ['客户名称'])
+    || resolvedSubject.name;
+  const summarySubject = {
+    id: resolvedSubject.id,
+    name: customerDisplayName,
+  };
 
   const relationResults = await loadRelatedRecordSummaries({
     options,
     context,
-    customerId: resolvedSubject.id,
+    customerId: summarySubject.id,
     toolCalls,
   });
 
@@ -7179,8 +7238,8 @@ async function executeContextSummaryTool(
 	        options,
 	        context,
 	        query,
-	        anchorName: resolvedSubject.name,
-	        resolvedSubject,
+	        anchorName: summarySubject.name,
+	        resolvedSubject: summarySubject,
 	        rootSubject,
 	        toolCalls,
 	      })
@@ -7199,12 +7258,23 @@ async function executeContextSummaryTool(
     relations: relationResults,
     includeSourceLabel: dataSourceScope !== 'combined',
   });
+  const fullMarkdownByArtifactId = dataSourceScope === 'combined' && summaryType === 'visit_needs'
+    ? await loadVisitNeedsFullAnalysisMarkdown({
+        options,
+        evidence: externalInfo?.evidence ?? [],
+        toolCalls,
+        runId: context.runId,
+      })
+    : new Map<string, string>();
   const content = dataSourceScope === 'combined'
     ? buildCombinedDataSourceContent({
+        query,
+        summaryType,
         internalContent,
         externalEvidence: externalInfo?.evidence ?? [],
-        externalAnchorName: externalInfo?.anchorName || resolvedSubject.name,
+        externalAnchorName: externalInfo?.anchorName || summarySubject.name,
         relations: relationResults,
+        fullMarkdownByArtifactId,
       })
     : internalContent;
 
@@ -7213,7 +7283,7 @@ async function executeContextSummaryTool(
     content,
     headline: dataSourceScope === 'combined'
       ? '已融合外部信息与系统内记录'
-      : summaryType === 'journey' ? '客户旅程摘要已生成' : '推进建议已生成',
+      : summaryType === 'journey' ? '客户旅程摘要已生成' : summaryType === 'visit_needs' ? `${RECORDING_NEEDS_SUMMARY_LABEL}已生成` : '推进建议已生成',
     references: dataSourceScope === 'combined'
       ? [
           INTERNAL_RECORDS_SOURCE_LABEL,
@@ -7233,8 +7303,8 @@ async function executeContextSummaryTool(
       subject: {
         kind: 'record',
         type: 'customer',
-        id: resolvedSubject.id,
-        name: resolvedSubject.name,
+        id: summarySubject.id,
+        name: summarySubject.name,
       },
       sourceRunId: context.runId,
       evidenceRefs: [],
@@ -7258,7 +7328,8 @@ async function resolveSummaryCustomerSubject(input: {
   }
 
   const intentTargetName = cleanupCompanyName(input.input.intentFrame.target.name?.trim() ?? '');
-  const targetName = extractInternalRecordsSubjectName(input.query)
+  const targetName = extractVisitNeedsSubjectName(input.query)
+    || extractInternalRecordsSubjectName(input.query)
     || extractExternalInfoSubjectName(input.query)
     || extractCompanyName(input.query)
     || subject?.name?.trim()
@@ -7339,21 +7410,28 @@ async function loadExternalInfoEvidenceForSummary(input: {
   toolCalls: AgentToolExecutionResult['toolCalls'];
 }): Promise<{ anchorName: string; evidence: AgentEvidenceCard[] }> {
   const anchorName = input.anchorName || input.rootSubject?.name || extractExternalInfoSubjectName(input.query);
-  const anchors = [
-    ...(anchorName ? [buildCompanyAnchor(anchorName)] : []),
-    ...(input.resolvedSubject?.id
-      ? [{ type: 'customer' as const, id: input.resolvedSubject.id, name: input.resolvedSubject.name, role: 'primary' as const }]
-      : []),
-  ];
+  const summaryType = inferContextSummaryType(input.query);
+  const queryAnchorName = extractContextSummaryQueryAnchorName(input.query);
+  const companyAnchors = [anchorName, queryAnchorName]
+    .filter((item): item is string => Boolean(item?.trim()) && !isLikelyInternalRecordIdentifier(item))
+    .map((item) => buildCompanyAnchor(item));
+  const customerAnchors = input.resolvedSubject?.id
+    ? [{ type: 'customer' as const, id: input.resolvedSubject.id, name: input.resolvedSubject.name, role: 'primary' as const }]
+    : [];
   const searches = await Promise.all((['company_research', 'recording_material', 'analysis_material'] as const).map(async (kind) => {
     const call = createToolCall(input.context.runId, 'artifact.search', `${kind}:${input.query}`);
+    const anchors = kind === 'company_research'
+      ? companyAnchors
+      : [...customerAnchors, ...companyAnchors];
     const search = await input.options.artifactService.search({
       eid: input.context.eid,
       appId: input.context.appId,
       query: input.query,
       kinds: [kind],
       anchors: anchors.length ? anchors : undefined,
-      limit: 5,
+      limit: kind === 'analysis_material' && summaryType === 'visit_needs'
+        ? VISIT_NEEDS_ANALYSIS_SEARCH_LIMIT
+        : DEFAULT_EXTERNAL_INFO_SEARCH_LIMIT,
     });
     finishToolCall(call, 'succeeded', `${artifactKindBusinessLabel(kind)} 找到 ${search.evidence.length} 条`);
     input.toolCalls.push(call);
@@ -7377,6 +7455,44 @@ async function loadExternalInfoEvidenceForSummary(input: {
       vectorStatus,
     })),
   };
+}
+
+function extractContextSummaryQueryAnchorName(query: string): string {
+  return extractVisitNeedsSubjectName(query)
+    || extractInternalRecordsSubjectName(query)
+    || extractExternalInfoSubjectName(query)
+    || extractCompanyName(query)
+    || '';
+}
+
+function extractVisitNeedsSubjectName(query: string): string {
+  if (!isVisitNeedsSummaryQuery(query)) {
+    return '';
+  }
+  const normalized = stripDataSourceScopePhrases(query);
+  const patterns = [
+    /^([^，。！？\n]+?)(?:上次|最近|这次|本次|上回|近期)?(?:拜访|回访|沟通|会议)/,
+    /^([^，。！？\n]+?)(?:的)?(?:客户)?(?:需求|诉求|痛点|问题|关注).*(?:拜访|回访|沟通|会议)/,
+    /^([^，。！？\n]+?)(?:的)?客户(?:主要)?关注点/,
+    /^([^，。！？\n]+?)(?:的)?(?:主要)?(?:关注点|重点)/,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const candidate = cleanupVisitNeedsSubjectName(match?.[1] ?? '');
+    if (isUsableCompanyName(candidate)) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+function cleanupVisitNeedsSubjectName(value: string): string {
+  return cleanupCustomerRecordLookupName(value)
+    .replace(/^(?:这个|该|当前)(?:客户|公司)?$/g, '')
+    .replace(/(?:上次|最近|这次|本次|上回|近期)$/g, '')
+    .replace(/(?:拜访|回访|沟通|会议|主要|重点|关注点)$/g, '')
+    .replace(/客户$/g, '')
+    .trim();
 }
 
 async function executeSummarySearchWithRetry(
@@ -7483,6 +7599,8 @@ function artifactKindBusinessLabel(kind: AgentEvidenceCard['kind']): string {
 }
 
 function buildCombinedDataSourceContent(input: {
+  query: string;
+  summaryType: ContextSummaryType;
   internalContent: string;
   externalEvidence: AgentEvidenceCard[];
   externalAnchorName: string;
@@ -7490,7 +7608,12 @@ function buildCombinedDataSourceContent(input: {
     totalElements: number;
     records: Array<unknown>;
   }>;
+  fullMarkdownByArtifactId?: Map<string, string>;
 }): string {
+  if (input.summaryType === 'visit_needs') {
+    return buildVisitNeedsSummaryContent(input);
+  }
+
   const externalContent = input.externalEvidence.length
     ? buildExternalInfoContent({
         anchorName: input.externalAnchorName,
@@ -7515,6 +7638,391 @@ function buildCombinedDataSourceContent(input: {
       relations: input.relations,
     }).map((item) => `- ${item}`),
   ].join('\n');
+}
+
+function buildVisitNeedsSummaryContent(input: {
+  query: string;
+  internalContent: string;
+  externalEvidence: AgentEvidenceCard[];
+  externalAnchorName: string;
+  relations: Record<'contact' | 'opportunity' | 'followup', {
+    totalElements: number;
+    records: Array<unknown>;
+  }>;
+  fullMarkdownByArtifactId?: Map<string, string>;
+}): string {
+  const analysisEvidence = input.externalEvidence.filter((item) => item.kind === 'analysis_material');
+  const recordingEvidence = input.externalEvidence.filter((item) => item.kind === 'recording_material');
+  const researchEvidence = input.externalEvidence.filter((item) => item.kind === 'company_research');
+  const followupPreview = summarizeRelationRecords('followup', input.relations.followup.records as Array<{
+    fields: Array<{ title?: string | null; value?: unknown; rawValue?: unknown }>;
+    rawRecord?: Record<string, unknown>;
+    formInstId: string;
+  }>);
+  const selectedAnalysisEvidence = selectVisitNeedsAnalysisEvidence(analysisEvidence);
+  const structuredNeeds = extractStructuredVisitNeeds(input.fullMarkdownByArtifactId, selectedAnalysisEvidence);
+  const primaryAnalysisEvidence = selectedAnalysisEvidence.filter((item) => !isCustomerValuePositioningEvidence(item));
+  const selectedRecordingEvidence = selectVisitNeedsRecordingEvidence(recordingEvidence);
+  const primaryEvidence = [
+    ...primaryAnalysisEvidence,
+    ...selectedRecordingEvidence,
+  ].slice(0, VISIT_NEEDS_EVIDENCE_SOURCE_LIMIT);
+  const fallbackDemandEvidence = primaryEvidence.filter((item) => !isCustomerValuePositioningEvidence(item));
+  const demandSignals = structuredNeeds.length ? [] : extractDemandSignals(fallbackDemandEvidence);
+  const lines = [
+    `## ${RECORDING_NEEDS_SUMMARY_LABEL}`,
+    `- 客户：${input.externalAnchorName || '当前客户'}`,
+    `- 取材优先级：完整客户需求工作待办分析 > 问题陈述 > 拜访会话理解 > 拜访录音 > 跟进记录；客户价值定位和公司研究仅作辅助背景。`,
+  ];
+
+  if (structuredNeeds.length) {
+    lines.push('', '### 客户主要需求');
+    for (const need of structuredNeeds) {
+      lines.push(`- ${need.title}`);
+      for (const detail of need.details) {
+        lines.push(`  - ${detail}`);
+      }
+    }
+  } else if (demandSignals.length) {
+    lines.push('', '### 客户主要需求', ...demandSignals.map((item) => `- ${item}`));
+  } else {
+    lines.push('', '### 客户主要需求', '- 当前已归档资料中没有抽到明确需求条目，建议打开录音资料或补跑“客户需求工作待办分析”后再确认。');
+  }
+
+  if (!analysisEvidence.length && recordingEvidence.length) {
+    lines.push('', '### 分析资料状态', '- 当前未检索到正式拜访分析结果；已先基于拜访录音资料包提炼，建议补跑“拜访会话理解”和“客户需求工作待办分析”后沉淀为分析资料。');
+  }
+
+  if (primaryEvidence.length) {
+    lines.push('', '### 证据来源', ...primaryEvidence.slice(0, VISIT_NEEDS_EVIDENCE_SOURCE_LIMIT).map((item) => (
+      `- ${artifactKindBusinessLabel(item.kind)}：${item.title}，片段：${formatVisitNeedsEvidenceSnippet(item)}`
+    )));
+  }
+  if (followupPreview.length) {
+    lines.push('', '### 记录系统补充', ...followupPreview.map((item) => `- ${item}`));
+  }
+  if (researchEvidence.length) {
+    lines.push('', '### 公司研究背景', ...researchEvidence.slice(0, 2).map((item) => `- ${trimEvidenceSnippet(item.snippet, 180)}`));
+  }
+
+  return lines.join('\n');
+}
+
+async function loadVisitNeedsFullAnalysisMarkdown(input: {
+  options: CrmAgentPackOptions;
+  evidence: AgentEvidenceCard[];
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+  runId: string;
+}): Promise<Map<string, string>> {
+  const targets = selectVisitNeedsAnalysisEvidence(
+    input.evidence.filter((item) => (
+      item.kind === 'analysis_material'
+      && isEvidenceFromAnalysisSource(item, {
+        sourceToolCode: VISIT_NEEDS_PRIMARY_ANALYSIS_SOURCE_CODE,
+        titleKeyword: '客户需求工作待办分析',
+      })
+    )),
+  );
+  const markdownByArtifactId = new Map<string, string>();
+  const seen = new Set<string>();
+  for (const evidence of targets) {
+    if (!evidence.artifactId || seen.has(evidence.artifactId)) {
+      continue;
+    }
+    seen.add(evidence.artifactId);
+    const call = createToolCall(input.runId, 'artifact.get', evidence.artifactId);
+    try {
+      const detail = await input.options.artifactService.getArtifact(evidence.artifactId);
+      markdownByArtifactId.set(evidence.artifactId, detail.markdown);
+      finishToolCall(call, 'succeeded', `fullMarkdown=${detail.markdown.length}`);
+    } catch (error) {
+      finishToolCall(call, 'failed', '客户需求工作待办分析完整正文读取失败，回退片段摘要', error);
+    }
+    input.toolCalls.push(call);
+  }
+  return markdownByArtifactId;
+}
+
+interface StructuredVisitNeed {
+  title: string;
+  details: string[];
+}
+
+function extractStructuredVisitNeeds(
+  markdownByArtifactId: Map<string, string> | undefined,
+  selectedEvidence: AgentEvidenceCard[],
+): StructuredVisitNeed[] {
+  if (!markdownByArtifactId?.size) {
+    return [];
+  }
+  const needsEvidence = selectedEvidence.find((item) => (
+    item.artifactId
+    && markdownByArtifactId.has(item.artifactId)
+    && isEvidenceFromAnalysisSource(item, {
+      sourceToolCode: VISIT_NEEDS_PRIMARY_ANALYSIS_SOURCE_CODE,
+      titleKeyword: '客户需求工作待办分析',
+    })
+  ));
+  const markdown = needsEvidence?.artifactId
+    ? markdownByArtifactId.get(needsEvidence.artifactId)
+    : Array.from(markdownByArtifactId.values())[0];
+  if (!markdown) {
+    return [];
+  }
+  const section = extractMarkdownSection(markdown, /^#{1,6}\s*(?:一[、.．]\s*)?客户核心需求\s*$/);
+  return parseVisitNeedSections(section || markdown);
+}
+
+function extractMarkdownSection(markdown: string, headingPattern: RegExp): string {
+  const lines = markdown.split(/\r?\n/);
+  const start = lines.findIndex((line) => headingPattern.test(line.trim()));
+  if (start < 0) {
+    return '';
+  }
+  const headingLevel = countMarkdownHeadingLevel(lines[start]);
+  const collected: string[] = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const level = countMarkdownHeadingLevel(line);
+    if (level > 0 && level <= headingLevel) {
+      break;
+    }
+    collected.push(line);
+  }
+  return collected.join('\n');
+}
+
+function parseVisitNeedSections(markdown: string): StructuredVisitNeed[] {
+  const lines = markdown.split(/\r?\n/);
+  const needs: StructuredVisitNeed[] = [];
+  let current: StructuredVisitNeed | null = null;
+  let currentLabel = '';
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const heading = line.match(/^#{1,6}\s*(需求\s*\d+\s*[：:].+)$/);
+    if (heading) {
+      current = {
+        title: normalizeDemandSignalLine(heading[1]),
+        details: [],
+      };
+      currentLabel = '';
+      needs.push(current);
+      continue;
+    }
+    if (!current || !line) {
+      continue;
+    }
+    const cleaned = normalizeNeedDetailLine(line);
+    if (!cleaned || VISIT_NEEDS_SIGNAL_NOISE_KEYWORDS.test(cleaned)) {
+      continue;
+    }
+    const labeled = cleaned.match(/^(背景|目标|关注点|客户关注|业务目标|核心诉求|现状|原因|需求描述)[：:]\s*(.+)$/);
+    if (labeled) {
+      currentLabel = labeled[1];
+      pushNeedDetail(current, `${labeled[1]}：${labeled[2]}`);
+      continue;
+    }
+    if (/^(背景|目标|关注点|客户关注|业务目标|核心诉求|现状|原因|需求描述)$/.test(cleaned)) {
+      currentLabel = cleaned;
+      continue;
+    }
+    if (currentLabel && VISIT_NEEDS_DEMAND_KEYWORDS.test(cleaned)) {
+      pushNeedDetail(current, `${currentLabel}：${cleaned}`);
+      continue;
+    }
+    if (VISIT_NEEDS_DEMAND_KEYWORDS.test(cleaned)) {
+      pushNeedDetail(current, cleaned);
+    }
+  }
+  return needs
+    .map((need) => ({
+      ...need,
+      details: need.details.slice(0, 3),
+    }))
+    .filter((need) => need.title && need.details.length)
+    .slice(0, 6);
+}
+
+function normalizeNeedDetailLine(value: string): string {
+  return trimEvidenceSnippet(
+    value
+      .replace(/^[-*]\s*(?:\[[ xX]\]\s*)?/, '')
+      .replace(/^\d+[.、]\s*/, '')
+      .replace(/^\*\*([^*：:]+)[：:]\*\*\s*/, '$1：')
+      .replace(/^\*\*([^*]+)\*\*\s*$/, '$1')
+      .trim(),
+    180,
+  );
+}
+
+function pushNeedDetail(need: StructuredVisitNeed, detail: string): void {
+  const normalized = detail.replace(/\s+/g, '');
+  if (!need.details.some((item) => item.replace(/\s+/g, '') === normalized)) {
+    need.details.push(detail);
+  }
+}
+
+function countMarkdownHeadingLevel(line: string): number {
+  const match = line.match(/^(#{1,6})\s+/);
+  return match ? match[1].length : 0;
+}
+
+function selectVisitNeedsAnalysisEvidence(evidence: AgentEvidenceCard[]): AgentEvidenceCard[] {
+  const selected: AgentEvidenceCard[] = [];
+  const used = new Set<string>();
+  const addEvidence = (item?: AgentEvidenceCard) => {
+    if (!item) {
+      return;
+    }
+    const key = buildEvidenceDedupeKey(item);
+    if (used.has(key)) {
+      return;
+    }
+    used.add(key);
+    selected.push(item);
+  };
+
+  for (const source of VISIT_NEEDS_ANALYSIS_SOURCE_ORDER) {
+    addEvidence(selectBestVisitNeedsEvidenceForSource(evidence, source));
+  }
+
+  for (const item of evidence) {
+    if (selected.length >= VISIT_NEEDS_PRIMARY_ANALYSIS_LIMIT) {
+      break;
+    }
+    addEvidence(item);
+  }
+
+  return selected;
+}
+
+function selectBestVisitNeedsEvidenceForSource(
+  evidence: AgentEvidenceCard[],
+  source: { sourceToolCode: string; titleKeyword: string },
+): AgentEvidenceCard | undefined {
+  const matches = evidence.filter((item) => isEvidenceFromAnalysisSource(item, source));
+  return matches.find((item) => extractDemandSignals([item]).length > 0) ?? matches[0];
+}
+
+function selectVisitNeedsRecordingEvidence(evidence: AgentEvidenceCard[]): AgentEvidenceCard[] {
+  const grouped = new Map<string, AgentEvidenceCard[]>();
+  for (const item of evidence) {
+    const key = item.artifactId || `${item.kind}:${item.title}:${item.sourceToolCode}`;
+    const group = grouped.get(key) ?? [];
+    group.push(item);
+    grouped.set(key, group);
+  }
+
+  return Array.from(grouped.values()).flatMap((group) => {
+    const signalItems = group.filter((item) => extractDemandSignals([item]).length > 0);
+    const selected = signalItems.length ? signalItems : group;
+    return selected.slice(0, 2);
+  });
+}
+
+function isEvidenceFromAnalysisSource(
+  evidence: AgentEvidenceCard,
+  source: { sourceToolCode: string; titleKeyword: string },
+): boolean {
+  return evidence.sourceToolCode === source.sourceToolCode || evidence.title.includes(source.titleKeyword);
+}
+
+function isCustomerValuePositioningEvidence(evidence: AgentEvidenceCard): boolean {
+  return isEvidenceFromAnalysisSource(evidence, {
+    sourceToolCode: 'ext.customer_value_positioning_pm',
+    titleKeyword: '客户价值定位',
+  });
+}
+
+function dedupeEvidenceBySource(evidence: AgentEvidenceCard[]): AgentEvidenceCard[] {
+  const seen = new Set<string>();
+  const selected: AgentEvidenceCard[] = [];
+  for (const item of evidence) {
+    const key = buildEvidenceDedupeKey(item);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    selected.push(item);
+  }
+  return selected;
+}
+
+function buildEvidenceDedupeKey(evidence: AgentEvidenceCard): string {
+  if (evidence.kind === 'analysis_material' && evidence.sourceToolCode) {
+    return `analysis:${evidence.sourceToolCode}`;
+  }
+  return evidence.artifactId || `${evidence.kind ?? 'artifact'}:${evidence.title}:${evidence.sourceToolCode}`;
+}
+
+function formatVisitNeedsEvidenceSnippet(evidence: AgentEvidenceCard): string {
+  const signals = extractDemandSignals([evidence]);
+  if (signals.length) {
+    return trimEvidenceSnippet(signals.slice(0, 2).join('；'), 180);
+  }
+  const cleanedLines = evidence.snippet
+    .split(/\n+/)
+    .map((line) => normalizeDemandSignalLine(line))
+    .filter((line) => line && !isDemandSignalHeading(line) && !VISIT_NEEDS_SIGNAL_NOISE_KEYWORDS.test(line));
+  return trimEvidenceSnippet(cleanedLines.join(' '), 180);
+}
+
+function extractDemandSignals(evidence: AgentEvidenceCard[]): string[] {
+  const seen = new Set<string>();
+  const signals: string[] = [];
+  for (const item of evidence) {
+    for (const rawLine of item.snippet.split(/\n+/)) {
+      const line = normalizeDemandSignalLine(rawLine);
+      if (!line
+        || isDemandSignalHeading(line)
+        || VISIT_NEEDS_SIGNAL_NOISE_KEYWORDS.test(line)
+        || /^(?:价值定位|定位声明|价值主张)[：:]/.test(line)
+        || !VISIT_NEEDS_DEMAND_KEYWORDS.test(line)) {
+        continue;
+      }
+      const normalized = line.replace(/\s+/g, '');
+      if (seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      signals.push(line);
+      if (signals.length >= 6) {
+        return signals;
+      }
+    }
+  }
+  return signals;
+}
+
+function normalizeDemandSignalLine(value: string): string {
+  return trimEvidenceSnippet(
+    value
+      .replace(/^#{1,6}\s*/, '')
+      .replace(/^[-*]\s*(?:\[[ xX]\]\s*)?/, '')
+      .replace(/^\d+[.、]\s*/, '')
+      .replace(/^\*\*([^*：:]+)[：:]\*\*\s*/, '$1：')
+      .replace(/^\*\*([^*]+)\*\*\s*$/, '$1')
+      .trim(),
+    160,
+  );
+}
+
+function isDemandSignalHeading(line: string): boolean {
+  const normalized = line
+    .replace(/[：:]\s*$/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+  return /^(客户需求工作待办分析|拜访会话理解|问题陈述|客户价值定位|分析依据|注意|项目\/场景背景|待补充的材料\/证据|定位声明|来源文件|录音任务|关联状态|生成日期|技能|客户主要需求|已确认的需求|待办清单|总结|摘要)$/.test(normalized);
+}
+
+function trimEvidenceSnippet(value: string, maxLength: number): string {
+  const normalized = value
+    .replace(/^#+\s*/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength)}...`
+    : normalized;
 }
 
 function demoteMarkdownHeadings(content: string): string {
@@ -7555,7 +8063,7 @@ function readSearchTotal(search: { totalElements?: number; records?: Array<unkno
 
 function buildCustomerSummaryContent(input: {
   query: string;
-  summaryType: 'journey' | 'next_step';
+  summaryType: ContextSummaryType;
   includeSourceLabel?: boolean;
   customerRecord: {
     formInstId?: string;
@@ -7593,7 +8101,7 @@ function buildCustomerSummaryContent(input: {
 
   const lines = [
     ...(input.includeSourceLabel ? [`## ${INTERNAL_RECORDS_SOURCE_LABEL}`] : []),
-    input.summaryType === 'journey' ? `${heading} 客户旅程摘要` : `${heading} 推进建议摘要`,
+    input.summaryType === 'next_step' ? `${heading} 推进建议摘要` : `${heading} 客户旅程摘要`,
     `- 客户：${customerName}`,
     `- 客户编码：${customerCode}`,
     `- 客户状态：${customerStatus}`,
@@ -7618,7 +8126,7 @@ function buildCustomerSummaryContent(input: {
     lines.push('', `${heading} 最近跟进`, ...followupPreview.map((item) => `- ${item}`));
   }
   if (suggestions.length) {
-    lines.push('', input.summaryType === 'journey' ? `${heading} 建议下一步` : `${heading} 下一步建议`, ...suggestions.map((item) => `- ${item}`));
+    lines.push('', input.summaryType === 'next_step' ? `${heading} 下一步建议` : `${heading} 建议下一步`, ...suggestions.map((item) => `- ${item}`));
   }
 
   return lines.join('\n');
@@ -8066,7 +8574,7 @@ function buildCompanyResearchRunningResult(
       '## 当前说明',
       '- 系统已成功触发公司研究服务。',
       '- 本次响应先保留运行中状态，避免把长耗时研究误判成失败。',
-      '- 任务完成后，可通过外部技能任务记录查看研究资料；后续再接入异步回填。',
+      '- 任务完成后，系统会继续校验并沉淀公司研究资料；稍后再次询问同一公司即可复用结果。',
     ].join('\n'),
     headline: '公司研究任务仍在运行，可稍后查看产物',
     references: [COMPANY_RESEARCH_SERVICE_LABEL],
