@@ -103,6 +103,11 @@ import { assistantScenes, buildPromptGroups, getSceneByPath } from './scene-meta
 import { RunInsightDrawer } from './RunInsightDrawer';
 import { buildRecordingTimeline, getLatestTimelineMessageId } from './recording-timeline';
 import {
+  readCachedAssistantIdentity,
+  writeCachedAssistantIdentity,
+  type BrowserStorageLike,
+} from './assistant-auth-cache';
+import {
   chooseConversationMessages,
   mergeAuthoritativeRemoteConversations,
   mergeOfflineCachedConversations,
@@ -1536,6 +1541,17 @@ function getBrowserStorage() {
   }
   try {
     return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function getBrowserSessionStorage() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    return window.sessionStorage satisfies BrowserStorageLike;
   } catch {
     return null;
   }
@@ -6253,9 +6269,21 @@ function AssistantIdentityGate() {
   useEffect(() => {
     let cancelled = false;
     setState({ loading: true, identity: null, error: null });
+
+    if (!ticket) {
+      const cachedIdentity = readCachedAssistantIdentity(getBrowserSessionStorage());
+      if (cachedIdentity) {
+        setState({ loading: false, identity: cachedIdentity, error: null });
+        return () => {
+          cancelled = true;
+        };
+      }
+    }
+
     void resolveAssistantIdentity(ticket)
       .then((identity) => {
         if (!cancelled) {
+          writeCachedAssistantIdentity(getBrowserSessionStorage(), identity);
           setState({ loading: false, identity, error: null });
         }
       })
