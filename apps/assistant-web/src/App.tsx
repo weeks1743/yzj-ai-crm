@@ -103,6 +103,12 @@ import { assistantScenes, buildPromptGroups, getSceneByPath } from './scene-meta
 import { RunInsightDrawer } from './RunInsightDrawer';
 import { buildRecordingTimeline, getLatestTimelineMessageId } from './recording-timeline';
 import {
+  buildFailedPendingRecordingTask,
+  isPendingRecordingTaskId,
+  normalizePersistedRecordingTask,
+  RECORDING_UPLOAD_INCOMPLETE_MESSAGE,
+} from './recording-task-state';
+import {
   readCachedAssistantIdentity,
   writeCachedAssistantIdentity,
   type BrowserStorageLike,
@@ -1852,7 +1858,8 @@ function toPersistableRecordingTask(value: unknown): RecordingTaskCardState | nu
     return null;
   }
 
-  const { sourceFile: _sourceFile, material, skillJobs, ...rest } = candidate;
+  const normalized = normalizePersistedRecordingTask(candidate);
+  const { sourceFile: _sourceFile, material, skillJobs, ...rest } = normalized;
   const sanitizedSkillJobs = Object.fromEntries(
     Object.entries(skillJobs ?? {}).filter((entry): entry is [RecordingSkillCode, RecordingSkillJobState] => Boolean(entry[1])),
   ) as Partial<Record<RecordingSkillCode, RecordingSkillJobState>>;
@@ -4603,26 +4610,43 @@ function AssistantConversationRuntime({
     if (Object.keys(anchors).length) {
       formData.append('anchors', JSON.stringify(anchors));
     }
-    const response = await fetch('/api/recording-audio-tasks', {
-      method: 'POST',
-      body: formData,
-    });
-    if (!response.ok) {
-      const errorPayload = await response.json().catch(() => ({}));
-      throw new Error(errorPayload.message || `录音上传接口返回 ${response.status}`);
-    }
-    const payload = (await response.json()) as RecordingTaskPayload;
-    updateRecordingTasksForConversation(
-      conversationKey,
-      (current) => current.filter((item) => item.taskId !== pendingTask.taskId),
-    );
-    upsertRecordingTask({ ...payload, sourceFile: file, timelineAnchorMessageId }, conversationKey);
-	    if (payload.status === 'succeeded' && !payload.material?.available) {
-      void materializeRecordingTask(payload.taskId, conversationKey).catch((error) => {
-        messageApi.error(error instanceof Error ? error.message : '录音资料包生成失败');
+    try {
+      const response = await fetch('/api/recording-audio-tasks', {
+        method: 'POST',
+        body: formData,
       });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}));
+        throw new Error(errorPayload.message || `录音上传接口返回 ${response.status}`);
+      }
+      const payload = (await response.json()) as RecordingTaskPayload;
+      updateRecordingTasksForConversation(
+        conversationKey,
+        (current) => current.filter((item) => item.taskId !== pendingTask.taskId),
+      );
+      upsertRecordingTask({ ...payload, sourceFile: file, timelineAnchorMessageId }, conversationKey);
+      if (payload.status === 'succeeded' && !payload.material?.available) {
+        void materializeRecordingTask(payload.taskId, conversationKey).catch((error) => {
+          messageApi.error(error instanceof Error ? error.message : '录音资料包生成失败');
+        });
+      }
+      return payload;
+    } catch (error) {
+      const errorMessage = error instanceof Error
+        ? error.message
+        : RECORDING_UPLOAD_INCOMPLETE_MESSAGE;
+      updateRecordingTasksForConversation(
+        conversationKey,
+        (current) => current.map((item) => (
+          item.taskId === pendingTask.taskId
+            ? buildFailedPendingRecordingTask(item, errorMessage)
+            : item
+        )),
+      );
+      throw error instanceof Error
+        ? error
+        : new Error(errorMessage);
     }
-    return payload;
   }, [
     activeConversationKey,
     latestTimelineAnchorMessageId,
@@ -4684,7 +4708,7 @@ function AssistantConversationRuntime({
 
   useEffect(() => {
     const pollingTasks = recordingTasks
-      .filter((task) => !task.taskId.startsWith('pending-'))
+      .filter((task) => !isPendingRecordingTaskId(task.taskId))
 	      .filter((task) => task.status === 'queued' || task.status === 'running' || (task.status === 'succeeded' && !task.material?.available));
 
     if (!pollingTasks.length) {
