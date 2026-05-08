@@ -60,6 +60,66 @@ test('YzjClient gets access token and employee list', async () => {
   assert.match(String(calls[1].init?.body), /%22count%22%3A1000/);
 });
 
+test('YzjClient gets app token and resolves ticket identity', async () => {
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const client = new YzjClient({
+    baseUrl: 'https://stub.yzj.local',
+    now: () => 1234567890123,
+    fetchImpl: async (input, init) => {
+      const requestUrl = String(input);
+      calls.push({ input: requestUrl, init });
+
+      if (requestUrl.includes('getAccessToken')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            errorCode: 0,
+            data: {
+              accessToken: 'app-token',
+              expireIn: 6400,
+            },
+          }),
+          { status: 200 },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          errorCode: 0,
+          data: {
+            appid: '501037729',
+            eid: '21024647',
+            username: '陈伟棠',
+            userid: 'uid-chen',
+            networkid: 'network-1',
+            deviceId: 'device-1',
+            openid: 'open-chen',
+          },
+        }),
+        { status: 200 },
+      );
+    },
+  });
+
+  const accessToken = await client.getAppAccessToken({
+    appId: '501037729',
+    secret: 'app-secret',
+  });
+  const identity = await client.resolveTicket({
+    accessToken,
+    appId: '501037729',
+    ticket: 'ticket-001',
+  });
+
+  assert.equal(accessToken, 'app-token');
+  assert.equal(identity.eid, '21024647');
+  assert.equal(identity.openid, 'open-chen');
+  assert.match(String(calls[0].init?.body), /"scope":"app"/);
+  assert.match(calls[1].input, /acquirecontext\?accessToken=app-token/);
+  assert.match(String(calls[1].init?.body), /"disposable":true/);
+});
+
 test('YzjClient maps failed payload to YzjApiError', async () => {
   const client = new YzjClient({
     baseUrl: 'https://stub.yzj.local',

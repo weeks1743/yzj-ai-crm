@@ -4,7 +4,7 @@ import {
   XRequest,
   type XRequestOptions,
 } from '@ant-design/x-sdk';
-import type { AgentClientAction, AgentUiSurface } from '@shared/types';
+import type { AgentClientAction, AgentUiSurface, YzjAuthIdentityResponse } from '@shared/types';
 
 const ASSISTANT_TEST_OPERATOR_OPEN_ID = '69e75eb5e4b0e65b61c014da';
 
@@ -12,17 +12,65 @@ const ASSISTANT_TEST_OPERATOR_OPEN_ID = '69e75eb5e4b0e65b61c014da';
 export const ASSISTANT_OPERATOR_OPEN_ID =
   import.meta.env.VITE_YZJ_OPERATOR_OPEN_ID?.trim() || ASSISTANT_TEST_OPERATOR_OPEN_ID;
 
+export const ASSISTANT_LOCAL_IDENTITY: YzjAuthIdentityResponse = {
+  source: 'local_fixed',
+  eid: '21024647',
+  appId: '501037729',
+  operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+  userId: null,
+  userName: '陈伟棠',
+  networkId: null,
+  deviceId: null,
+};
+
 function toConversationKeyPart(value: string) {
   return value.trim().replace(/[^a-zA-Z0-9_-]/g, '-') || 'unknown';
 }
 
-export function buildAssistantConversationKey(scope: string) {
+export function buildAssistantConversationKey(scope: string, operatorOpenId = ASSISTANT_OPERATOR_OPEN_ID) {
   return [
     'conv',
     'openid',
-    toConversationKeyPart(ASSISTANT_OPERATOR_OPEN_ID),
+    toConversationKeyPart(operatorOpenId),
     toConversationKeyPart(scope),
   ].join('-');
+}
+
+function isLocalDebugHost() {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+}
+
+export async function resolveAssistantIdentity(ticket?: string): Promise<YzjAuthIdentityResponse> {
+  const normalizedTicket = ticket?.trim();
+  const allowLocalIdentity =
+    import.meta.env.DEV ||
+    import.meta.env.VITE_YZJ_ALLOW_LOCAL_IDENTITY === 'true' ||
+    isLocalDebugHost();
+
+  if (!normalizedTicket && !allowLocalIdentity) {
+    throw new Error('缺少云之家 ticket，请从云之家轻应用入口进入。');
+  }
+
+  const endpoint = normalizedTicket ? '/api/yzj/auth/resolve-ticket' : '/api/yzj/auth/local-identity';
+  const response = normalizedTicket
+    ? await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket: normalizedTicket }),
+        cache: 'no-store',
+      })
+    : await fetch(endpoint, { cache: 'no-store' });
+
+  if (!response.ok) {
+    const reason = await readApiError(response);
+    throw new Error(reason || '云之家身份解析失败');
+  }
+
+  return response.json() as Promise<YzjAuthIdentityResponse>;
 }
 
 export interface AssistantAttachment {
@@ -297,6 +345,7 @@ export interface AssistantRequestInput {
   query: string;
   sceneKey: string;
   conversationKey: string;
+  identity?: YzjAuthIdentityResponse;
   attachments?: AssistantAttachment[];
   clientAction?: AgentClientAction;
   resume?: {
@@ -408,7 +457,9 @@ async function agentApiFetch(
       attachments: params.attachments ?? [],
       ...(params.clientAction ? { clientAction: params.clientAction } : {}),
       tenantContext: {
-        operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+        eid: params.identity?.eid,
+        appId: params.identity?.appId,
+        operatorOpenId: params.identity?.operatorOpenId ?? ASSISTANT_OPERATOR_OPEN_ID,
       },
       ...(params.resume ? { resume: params.resume } : {}),
     }),

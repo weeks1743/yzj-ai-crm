@@ -167,6 +167,42 @@ export interface AppConfig {
   };
 }
 
+export interface YzjUserContext {
+  appid: string;
+  eid: string;
+  username: string;
+  userid: string;
+  jobNo?: string;
+  networkid?: string;
+  deviceId?: string;
+  openid: string;
+  uid?: string;
+  oid?: string;
+  xtid?: string;
+}
+
+export interface YzjTicketUserContextResponse {
+  errorCode?: number;
+  data?: Partial<YzjUserContext> | null;
+  success?: boolean;
+  error?: unknown;
+}
+
+export interface YzjAuthResolveTicketRequest {
+  ticket?: string;
+}
+
+export interface YzjAuthIdentityResponse {
+  source: 'ticket' | 'local_fixed';
+  eid: string;
+  appId: string;
+  operatorOpenId: string;
+  userId: string | null;
+  userName: string;
+  networkId: string | null;
+  deviceId: string | null;
+}
+
 export type ArtifactAnchorType =
   | 'customer'
   | 'opportunity'
@@ -1064,21 +1100,41 @@ export interface TenantAppSettingsResponse {
   enabled: boolean;
   configSource: string;
   isolationKey: string;
+  aiApp: {
+    appId: string;
+    appName: string;
+    isolationKey: string;
+  };
+  lightCloudRecordApp: {
+    appId: string;
+    appName: string;
+    configured: boolean;
+  };
 }
 
 export interface CredentialSummary {
-  key: 'appId' | 'appSecret' | 'signKey' | 'orgReadSecret';
+  key:
+    | 'aiAppId'
+    | 'aiAppSecret'
+    | 'aiSignKey'
+    | 'lightCloudAppId'
+    | 'lightCloudAppSecret'
+    | 'lightCloudSecret'
+    | 'orgReadSecret';
   label: string;
   configured: boolean;
   maskedValue: string;
   description: string;
+  group: 'ai_app' | 'lightcloud_record_app' | 'org_sync';
 }
 
 export interface YzjAuthSettingsResponse {
   yzjServerBaseUrl: string;
-  tokenScope: 'resGroupSecret';
+  tokenScopes: Array<'app' | 'team' | 'resGroupSecret'>;
   tokenEndpoint: string;
+  ticketResolveEndpoint: string;
   employeeEndpoint: string;
+  lightCloudEndpoint: string;
   credentials: CredentialSummary[];
 }
 

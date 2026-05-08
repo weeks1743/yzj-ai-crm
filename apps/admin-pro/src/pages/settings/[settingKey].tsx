@@ -52,6 +52,24 @@ const observabilityColumns: ProColumns<TraceLog>[] = [
 ];
 
 const credentialColumns: ProColumns<CredentialSummary>[] = [
+  {
+    title: '分组',
+    dataIndex: 'group',
+    width: 150,
+    render: (_, record) => {
+      const labelMap: Record<CredentialSummary['group'], string> = {
+        ai_app: 'AI轻应用',
+        lightcloud_record_app: '记录系统',
+        org_sync: '组织同步',
+      };
+      const colorMap: Record<CredentialSummary['group'], string> = {
+        ai_app: 'blue',
+        lightcloud_record_app: 'purple',
+        org_sync: 'green',
+      };
+      return <Tag color={colorMap[record.group]}>{labelMap[record.group]}</Tag>;
+    },
+  },
   { title: '配置项', dataIndex: 'label', width: 160 },
   {
     title: '状态',
@@ -296,11 +314,45 @@ const SettingsPage = () => {
           <>
             {renderMetrics([
               { key: 'eid', label: '租户编号', value: realPageData.eid, helper: '当前接入租户识别键' },
-              { key: 'appId', label: '应用实例', value: realPageData.appId, helper: '当前自建应用实例标识' },
+              { key: 'aiAppId', label: 'AI轻应用', value: realPageData.aiApp.appId, helper: '负责 SSO、会话和 Agent 运行隔离' },
+              { key: 'recordAppId', label: '记录系统', value: realPageData.lightCloudRecordApp.appId, helper: '负责轻云记录对象读写' },
               { key: 'configSource', label: '配置来源', value: realPageData.configSource, helper: '当前阶段统一从本地 .env 读取' },
             ])}
 
-            <ProCard style={{ marginTop: 16 }}>
+            <ProCard style={{ marginTop: 16 }} split="vertical">
+              <ProCard title="AI销售助手">
+                <ProDescriptions column={1}>
+                  <ProDescriptions.Item label="应用名称">{realPageData.aiApp.appName}</ProDescriptions.Item>
+                  <ProDescriptions.Item label="App ID" copyable>
+                    {realPageData.aiApp.appId}
+                  </ProDescriptions.Item>
+                  <ProDescriptions.Item label="隔离键" copyable>
+                    {realPageData.aiApp.isolationKey}
+                  </ProDescriptions.Item>
+                  <ProDescriptions.Item label="用途">
+                    云之家轻应用登录、AI 会话、资料资产与 Agent 运行隔离。
+                  </ProDescriptions.Item>
+                </ProDescriptions>
+              </ProCard>
+              <ProCard title="轻云AI销售助手记录系统">
+                <ProDescriptions column={1}>
+                  <ProDescriptions.Item label="应用名称">{realPageData.lightCloudRecordApp.appName}</ProDescriptions.Item>
+                  <ProDescriptions.Item label="App ID" copyable>
+                    {realPageData.lightCloudRecordApp.appId}
+                  </ProDescriptions.Item>
+                  <ProDescriptions.Item label="配置状态">
+                    <Tag color={realPageData.lightCloudRecordApp.configured ? 'success' : 'error'}>
+                      {realPageData.lightCloudRecordApp.configured ? '已配置' : '未配置'}
+                    </Tag>
+                  </ProDescriptions.Item>
+                  <ProDescriptions.Item label="用途">
+                    通过轻云 team AccessToken 读取和写回客户、联系人、商机、跟进记录。
+                  </ProDescriptions.Item>
+                </ProDescriptions>
+              </ProCard>
+            </ProCard>
+
+            <ProCard style={{ marginTop: 16 }} title="当前租户">
               <ProDescriptions<TenantAppSettingsResponse> column={2} dataSource={realPageData}>
                 <ProDescriptions.Item label="应用名称" dataIndex="appName" />
                 <ProDescriptions.Item
@@ -312,7 +364,7 @@ const SettingsPage = () => {
                   )}
                 />
                 <ProDescriptions.Item label="租户编号" dataIndex="eid" />
-                <ProDescriptions.Item label="应用编号" dataIndex="appId" />
+                <ProDescriptions.Item label="主应用编号" dataIndex="appId" />
                 <ProDescriptions.Item label="隔离键" dataIndex="isolationKey" />
                 <ProDescriptions.Item label="配置来源" dataIndex="configSource" />
               </ProDescriptions>
@@ -324,14 +376,16 @@ const SettingsPage = () => {
           <>
             {renderMetrics([
               { key: 'baseUrl', label: '服务根地址', value: realPageData.yzjServerBaseUrl, helper: '当前云之家服务端根地址' },
-              { key: 'scope', label: 'Token Scope', value: realPageData.tokenScope, helper: '组织通讯录读取使用 resGroupSecret' },
+              { key: 'scope', label: 'Token Scope', value: realPageData.tokenScopes.join(' / '), helper: 'SSO、轻云记录和组织同步分别使用不同授权级别' },
               { key: 'credentialCount', label: '配置项数量', value: realPageData.credentials.length, helper: '只读展示脱敏摘要' },
             ])}
 
             <ProCard style={{ marginTop: 16 }}>
               <ProDescriptions<YzjAuthSettingsResponse> column={1} dataSource={realPageData}>
                 <ProDescriptions.Item label="Token 接口" dataIndex="tokenEndpoint" />
+                <ProDescriptions.Item label="Ticket 解析接口" dataIndex="ticketResolveEndpoint" />
                 <ProDescriptions.Item label="在职人员接口" dataIndex="employeeEndpoint" />
+                <ProDescriptions.Item label="轻云记录接口" dataIndex="lightCloudEndpoint" />
               </ProDescriptions>
             </ProCard>
 

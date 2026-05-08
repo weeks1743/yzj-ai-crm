@@ -25,6 +25,8 @@ import type {
   ShadowPreviewGetInput,
   ShadowPreviewSearchInput,
   ShadowPreviewUpsertInput,
+  YzjAuthIdentityResponse,
+  YzjAuthResolveTicketRequest,
 } from './contracts.js';
 import { ApprovalFileService } from './approval-file-service.js';
 import type { AgentConversationService } from './agent-conversation-service.js';
@@ -43,9 +45,11 @@ import { getTenantAppSettings, getYzjAuthSettings } from './settings-service.js'
 import { ShadowMetadataService } from './shadow-metadata-service.js';
 import { buildMetaQuestionOptionsResponse, buildRecordSearchPageResponse } from './crm-agent-pack.js';
 import type { RecordingTaskService } from './recording-task-service.js';
+import type { YzjClient } from './yzj-client.js';
 
 interface CreateAdminApiServerOptions {
   config: AppConfig;
+  yzjClient?: YzjClient;
   orgSyncService: OrgSyncService;
   orgSyncRepository?: Pick<OrgSyncRepository, 'findEmployees'>;
   shadowMetadataService: ShadowMetadataService;
@@ -68,6 +72,8 @@ const SHADOW_OBJECT_KEYS = new Set<ShadowObjectKey>([
   'opportunity',
   'followup',
 ]);
+
+const LOCAL_FIXED_OPERATOR_OPEN_ID = '69e75eb5e4b0e65b61c014da';
 
 function writeJson(
   response: ServerResponse,
@@ -220,6 +226,72 @@ function parseJsonField<T>(value: string | undefined, fallbackValue: T): T {
   }
 }
 
+function buildLocalFixedIdentity(config: AppConfig): YzjAuthIdentityResponse {
+  return {
+    source: 'local_fixed',
+    eid: config.yzj.eid,
+    appId: config.yzj.appId,
+    operatorOpenId: LOCAL_FIXED_OPERATOR_OPEN_ID,
+    userId: null,
+    userName: '陈伟棠',
+    networkId: null,
+    deviceId: null,
+  };
+}
+
+function withDefaultTenantContext(
+  config: AppConfig,
+  request: AgentChatRequest,
+): AgentChatRequest {
+  const localIdentity = buildLocalFixedIdentity(config);
+  return {
+    ...request,
+    tenantContext: {
+      eid: request.tenantContext?.eid?.trim() || localIdentity.eid,
+      appId: request.tenantContext?.appId?.trim() || localIdentity.appId,
+      operatorOpenId: request.tenantContext?.operatorOpenId?.trim() || localIdentity.operatorOpenId,
+    },
+  };
+}
+
+function resolveOperatorOpenId(config: AppConfig, value: string | null | undefined): string {
+  return value?.trim() || buildLocalFixedIdentity(config).operatorOpenId;
+}
+
+async function resolveYzjTicketIdentity(
+  options: CreateAdminApiServerOptions,
+  ticket: string,
+): Promise<YzjAuthIdentityResponse> {
+  if (!options.yzjClient) {
+    throw new ServiceUnavailableError('云之家身份解析服务未启用');
+  }
+
+  const accessToken = await options.yzjClient.getAppAccessToken({
+    appId: options.config.yzj.appId,
+    secret: options.config.yzj.appSecret,
+  });
+  const context = await options.yzjClient.resolveTicket({
+    accessToken,
+    appId: options.config.yzj.appId,
+    ticket,
+  });
+  const eid = context.eid.trim();
+  if (eid !== options.config.yzj.eid) {
+    throw new BadRequestError(`当前工作圈 ${eid} 未接入 AI销售助手`);
+  }
+
+  return {
+    source: 'ticket',
+    eid,
+    appId: context.appid?.trim() || options.config.yzj.appId,
+    operatorOpenId: context.openid.trim(),
+    userId: context.userid?.trim() || null,
+    userName: context.username?.trim() || '云之家用户',
+    networkId: context.networkid?.trim() || null,
+    deviceId: context.deviceId?.trim() || null,
+  };
+}
+
 export function createAdminApiServer(options: CreateAdminApiServerOptions) {
   return createServer(async (request: IncomingMessage, response: ServerResponse) => {
     const method = request.method ?? 'GET';
@@ -238,6 +310,22 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
 
       if (method === 'GET' && url.pathname === '/api/settings/yzj-auth') {
         writeJson(response, 200, getYzjAuthSettings(options.config));
+        return;
+      }
+
+      if (method === 'GET' && url.pathname === '/api/yzj/auth/local-identity') {
+        writeJson(response, 200, buildLocalFixedIdentity(options.config));
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/yzj/auth/resolve-ticket') {
+        const payload = await readJsonBody<YzjAuthResolveTicketRequest>(request);
+        const ticket = payload.ticket?.trim();
+        if (!ticket) {
+          writeJson(response, 200, buildLocalFixedIdentity(options.config));
+          return;
+        }
+        writeJson(response, 200, await resolveYzjTicketIdentity(options, ticket));
         return;
       }
 
@@ -350,7 +438,7 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           response,
           200,
           await options.agentConversationService.listConversations(
-            url.searchParams.get('operatorOpenId') ?? undefined,
+            resolveOperatorOpenId(options.config, url.searchParams.get('operatorOpenId')),
           ),
         );
         return;
@@ -361,7 +449,10 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           throw new ServiceUnavailableError('Agent 会话服务未启用');
         }
         const payload = await readJsonBody<AgentConversationUpsertRequest>(request);
-        writeJson(response, 200, await options.agentConversationService.upsertConversation(payload));
+        writeJson(response, 200, await options.agentConversationService.upsertConversation({
+          ...payload,
+          operatorOpenId: resolveOperatorOpenId(options.config, payload.operatorOpenId),
+        }));
         return;
       }
 
@@ -373,7 +464,7 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           response,
           200,
           await options.agentPersonalSettingsService.getSettings(
-            url.searchParams.get('operatorOpenId') ?? undefined,
+            resolveOperatorOpenId(options.config, url.searchParams.get('operatorOpenId')),
           ),
         );
         return;
@@ -384,7 +475,10 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           throw new ServiceUnavailableError('Agent 个人设置服务未启用');
         }
         const payload = await readJsonBody<AgentPersonalSettingsUpdateRequest>(request);
-        writeJson(response, 200, await options.agentPersonalSettingsService.updateSettings(payload));
+        writeJson(response, 200, await options.agentPersonalSettingsService.updateSettings({
+          ...payload,
+          operatorOpenId: resolveOperatorOpenId(options.config, payload.operatorOpenId),
+        }));
         return;
       }
 
@@ -433,7 +527,9 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           throw new ServiceUnavailableError('Agent Runtime 服务未启用');
         }
         const payload = await readJsonBody<AgentChatRequest>(request);
-        writeJson(response, 200, await options.agentService.chat(payload));
+        writeJson(response, 200, await options.agentService.chat(
+          withDefaultTenantContext(options.config, payload),
+        ));
         return;
       }
 
@@ -463,7 +559,16 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
             config: options.config,
             shadowMetadataService: options.shadowMetadataService,
             orgSyncRepository: options.orgSyncRepository,
-            request: payload,
+            request: {
+              ...payload,
+              tenantContext: {
+                ...payload.tenantContext,
+                operatorOpenId: resolveOperatorOpenId(
+                  options.config,
+                  payload.tenantContext?.operatorOpenId,
+                ),
+              },
+            },
           }),
         );
         return;

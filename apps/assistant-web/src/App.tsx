@@ -84,6 +84,7 @@ import type {
   ExternalSkillJobResponse,
   ExternalSkillJobStatus,
   ShadowObjectKey,
+  YzjAuthIdentityResponse,
 } from '@shared/types';
 import { brandTitle } from '@shared/brand';
 import { applyDocumentBranding } from '@shared/dom-branding';
@@ -93,9 +94,10 @@ import {
   type AssistantFieldOptionHint,
   type AssistantMetaQuestion,
   type AssistantMetaQuestionCard,
-  ASSISTANT_OPERATOR_OPEN_ID,
+  ASSISTANT_LOCAL_IDENTITY,
   buildAssistantConversationKey,
   providerFactory,
+  resolveAssistantIdentity,
 } from './agent-api-provider';
 import { assistantScenes, buildPromptGroups, getSceneByPath } from './scene-meta';
 import { RunInsightDrawer } from './RunInsightDrawer';
@@ -115,13 +117,7 @@ import brandLogo from '@shared/assets/logo.png';
 const { Paragraph, Text } = Typography;
 
 const ADMIN_BASE_URL = import.meta.env.VITE_ADMIN_BASE_URL?.trim() || 'http://127.0.0.1:8000';
-const HOME_CONVERSATION_KEY = buildAssistantConversationKey('home');
 const CHAT_STORAGE_VERSION = 4;
-const CHAT_STORAGE_SCOPE = buildAssistantConversationKey('storage');
-const CHAT_MESSAGES_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.messages.v4`;
-const ACTIVE_CONVERSATION_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.activeConversation.v4`;
-const CHAT_CONVERSATIONS_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.conversations.v4`;
-const CHAT_RECORDING_TASKS_STORAGE_KEY = `yzj-ai-crm.assistant.${CHAT_STORAGE_SCOPE}.recordingTasks.v1`;
 const CHAT_RECORDING_TASKS_UPDATED_EVENT = 'yzj-ai-crm.assistant.recordingTasksUpdated';
 const LEGACY_CHAT_STORAGE_KEYS = [
   'yzj-ai-crm.assistant.messages.v3',
@@ -134,7 +130,6 @@ const LEGACY_CHAT_STORAGE_KEYS = [
   'yzj-ai-crm.assistant.activeConversation.v1',
   'yzj-ai-crm.assistant.conversations.v1',
 ];
-const USER_CONVERSATION_KEY_PREFIX = `${buildAssistantConversationKey('user')}-`;
 const NEW_CONVERSATION_LABEL = '新会话';
 const NEW_CONVERSATION_LAST_MESSAGE = '输入公司名称，或使用 /公司研究 开始研究。';
 const DEPRECATED_WORKBENCH_SCENE_KEYS = new Set([
@@ -160,11 +155,47 @@ const RECORD_RESULT_TABLE_PAGE_SIZE = 5;
 const REMOTE_CONVERSATION_RUN_PAGE_SIZE = 50;
 const PERSONAL_SETTINGS_ROUTE = '/settings/personal';
 
+function buildAssistantStorageKeys(identity: YzjAuthIdentityResponse) {
+  const storageScope = buildAssistantConversationKey('storage', identity.operatorOpenId);
+  return {
+    messages: `yzj-ai-crm.assistant.${storageScope}.messages.v4`,
+    activeConversation: `yzj-ai-crm.assistant.${storageScope}.activeConversation.v4`,
+    conversations: `yzj-ai-crm.assistant.${storageScope}.conversations.v4`,
+    recordingTasks: `yzj-ai-crm.assistant.${storageScope}.recordingTasks.v1`,
+  };
+}
+
+function buildAssistantRuntimeScope(identity: YzjAuthIdentityResponse) {
+  const homeConversationKey = buildAssistantConversationKey('home', identity.operatorOpenId);
+  const userConversationKeyPrefix = `${buildAssistantConversationKey('user', identity.operatorOpenId)}-`;
+  return {
+    identity,
+    homeConversationKey,
+    userConversationKeyPrefix,
+    storageKeys: buildAssistantStorageKeys(identity),
+  };
+}
+
+type AssistantRuntimeScope = ReturnType<typeof buildAssistantRuntimeScope>;
+
+function buildDefaultPersonalSettings(identity: YzjAuthIdentityResponse): AgentPersonalSettingsResponse {
+  return {
+    eid: identity.eid,
+    appId: identity.appId,
+    operatorOpenId: identity.operatorOpenId,
+    displayName: identity.userName || '云之家用户',
+    roleLabel: identity.source === 'ticket' ? '云之家销售' : '金蝶云之家销售',
+    soulPrompt: '',
+    isDefaultSoulPrompt: true,
+    updatedAt: null,
+  };
+}
+
 const DEFAULT_PERSONAL_SETTINGS: AgentPersonalSettingsResponse = {
   eid: '',
   appId: '',
-  operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
-  displayName: '陈伟棠',
+  operatorOpenId: ASSISTANT_LOCAL_IDENTITY.operatorOpenId,
+  displayName: ASSISTANT_LOCAL_IDENTITY.userName,
   roleLabel: '金蝶云之家销售',
   soulPrompt: '',
   isDefaultSoulPrompt: true,
@@ -506,6 +537,24 @@ const useStyles = createStyles(({ token, css }) => ({
       "Alibaba Sans",
       ${token.fontFamily},
       sans-serif;
+  `,
+  authGate: css`
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: ${token.colorBgLayout};
+    padding: 24px;
+    box-sizing: border-box;
+  `,
+  authGatePanel: css`
+    width: min(520px, 100%);
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    background: ${token.colorBgContainer};
+    padding: 24px;
+    box-shadow: 0 16px 42px rgba(15, 23, 42, 0.08);
   `,
   side: css`
     background: ${token.colorBgLayout}80;
@@ -1506,14 +1555,14 @@ function clearLegacyAssistantStorage() {
   });
 }
 
-function readPersistedMessageStore(): PersistedMessageStore {
+function readPersistedMessageStore(scope: AssistantRuntimeScope): PersistedMessageStore {
   const storage = getBrowserStorage();
   if (!storage) {
     return { version: CHAT_STORAGE_VERSION, messages: {} };
   }
 
   try {
-    const raw = storage.getItem(CHAT_MESSAGES_STORAGE_KEY);
+    const raw = storage.getItem(scope.storageKeys.messages);
     if (!raw) {
       return { version: CHAT_STORAGE_VERSION, messages: {} };
     }
@@ -1531,13 +1580,13 @@ function readPersistedMessageStore(): PersistedMessageStore {
   }
 }
 
-function writePersistedMessageStore(store: PersistedMessageStore) {
+function writePersistedMessageStore(scope: AssistantRuntimeScope, store: PersistedMessageStore) {
   const storage = getBrowserStorage();
   if (!storage) {
     return;
   }
   try {
-    storage.setItem(CHAT_MESSAGES_STORAGE_KEY, JSON.stringify(store));
+    storage.setItem(scope.storageKeys.messages, JSON.stringify(store));
   } catch {
     // Ignore storage quota or private-mode failures.
   }
@@ -1576,12 +1625,13 @@ function toPersistableMessageInfo(
 }
 
 function loadPersistedMessages(
+  scope: AssistantRuntimeScope,
   conversationKey?: string,
 ): DefaultMessageInfo<AssistantChatMessage>[] | null {
   if (!conversationKey) {
     return null;
   }
-  const stored = readPersistedMessageStore().messages[conversationKey];
+  const stored = readPersistedMessageStore(scope).messages[conversationKey];
   if (!Array.isArray(stored)) {
     return null;
   }
@@ -1694,37 +1744,42 @@ async function loadRemoteMessagesResult(
 }
 
 async function loadDefaultConversationMessages(
+  scope: AssistantRuntimeScope,
   conversationKey?: string,
 ): Promise<DefaultMessageInfo<AssistantChatMessage>[]> {
   if (!conversationKey) {
     return [];
   }
-  const localMessages = loadPersistedMessages(conversationKey);
+  const localMessages = loadPersistedMessages(scope, conversationKey);
   const remoteMessages = await loadRemoteMessagesResult(conversationKey);
   return chooseConversationMessages(remoteMessages, localMessages);
 }
 
-function persistMessages(conversationKey: string, messages: MessageInfo<AssistantChatMessage>[]) {
+function persistMessages(
+  scope: AssistantRuntimeScope,
+  conversationKey: string,
+  messages: MessageInfo<AssistantChatMessage>[],
+) {
   const sanitized = messages
     .map(toPersistableMessageInfo)
     .filter((item): item is MessageInfo<AssistantChatMessage> => Boolean(item));
-  const store = readPersistedMessageStore();
+  const store = readPersistedMessageStore(scope);
   if (sanitized.length > 0) {
     store.messages[conversationKey] = sanitized;
   } else {
     delete store.messages[conversationKey];
   }
-  writePersistedMessageStore(store);
+  writePersistedMessageStore(scope, store);
 }
 
-function readPersistedRecordingTaskStore(): PersistedRecordingTaskStore {
+function readPersistedRecordingTaskStore(scope: AssistantRuntimeScope): PersistedRecordingTaskStore {
   const storage = getBrowserStorage();
   if (!storage) {
     return { version: CHAT_STORAGE_VERSION, tasks: {} };
   }
 
   try {
-    const raw = storage.getItem(CHAT_RECORDING_TASKS_STORAGE_KEY);
+    const raw = storage.getItem(scope.storageKeys.recordingTasks);
     if (!raw) {
       return { version: CHAT_STORAGE_VERSION, tasks: {} };
     }
@@ -1742,13 +1797,16 @@ function readPersistedRecordingTaskStore(): PersistedRecordingTaskStore {
   }
 }
 
-function writePersistedRecordingTaskStore(store: PersistedRecordingTaskStore) {
+function writePersistedRecordingTaskStore(
+  scope: AssistantRuntimeScope,
+  store: PersistedRecordingTaskStore,
+) {
   const storage = getBrowserStorage();
   if (!storage) {
     return;
   }
   try {
-    storage.setItem(CHAT_RECORDING_TASKS_STORAGE_KEY, JSON.stringify(store));
+    storage.setItem(scope.storageKeys.recordingTasks, JSON.stringify(store));
   } catch {
     // Ignore storage quota or private-mode failures.
   }
@@ -1797,8 +1855,11 @@ function toPersistableRecordingTask(value: unknown): RecordingTaskCardState | nu
   };
 }
 
-function loadPersistedRecordingTasks(conversationKey: string): RecordingTaskCardState[] {
-  const tasks = readPersistedRecordingTaskStore().tasks[conversationKey];
+function loadPersistedRecordingTasks(
+  scope: AssistantRuntimeScope,
+  conversationKey: string,
+): RecordingTaskCardState[] {
+  const tasks = readPersistedRecordingTaskStore(scope).tasks[conversationKey];
   if (!Array.isArray(tasks)) {
     return [];
   }
@@ -1809,11 +1870,12 @@ function loadPersistedRecordingTasks(conversationKey: string): RecordingTaskCard
 }
 
 function persistRecordingTasks(
+  scope: AssistantRuntimeScope,
   conversationKey: string,
   tasks: RecordingTaskCardState[],
   notify = true,
 ) {
-  const store = readPersistedRecordingTaskStore();
+  const store = readPersistedRecordingTaskStore(scope);
   const sanitized = tasks
     .map(toPersistableRecordingTask)
     .filter((item): item is RecordingTaskCardState => Boolean(item))
@@ -1823,17 +1885,18 @@ function persistRecordingTasks(
   } else {
     delete store.tasks[conversationKey];
   }
-  writePersistedRecordingTaskStore(store);
+  writePersistedRecordingTaskStore(scope, store);
   if (notify) {
     notifyRecordingTasksUpdated(conversationKey);
   }
 }
 
 function updatePersistedRecordingTasks(
+  scope: AssistantRuntimeScope,
   conversationKey: string,
   updater: (tasks: RecordingTaskCardState[]) => RecordingTaskCardState[],
 ) {
-  persistRecordingTasks(conversationKey, updater(loadPersistedRecordingTasks(conversationKey)));
+  persistRecordingTasks(scope, conversationKey, updater(loadPersistedRecordingTasks(scope, conversationKey)));
 }
 
 function isPersistableConversation(value: unknown): value is ConversationSession {
@@ -1854,16 +1917,19 @@ function isPersistableConversation(value: unknown): value is ConversationSession
   );
 }
 
-function isUserCreatedConversationKey(key?: string) {
-  return Boolean(key?.startsWith(USER_CONVERSATION_KEY_PREFIX));
+function isUserCreatedConversationKey(scope: AssistantRuntimeScope, key?: string) {
+  return Boolean(key?.startsWith(scope.userConversationKeyPrefix));
 }
 
-function isDeprecatedWorkbenchSceneConversation(conversation: ConversationSession) {
+function isDeprecatedWorkbenchSceneConversation(
+  scope: AssistantRuntimeScope,
+  conversation: ConversationSession,
+) {
   return (
     conversation.group === '场景入口'
     || DEPRECATED_WORKBENCH_SCENE_KEYS.has(conversation.scene)
     || DEPRECATED_WORKBENCH_ROUTES.has(conversation.route)
-    || conversation.key.startsWith(buildAssistantConversationKey('scene-'))
+    || conversation.key.startsWith(buildAssistantConversationKey('scene-', scope.identity.operatorOpenId))
   );
 }
 
@@ -1874,8 +1940,11 @@ function normalizeConversationTitle(title: string) {
   return title;
 }
 
-function normalizeConversationSession(conversation: ConversationSession): ConversationSession {
-  if (!isUserCreatedConversationKey(conversation.key)) {
+function normalizeConversationSession(
+  scope: AssistantRuntimeScope,
+  conversation: ConversationSession,
+): ConversationSession {
+  if (!isUserCreatedConversationKey(scope, conversation.key)) {
     return conversation;
   }
 
@@ -1885,8 +1954,8 @@ function normalizeConversationSession(conversation: ConversationSession): Conver
   };
 }
 
-function isBlankUserConversation(conversation?: ConversationSession) {
-  if (!conversation || !isUserCreatedConversationKey(conversation.key)) {
+function isBlankUserConversation(scope: AssistantRuntimeScope, conversation?: ConversationSession) {
+  if (!conversation || !isUserCreatedConversationKey(scope, conversation.key)) {
     return false;
   }
 
@@ -1896,10 +1965,13 @@ function isBlankUserConversation(conversation?: ConversationSession) {
   );
 }
 
-function keepSingleBlankConversation(conversations: ConversationSession[]): ConversationSession[] {
+function keepSingleBlankConversation(
+  scope: AssistantRuntimeScope,
+  conversations: ConversationSession[],
+): ConversationSession[] {
   let blankSeen = false;
   return conversations.filter((conversation) => {
-    if (!isBlankUserConversation(conversation)) {
+    if (!isBlankUserConversation(scope, conversation)) {
       return true;
     }
     if (blankSeen) {
@@ -1922,21 +1994,23 @@ function buildConversationTitleFromQuery(query: string) {
   return normalized.length > 24 ? `${normalized.slice(0, 24)}…` : normalized;
 }
 
-const conversationSyncPolicy: ConversationSyncPolicy<ConversationSession> = {
-  isPersistableConversation,
-  normalizeConversationSession,
-  isDeprecatedConversation: isDeprecatedWorkbenchSceneConversation,
-  keepSingleBlankConversations: keepSingleBlankConversation,
-};
+function buildConversationSyncPolicy(scope: AssistantRuntimeScope): ConversationSyncPolicy<ConversationSession> {
+  return {
+    isPersistableConversation,
+    normalizeConversationSession: (conversation) => normalizeConversationSession(scope, conversation),
+    isDeprecatedConversation: (conversation) => isDeprecatedWorkbenchSceneConversation(scope, conversation),
+    keepSingleBlankConversations: (conversations) => keepSingleBlankConversation(scope, conversations),
+  };
+}
 
-function readPersistedConversationStore(): PersistedConversationStore {
+function readPersistedConversationStore(scope: AssistantRuntimeScope): PersistedConversationStore {
   const storage = getBrowserStorage();
   if (!storage) {
     return { version: CHAT_STORAGE_VERSION, conversations: [] };
   }
 
   try {
-    const raw = storage.getItem(CHAT_CONVERSATIONS_STORAGE_KEY);
+    const raw = storage.getItem(scope.storageKeys.conversations);
     if (!raw) {
       return { version: CHAT_STORAGE_VERSION, conversations: [] };
     }
@@ -1947,10 +2021,11 @@ function readPersistedConversationStore(): PersistedConversationStore {
     return {
       version: CHAT_STORAGE_VERSION,
       conversations: keepSingleBlankConversation(
+        scope,
         parsed.conversations
           .filter(isPersistableConversation)
-          .filter((item) => !isDeprecatedWorkbenchSceneConversation(item))
-          .map(normalizeConversationSession),
+          .filter((item) => !isDeprecatedWorkbenchSceneConversation(scope, item))
+          .map((item) => normalizeConversationSession(scope, item)),
       ),
     };
   } catch {
@@ -1958,68 +2033,74 @@ function readPersistedConversationStore(): PersistedConversationStore {
   }
 }
 
-function writePersistedConversationStore(store: PersistedConversationStore) {
+function writePersistedConversationStore(scope: AssistantRuntimeScope, store: PersistedConversationStore) {
   const storage = getBrowserStorage();
   if (!storage) {
     return;
   }
   try {
-    storage.setItem(CHAT_CONVERSATIONS_STORAGE_KEY, JSON.stringify(store));
+    storage.setItem(scope.storageKeys.conversations, JSON.stringify(store));
   } catch {
     // Ignore storage quota or private-mode failures.
   }
 }
 
-function mergePersistedConversations(baseConversations: ConversationSession[]) {
+function mergePersistedConversations(
+  scope: AssistantRuntimeScope,
+  baseConversations: ConversationSession[],
+) {
   return mergeOfflineCachedConversations(
     baseConversations,
-    readPersistedConversationStore().conversations,
-    conversationSyncPolicy,
+    readPersistedConversationStore(scope).conversations,
+    buildConversationSyncPolicy(scope),
   );
 }
 
 function persistCustomConversations(
+  scope: AssistantRuntimeScope,
   conversations: ConversationSession[],
   baseConversations: ConversationSession[],
 ) {
   const fixedKeys = new Set(baseConversations.map((item) => item.key));
-  writePersistedConversationStore({
+  writePersistedConversationStore(scope, {
     version: CHAT_STORAGE_VERSION,
     conversations: keepSingleBlankConversation(
+      scope,
       conversations
         .filter((item) => !fixedKeys.has(item.key))
         .filter(isPersistableConversation)
-        .filter((item) => !isDeprecatedWorkbenchSceneConversation(item))
-        .map(normalizeConversationSession),
+        .filter((item) => !isDeprecatedWorkbenchSceneConversation(scope, item))
+        .map((item) => normalizeConversationSession(scope, item)),
     ),
   });
 }
 
 function mergeRemoteConversations(
+  scope: AssistantRuntimeScope,
   baseConversations: ConversationSession[],
   remoteConversations: ConversationSession[],
 ) {
   return mergeAuthoritativeRemoteConversations(
     baseConversations,
     remoteConversations,
-    conversationSyncPolicy,
+    buildConversationSyncPolicy(scope),
   );
 }
 
-function prunePersistedChatState(validConversationKeys: Iterable<string>) {
+function prunePersistedChatState(scope: AssistantRuntimeScope, validConversationKeys: Iterable<string>) {
   const next = prunePersistedChatStateStores({
-    messageStore: readPersistedMessageStore(),
-    recordingTaskStore: readPersistedRecordingTaskStore(),
+    messageStore: readPersistedMessageStore(scope),
+    recordingTaskStore: readPersistedRecordingTaskStore(scope),
     validConversationKeys,
   });
-  writePersistedMessageStore(next.messageStore);
-  writePersistedRecordingTaskStore(next.recordingTaskStore);
+  writePersistedMessageStore(scope, next.messageStore);
+  writePersistedRecordingTaskStore(scope, next.recordingTaskStore);
 }
 
-async function fetchRemoteConversations(): Promise<ConversationSession[] | null> {
+async function fetchRemoteConversations(scope: AssistantRuntimeScope): Promise<ConversationSession[] | null> {
   try {
     const query = new URLSearchParams({
-      operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+      operatorOpenId: scope.identity.operatorOpenId,
     });
     const response = await fetch(`/api/agent/conversations?${query.toString()}`, {
       cache: 'no-store',
@@ -2034,10 +2115,13 @@ async function fetchRemoteConversations(): Promise<ConversationSession[] | null>
   }
 }
 
-async function persistRemoteConversation(conversation: ConversationSession): Promise<void> {
+async function persistRemoteConversation(
+  scope: AssistantRuntimeScope,
+  conversation: ConversationSession,
+): Promise<void> {
   const payload: AgentConversationUpsertRequest = {
-    operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
-    conversation: normalizeConversationSession(conversation),
+    operatorOpenId: scope.identity.operatorOpenId,
+    conversation: normalizeConversationSession(scope, conversation),
   };
   const response = await fetch('/api/agent/conversations', {
     method: 'POST',
@@ -2049,9 +2133,9 @@ async function persistRemoteConversation(conversation: ConversationSession): Pro
   }
 }
 
-async function fetchPersonalSettings(): Promise<AgentPersonalSettingsResponse> {
+async function fetchPersonalSettings(scope: AssistantRuntimeScope): Promise<AgentPersonalSettingsResponse> {
   const query = new URLSearchParams({
-    operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+    operatorOpenId: scope.identity.operatorOpenId,
   });
   const response = await fetch(`/api/agent/personal-settings?${query.toString()}`, {
     cache: 'no-store',
@@ -2062,9 +2146,12 @@ async function fetchPersonalSettings(): Promise<AgentPersonalSettingsResponse> {
   return response.json() as Promise<AgentPersonalSettingsResponse>;
 }
 
-async function updatePersonalSettings(soulPrompt: string): Promise<AgentPersonalSettingsResponse> {
+async function updatePersonalSettings(
+  scope: AssistantRuntimeScope,
+  soulPrompt: string,
+): Promise<AgentPersonalSettingsResponse> {
   const payload: AgentPersonalSettingsUpdateRequest = {
-    operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+    operatorOpenId: scope.identity.operatorOpenId,
     soulPrompt,
   };
   const response = await fetch('/api/agent/personal-settings', {
@@ -2078,16 +2165,16 @@ async function updatePersonalSettings(soulPrompt: string): Promise<AgentPersonal
   return response.json() as Promise<AgentPersonalSettingsResponse>;
 }
 
-function getStoredActiveConversationKey(allowedKeys: string[]) {
+function getStoredActiveConversationKey(scope: AssistantRuntimeScope, allowedKeys: string[]) {
   const storage = getBrowserStorage();
-  const key = storage?.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+  const key = storage?.getItem(scope.storageKeys.activeConversation);
   return key && allowedKeys.includes(key) ? key : null;
 }
 
-function persistActiveConversationKey(key: string) {
+function persistActiveConversationKey(scope: AssistantRuntimeScope, key: string) {
   const storage = getBrowserStorage();
   try {
-    storage?.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, key);
+    storage?.setItem(scope.storageKeys.activeConversation, key);
   } catch {
     // Ignore storage quota or private-mode failures.
   }
@@ -2146,6 +2233,7 @@ function RecordWritePreviewPanel({
 }
 
 function MetaQuestionCardPanel({
+  identity,
   pendingInteraction,
   activeInteractionId,
   submittedInteractionIds,
@@ -2153,6 +2241,7 @@ function MetaQuestionCardPanel({
   onSubmit,
   onCancel,
 }: {
+  identity: YzjAuthIdentityResponse;
   pendingInteraction?: PendingInteractionView | null;
   activeInteractionId?: string;
   submittedInteractionIds?: Set<string>;
@@ -2220,6 +2309,7 @@ function MetaQuestionCardPanel({
         <div className={styles.metaQuestionList}>
           {questions.map((question) => (
             <MetaQuestionInput
+              identity={identity}
               key={question.questionId}
               toolCode={questionCard.toolCode}
               question={question}
@@ -2291,6 +2381,7 @@ function MetaQuestionCardPanel({
 }
 
 function MetaQuestionInput({
+  identity,
   toolCode,
   question,
   value,
@@ -2298,6 +2389,7 @@ function MetaQuestionInput({
   disabled,
   onChange,
 }: {
+  identity: YzjAuthIdentityResponse;
   toolCode: string;
   question: AssistantMetaQuestion;
   value: unknown;
@@ -2314,6 +2406,7 @@ function MetaQuestionInput({
         </Space>
         {question.lookup ? (
           <RemoteMetaQuestionSelect
+            identity={identity}
             toolCode={toolCode}
             question={question}
             value={value}
@@ -2354,12 +2447,14 @@ function MetaQuestionInput({
 }
 
 function RemoteMetaQuestionSelect({
+  identity,
   toolCode,
   question,
   value,
   disabled,
   onChange,
 }: {
+  identity: YzjAuthIdentityResponse;
   toolCode: string;
   question: AssistantMetaQuestion;
   value: unknown;
@@ -2395,6 +2490,7 @@ function RemoteMetaQuestionSelect({
     const timer = window.setTimeout(() => {
       setLoading(true);
       fetchMetaQuestionOptions({
+        identity,
         endpoint: lookup.endpoint,
         toolCode,
         paramKey: question.paramKey,
@@ -2426,7 +2522,7 @@ function RemoteMetaQuestionSelect({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [lookup, question.options, question.paramKey, searchText, toolCode]);
+  }, [identity, lookup, question.options, question.paramKey, searchText, toolCode]);
 
   return (
     <Select
@@ -2460,6 +2556,7 @@ function RemoteMetaQuestionSelect({
 }
 
 async function fetchMetaQuestionOptions(input: {
+  identity: YzjAuthIdentityResponse;
   endpoint: string;
   toolCode: string;
   paramKey: string;
@@ -2476,7 +2573,7 @@ async function fetchMetaQuestionOptions(input: {
       keyword: input.keyword,
       pageSize: input.pageSize,
       tenantContext: {
-        operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
+        operatorOpenId: input.identity.operatorOpenId,
       },
     }),
     signal: input.signal,
@@ -3075,6 +3172,7 @@ function isShadowObjectKey(value: string): value is ShadowObjectKey {
 }
 
 function AssistantMessageContent({
+  identity,
   content,
   info,
   styles,
@@ -3090,6 +3188,7 @@ function AssistantMessageContent({
   presentationByArtifactId,
   imageByArtifactId,
 }: {
+  identity: YzjAuthIdentityResponse;
   content: string;
   info: any;
   styles: ReturnType<typeof useStyles>['styles'];
@@ -3123,6 +3222,7 @@ function AssistantMessageContent({
       <AgentThinkingPanel info={info} styles={styles} />
       <RecordWritePreviewPanel pending={pendingConfirmation} styles={styles} />
       <MetaQuestionCardPanel
+        identity={identity}
         pendingInteraction={pendingInteraction}
         activeInteractionId={activeQuestionInteractionId}
         submittedInteractionIds={submittedQuestionInteractionIds}
@@ -3800,6 +3900,7 @@ function MessageFooter({
 }
 
 function buildRole(
+  identity: YzjAuthIdentityResponse,
   styles: ReturnType<typeof useStyles>['styles'],
   markdownClassName: string,
   onOpenArtifact: OpenArtifactHandler,
@@ -3858,6 +3959,7 @@ function buildRole(
       ),
       contentRender: (content: string, info: any) => (
         <AssistantMessageContent
+          identity={identity}
           content={content}
           info={info}
           styles={styles}
@@ -4027,6 +4129,7 @@ function hasStaleUnboundArtifactText(markdown: string) {
 }
 
 function AssistantConversationRuntime({
+  runtimeScope,
   activeConversationKey,
   activeConversation,
   conversations,
@@ -4043,6 +4146,7 @@ function AssistantConversationRuntime({
   setBlankConversationKeys,
   pendingBlankConversationSubmitRef,
 }: {
+  runtimeScope: AssistantRuntimeScope;
   activeConversationKey: string;
   activeConversation?: ConversationSession;
   conversations: ConversationSession[];
@@ -4078,7 +4182,7 @@ function AssistantConversationRuntime({
   >({});
   const [imageByArtifactId, setImageByArtifactId] = useState<Record<string, ArtifactImagePayload>>({});
   const [recordingTasks, setRecordingTasks] = useState<RecordingTaskCardState[]>(
-    () => loadPersistedRecordingTasks(activeConversationKey),
+    () => loadPersistedRecordingTasks(runtimeScope, activeConversationKey),
   );
   const [submittedQuestionInteractionIds, setSubmittedQuestionInteractionIds] = useState<Set<string>>(
     () => new Set(),
@@ -4122,7 +4226,7 @@ function AssistantConversationRuntime({
 
   const isActiveConversationBlank = Boolean(
     blankConversationKeys.has(activeConversationKey)
-    || isBlankUserConversation(activeConversation),
+    || isBlankUserConversation(runtimeScope, activeConversation),
   );
 
   const { onRequest, messages, isRequesting, abort, onReload, setMessage, isDefaultMessagesRequesting } =
@@ -4135,10 +4239,10 @@ function AssistantConversationRuntime({
         const conversation = conversations.find((item) => item.key === key) as
           | ConversationSession
           | undefined;
-        if (isBlankUserConversation(conversation)) {
+        if (isBlankUserConversation(runtimeScope, conversation)) {
           return [];
         }
-        return loadDefaultConversationMessages(key);
+        return loadDefaultConversationMessages(runtimeScope, key);
       },
       requestPlaceholder: (requestParams) => {
         const sceneKey = requestParams.sceneKey || scene.key;
@@ -4259,7 +4363,7 @@ function AssistantConversationRuntime({
     ) {
       return;
     }
-    persistMessages(activeConversationKey, messageList);
+    persistMessages(runtimeScope, activeConversationKey, messageList);
   }, [
     activeConversation?.key,
     activeConversationKey,
@@ -4297,12 +4401,12 @@ function AssistantConversationRuntime({
   }, []);
 
   useEffect(() => {
-    setRecordingTasks(loadPersistedRecordingTasks(activeConversationKey));
-  }, [activeConversationKey]);
+    setRecordingTasks(loadPersistedRecordingTasks(runtimeScope, activeConversationKey));
+  }, [activeConversationKey, runtimeScope]);
 
   useEffect(() => {
     const reloadRecordingTasks = () => {
-      setRecordingTasks(loadPersistedRecordingTasks(activeConversationKey));
+      setRecordingTasks(loadPersistedRecordingTasks(runtimeScope, activeConversationKey));
     };
     const handleRecordingTasksUpdated = (event: Event) => {
       const conversationKey = (event as CustomEvent<{ conversationKey?: string }>).detail?.conversationKey;
@@ -4311,7 +4415,7 @@ function AssistantConversationRuntime({
       }
     };
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === CHAT_RECORDING_TASKS_STORAGE_KEY) {
+      if (event.key === runtimeScope.storageKeys.recordingTasks) {
         reloadRecordingTasks();
       }
     };
@@ -4322,23 +4426,23 @@ function AssistantConversationRuntime({
       window.removeEventListener(CHAT_RECORDING_TASKS_UPDATED_EVENT, handleRecordingTasksUpdated);
       window.removeEventListener('storage', handleStorage);
     };
-  }, [activeConversationKey]);
+  }, [activeConversationKey, runtimeScope]);
 
   const updateRecordingTasksForConversation = React.useCallback((
     conversationKey: string,
     updater: (tasks: RecordingTaskCardState[]) => RecordingTaskCardState[],
   ) => {
     if (conversationKey !== activeConversationKey) {
-      updatePersistedRecordingTasks(conversationKey, updater);
+      updatePersistedRecordingTasks(runtimeScope, conversationKey, updater);
       return;
     }
 
     setRecordingTasks((current) => {
       const next = updater(current);
-      persistRecordingTasks(conversationKey, next, false);
+      persistRecordingTasks(runtimeScope, conversationKey, next, false);
       return next;
     });
-  }, [activeConversationKey]);
+  }, [activeConversationKey, runtimeScope]);
 
   const upsertRecordingTask = React.useCallback((
     task: RecordingTaskCardState,
@@ -4479,7 +4583,7 @@ function AssistantConversationRuntime({
 
     const formData = new FormData();
     formData.append('file', file, file.name);
-    formData.append('createdBy', ASSISTANT_OPERATOR_OPEN_ID);
+    formData.append('createdBy', runtimeScope.identity.operatorOpenId);
     if (Object.keys(anchors).length) {
       formData.append('anchors', JSON.stringify(anchors));
     }
@@ -4508,6 +4612,7 @@ function AssistantConversationRuntime({
     latestTimelineAnchorMessageId,
     materializeRecordingTask,
     messageApi,
+    runtimeScope.identity.operatorOpenId,
     suggestedRecordingAnchors,
     updateRecordingTasksForConversation,
     upsertRecordingTask,
@@ -4814,6 +4919,7 @@ function AssistantConversationRuntime({
         query: queryText,
         sceneKey: scene.key,
         conversationKey: activeConversationKey,
+        identity: runtimeScope.identity,
         resume: {
           runId,
           action: 'provide_input',
@@ -4830,7 +4936,7 @@ function AssistantConversationRuntime({
         safeScrollToBottom();
       });
     },
-    [activeConversationKey, isRequesting, messageApi, onRequest, safeScrollToBottom, scene.key],
+    [activeConversationKey, isRequesting, messageApi, onRequest, runtimeScope.identity, safeScrollToBottom, scene.key],
   );
 
   const handleCancelQuestionCard = React.useCallback<MetaQuestionCancelHandler>(
@@ -4843,6 +4949,7 @@ function AssistantConversationRuntime({
         query: '取消本次录入',
         sceneKey: scene.key,
         conversationKey: activeConversationKey,
+        identity: runtimeScope.identity,
         resume: {
           runId,
           action: 'cancel_interaction',
@@ -4858,7 +4965,7 @@ function AssistantConversationRuntime({
         safeScrollToBottom();
       });
     },
-    [activeConversationKey, isRequesting, messageApi, onRequest, safeScrollToBottom, scene.key],
+    [activeConversationKey, isRequesting, messageApi, onRequest, runtimeScope.identity, safeScrollToBottom, scene.key],
   );
 
   const handleOpenRecord = React.useCallback<OpenRecordHandler>(
@@ -4878,6 +4985,7 @@ function AssistantConversationRuntime({
         query: queryText,
         sceneKey: scene.key,
         conversationKey: activeConversationKey,
+        identity: runtimeScope.identity,
         ...(isShadowObjectKey(objectKey)
           ? {
               clientAction: {
@@ -4893,7 +5001,7 @@ function AssistantConversationRuntime({
         safeScrollToBottom();
       });
     },
-    [activeConversationKey, isRequesting, messageApi, onRequest, safeScrollToBottom, scene.key],
+    [activeConversationKey, isRequesting, messageApi, onRequest, runtimeScope.identity, safeScrollToBottom, scene.key],
   );
 
   const handleOpenArtifactCard = React.useCallback<OpenArtifactHandler>(async (evidence) => {
@@ -5010,6 +5118,7 @@ function AssistantConversationRuntime({
       query,
       sceneKey: scene.key,
       conversationKey: activeConversationKey,
+      identity: runtimeScope.identity,
       ...(clientAction ? { clientAction } : {}),
     });
     window.requestAnimationFrame(() => {
@@ -5021,6 +5130,7 @@ function AssistantConversationRuntime({
     latestTimelineAnchorMessageId,
     messageApi,
     onRequest,
+    runtimeScope.identity,
     safeScrollToBottom,
     scene.key,
     updateRecordingTaskTimelineAnchor,
@@ -5054,7 +5164,7 @@ function AssistantConversationRuntime({
   }, [handleOpenRecord, requestFromRecordingTask]);
 
   const role = useMemo(
-    () => buildRole(styles, markdownClassName, handleOpenArtifactCard, handleGeneratePresentation, handleGenerateImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, presentationByArtifactId, imageByArtifactId),
+    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleGeneratePresentation, handleGenerateImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, presentationByArtifactId, imageByArtifactId),
     [
       activeQuestionInteractionId,
       handleCancelQuestionCard,
@@ -5066,6 +5176,7 @@ function AssistantConversationRuntime({
       imageByArtifactId,
       markdownClassName,
       presentationByArtifactId,
+      runtimeScope.identity,
       submittedQuestionInteractionIds,
       styles,
     ],
@@ -5168,10 +5279,10 @@ function AssistantConversationRuntime({
       return;
     }
 
-    if (activeConversation && isUserCreatedConversationKey(activeConversation.key)) {
+    if (activeConversation && isUserCreatedConversationKey(runtimeScope, activeConversation.key)) {
       const nextConversation = {
         ...activeConversation,
-        label: isBlankUserConversation(activeConversation)
+        label: isBlankUserConversation(runtimeScope, activeConversation)
           ? buildConversationTitleFromQuery(queryText)
           : activeConversation.label,
         lastMessage: queryText,
@@ -5180,7 +5291,7 @@ function AssistantConversationRuntime({
         route: locationPathname,
       };
       setConversation(activeConversation.key, nextConversation);
-      void persistRemoteConversation(nextConversation).catch(() => {
+      void persistRemoteConversation(runtimeScope, nextConversation).catch(() => {
         // Local state remains usable when admin-api is unavailable.
       });
     }
@@ -5193,6 +5304,7 @@ function AssistantConversationRuntime({
       query: queryText,
       sceneKey: scene.key,
       conversationKey: activeConversationKey,
+      identity: runtimeScope.identity,
       attachments: (attachedFiles ?? []).map((file) => ({
         name: file.name,
         url: '#attachment',
@@ -5592,12 +5704,14 @@ function AssistantConversationRuntime({
 }
 
 function PersonalSettingsPage({
+  runtimeScope,
   settings,
   loading,
   styles,
   messageApi,
   onSettingsChange,
 }: {
+  runtimeScope: AssistantRuntimeScope;
   settings: AgentPersonalSettingsResponse;
   loading: boolean;
   styles: ReturnType<typeof useStyles>['styles'];
@@ -5614,7 +5728,7 @@ function PersonalSettingsPage({
   const handleSave = React.useCallback(async () => {
     setSaving(true);
     try {
-      const next = await updatePersonalSettings(draft);
+      const next = await updatePersonalSettings(runtimeScope, draft);
       onSettingsChange(next);
       messageApi.success('SOUL 已保存');
     } catch (error) {
@@ -5622,12 +5736,12 @@ function PersonalSettingsPage({
     } finally {
       setSaving(false);
     }
-  }, [draft, messageApi, onSettingsChange]);
+  }, [draft, messageApi, onSettingsChange, runtimeScope]);
 
   const handleRestoreDefault = React.useCallback(async () => {
     setSaving(true);
     try {
-      const next = await updatePersonalSettings('');
+      const next = await updatePersonalSettings(runtimeScope, '');
       onSettingsChange(next);
       setDraft(next.soulPrompt);
       messageApi.success('已恢复默认 SOUL');
@@ -5636,7 +5750,7 @@ function PersonalSettingsPage({
     } finally {
       setSaving(false);
     }
-  }, [messageApi, onSettingsChange]);
+  }, [messageApi, onSettingsChange, runtimeScope]);
 
   return (
     <main className={styles.settingsPage}>
@@ -5696,7 +5810,7 @@ function PersonalSettingsPage({
   );
 }
 
-function AssistantWorkspace() {
+function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeScope }) {
   const { styles } = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
@@ -5705,7 +5819,7 @@ function AssistantWorkspace() {
   const scene = getSceneByPath(location.pathname);
   const isPersonalSettingsRoute = location.pathname === PERSONAL_SETTINGS_ROUTE;
   const [personalSettings, setPersonalSettings] = useState<AgentPersonalSettingsResponse>(
-    DEFAULT_PERSONAL_SETTINGS,
+    () => buildDefaultPersonalSettings(runtimeScope.identity),
   );
   const [personalSettingsLoading, setPersonalSettingsLoading] = useState(true);
   const [blankConversationKeys, setBlankConversationKeys] = useState<Set<string>>(
@@ -5714,7 +5828,7 @@ function AssistantWorkspace() {
   const pendingBlankConversationSubmitRef = useRef<Record<string, string>>({});
   const homeConversation = useMemo(
     () => ({
-      key: HOME_CONVERSATION_KEY,
+      key: runtimeScope.homeConversationKey,
       label: 'AI 销售工作台',
       route: '/chat',
       group: '固定会话',
@@ -5722,7 +5836,7 @@ function AssistantWorkspace() {
       updatedAt: '刚刚',
       scene: 'chat',
     }),
-    [],
+    [runtimeScope.homeConversationKey],
   );
   const baseConversations = useMemo(
     () => [homeConversation],
@@ -5734,8 +5848,8 @@ function AssistantWorkspace() {
   );
   const getConversationKeyByRoute = React.useCallback(
     (route: string) =>
-      baseConversations.find((item) => item.route === route)?.key ?? HOME_CONVERSATION_KEY,
-    [baseConversations],
+      baseConversations.find((item) => item.route === route)?.key ?? runtimeScope.homeConversationKey,
+    [baseConversations, runtimeScope.homeConversationKey],
   );
 
   useEffect(() => {
@@ -5749,7 +5863,7 @@ function AssistantWorkspace() {
   useEffect(() => {
     let cancelled = false;
     setPersonalSettingsLoading(true);
-    void fetchPersonalSettings()
+    void fetchPersonalSettings(runtimeScope)
       .then((settings) => {
         if (!cancelled) {
           setPersonalSettings(settings);
@@ -5757,7 +5871,7 @@ function AssistantWorkspace() {
       })
       .catch(() => {
         if (!cancelled) {
-          setPersonalSettings(DEFAULT_PERSONAL_SETTINGS);
+          setPersonalSettings(buildDefaultPersonalSettings(runtimeScope.identity));
         }
       })
       .finally(() => {
@@ -5769,7 +5883,7 @@ function AssistantWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [runtimeScope]);
 
   const {
     conversations,
@@ -5781,7 +5895,7 @@ function AssistantWorkspace() {
   } = useXConversations({
     defaultConversations,
     defaultActiveConversationKey:
-      getStoredActiveConversationKey(defaultConversations.map((item) => item.key))
+      getStoredActiveConversationKey(runtimeScope, defaultConversations.map((item) => item.key))
       ?? getConversationKeyByRoute(location.pathname),
   });
   const conversationsRef = useRef<ConversationSession[]>(defaultConversations);
@@ -5807,7 +5921,7 @@ function AssistantWorkspace() {
   useEffect(() => {
     let cancelled = false;
 
-    void fetchRemoteConversations().then((remoteConversations) => {
+    void fetchRemoteConversations(runtimeScope).then((remoteConversations) => {
       if (cancelled) {
         return;
       }
@@ -5821,34 +5935,34 @@ function AssistantWorkspace() {
           .filter((key): key is string => typeof key === 'string'),
       );
       const protectedLocalConversations = conversationsRef.current.filter((conversation) => (
-        isUserCreatedConversationKey(conversation.key)
-        && (conversation.key === currentActiveKey || isBlankUserConversation(conversation))
+        isUserCreatedConversationKey(runtimeScope, conversation.key)
+        && (conversation.key === currentActiveKey || isBlankUserConversation(runtimeScope, conversation))
         && !remoteKeys.has(conversation.key)
       ));
       const nextConversations = remoteAvailable
-        ? mergeRemoteConversations(baseConversations, [
+        ? mergeRemoteConversations(runtimeScope, baseConversations, [
             ...protectedLocalConversations,
             ...remoteConversations,
           ])
-        : mergePersistedConversations(baseConversations);
+        : mergePersistedConversations(runtimeScope, baseConversations);
       conversationCacheWritableRef.current = true;
       setConversations(nextConversations);
-      persistCustomConversations(nextConversations, baseConversations);
+      persistCustomConversations(runtimeScope, nextConversations, baseConversations);
       if (remoteAvailable) {
-        prunePersistedChatState(nextConversations.map((item) => item.key));
+        prunePersistedChatState(runtimeScope, nextConversations.map((item) => item.key));
       }
 
       const allowedKeys = nextConversations.map((item) => item.key);
       const nextActiveConversationKey = resolveSyncedActiveConversationKey({
         validConversationKeys: allowedKeys,
         currentActiveKey,
-        storedActiveKey: getStoredActiveConversationKey(allowedKeys),
+        storedActiveKey: getStoredActiveConversationKey(runtimeScope, allowedKeys),
         fallbackKey: getConversationKeyByRoute(currentPathname),
       });
       if (nextActiveConversationKey !== currentActiveKey) {
         setActiveConversationKey(nextActiveConversationKey);
       } else {
-        persistActiveConversationKey(nextActiveConversationKey);
+        persistActiveConversationKey(runtimeScope, nextActiveConversationKey);
       }
     });
 
@@ -5858,12 +5972,13 @@ function AssistantWorkspace() {
   }, [
     baseConversations,
     getConversationKeyByRoute,
+    runtimeScope,
     setActiveConversationKey,
     setConversations,
   ]);
 
   useEffect(() => {
-    if (location.pathname === '/chat' && isUserCreatedConversationKey(activeConversationKey)) {
+    if (location.pathname === '/chat' && isUserCreatedConversationKey(runtimeScope, activeConversationKey)) {
       return;
     }
     if (activeConversation?.route === location.pathname) {
@@ -5884,6 +5999,7 @@ function AssistantWorkspace() {
     conversations,
     getConversationKeyByRoute,
     location.pathname,
+    runtimeScope,
     setActiveConversationKey,
   ]);
 
@@ -5891,15 +6007,15 @@ function AssistantWorkspace() {
     if (!conversationCacheWritableRef.current) {
       return;
     }
-    persistActiveConversationKey(activeConversationKey);
-  }, [activeConversationKey]);
+    persistActiveConversationKey(runtimeScope, activeConversationKey);
+  }, [activeConversationKey, runtimeScope]);
 
   useEffect(() => {
     if (!conversationCacheWritableRef.current) {
       return;
     }
-    persistCustomConversations(conversations as ConversationSession[], baseConversations);
-  }, [baseConversations, conversations]);
+    persistCustomConversations(runtimeScope, conversations as ConversationSession[], baseConversations);
+  }, [baseConversations, conversations, runtimeScope]);
 
   const navigateToScene = React.useCallback((route: string) => {
     setActiveConversationKey(getConversationKeyByRoute(route));
@@ -5910,10 +6026,10 @@ function AssistantWorkspace() {
     const normalizedSummary = summary.trim() || '上传录音';
     const now = new Date();
 
-    if (activeConversation && isUserCreatedConversationKey(activeConversation.key)) {
+    if (activeConversation && isUserCreatedConversationKey(runtimeScope, activeConversation.key)) {
       const nextConversation: ConversationSession = {
         ...activeConversation,
-        label: isBlankUserConversation(activeConversation)
+        label: isBlankUserConversation(runtimeScope, activeConversation)
           ? buildConversationTitleFromQuery(normalizedSummary)
           : activeConversation.label,
         lastMessage: normalizedSummary,
@@ -5923,6 +6039,7 @@ function AssistantWorkspace() {
       };
       setConversation(activeConversation.key, nextConversation);
       persistCustomConversations(
+        runtimeScope,
         conversationsRef.current.map((item) => (
           item.key === activeConversation.key ? nextConversation : item
         )),
@@ -5934,13 +6051,13 @@ function AssistantWorkspace() {
         return next;
       });
       delete pendingBlankConversationSubmitRef.current[activeConversation.key];
-      void persistRemoteConversation(nextConversation).catch(() => {
+      void persistRemoteConversation(runtimeScope, nextConversation).catch(() => {
         // Local conversation remains available when admin-api is unavailable.
       });
       return activeConversation.key;
     }
 
-    const conversationKey = `${USER_CONVERSATION_KEY_PREFIX}${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
+    const conversationKey = `${runtimeScope.userConversationKeyPrefix}${now.getTime()}-${Math.random().toString(16).slice(2, 8)}`;
     const newConversation: ConversationSession = {
       key: conversationKey,
       label: buildConversationTitleFromQuery(normalizedSummary),
@@ -5951,9 +6068,9 @@ function AssistantWorkspace() {
       scene: 'chat',
     };
     addConversation(newConversation, 'prepend');
-    persistCustomConversations([newConversation, ...conversationsRef.current], baseConversations);
-    persistMessages(conversationKey, []);
-    void persistRemoteConversation(newConversation).catch(() => {
+    persistCustomConversations(runtimeScope, [newConversation, ...conversationsRef.current], baseConversations);
+    persistMessages(runtimeScope, conversationKey, []);
+    void persistRemoteConversation(runtimeScope, newConversation).catch(() => {
       // Local conversation remains available when admin-api is unavailable.
     });
     return conversationKey;
@@ -5962,6 +6079,7 @@ function AssistantWorkspace() {
     addConversation,
     baseConversations,
     pendingBlankConversationSubmitRef,
+    runtimeScope,
     setBlankConversationKeys,
     setConversation,
   ]);
@@ -5979,17 +6097,17 @@ function AssistantWorkspace() {
 
   const onCreateConversation = () => {
     const existingBlankConversation = conversations.find((item) => (
-      isBlankUserConversation(item as ConversationSession)
+      isBlankUserConversation(runtimeScope, item as ConversationSession)
     )) as ConversationSession | undefined;
     if (existingBlankConversation) {
       setActiveConversationKey(existingBlankConversation.key);
-      persistActiveConversationKey(existingBlankConversation.key);
+      persistActiveConversationKey(runtimeScope, existingBlankConversation.key);
       navigate('/chat');
       return;
     }
 
     const now = new Date();
-    const conversationKey = `${USER_CONVERSATION_KEY_PREFIX}${now.getTime()}`;
+    const conversationKey = `${runtimeScope.userConversationKeyPrefix}${now.getTime()}`;
     const newConversation: ConversationSession = {
       key: conversationKey,
       label: NEW_CONVERSATION_LABEL,
@@ -6002,16 +6120,16 @@ function AssistantWorkspace() {
 
     pendingBlankConversationSubmitRef.current[conversationKey] = '';
     setBlankConversationKeys((current) => new Set(current).add(conversationKey));
-    persistMessages(conversationKey, []);
+    persistMessages(runtimeScope, conversationKey, []);
     const nextConversations = [
       newConversation,
       ...conversationsRef.current.filter((item) => item.key !== conversationKey),
     ];
     conversationsRef.current = nextConversations;
     addConversation(newConversation, 'prepend');
-    persistCustomConversations(nextConversations, baseConversations);
+    persistCustomConversations(runtimeScope, nextConversations, baseConversations);
     setActiveConversationKey(conversationKey);
-    persistActiveConversationKey(conversationKey);
+    persistActiveConversationKey(runtimeScope, conversationKey);
     navigate('/chat');
   };
 
@@ -6074,6 +6192,7 @@ function AssistantWorkspace() {
 
   const mainContent = isPersonalSettingsRoute ? (
     <PersonalSettingsPage
+      runtimeScope={runtimeScope}
       settings={personalSettings}
       loading={personalSettingsLoading}
       styles={styles}
@@ -6083,6 +6202,7 @@ function AssistantWorkspace() {
   ) : (
     <AssistantConversationRuntime
       key={activeConversationKey}
+      runtimeScope={runtimeScope}
       activeConversationKey={activeConversationKey}
       activeConversation={activeConversation}
       conversations={conversations as ConversationSession[]}
@@ -6112,12 +6232,87 @@ function AssistantWorkspace() {
   );
 }
 
+function AssistantIdentityGate() {
+  const { styles } = useStyles();
+  const location = useLocation();
+  const [state, setState] = useState<{
+    loading: boolean;
+    identity: YzjAuthIdentityResponse | null;
+    error: string | null;
+  }>({
+    loading: true,
+    identity: null,
+    error: null,
+  });
+
+  const ticket = useMemo(
+    () => new URLSearchParams(location.search).get('ticket')?.trim() || '',
+    [location.search],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true, identity: null, error: null });
+    void resolveAssistantIdentity(ticket)
+      .then((identity) => {
+        if (!cancelled) {
+          setState({ loading: false, identity, error: null });
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setState({
+            loading: false,
+            identity: null,
+            error: error instanceof Error ? error.message : '云之家身份解析失败',
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ticket]);
+
+  if (state.loading) {
+    return (
+      <div className={styles.authGate}>
+        <div className={styles.authGatePanel}>
+          <Skeleton active paragraph={{ rows: 4 }} title={{ width: 180 }} />
+        </div>
+      </div>
+    );
+  }
+
+  if (state.error || !state.identity) {
+    return (
+      <div className={styles.authGate}>
+        <div className={styles.authGatePanel}>
+          <Alert
+            type="error"
+            showIcon
+            message="云之家身份解析失败"
+            description={state.error || '请从云之家轻应用入口重新进入。'}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <AssistantWorkspace
+      key={`${state.identity.eid}:${state.identity.appId}:${state.identity.operatorOpenId}`}
+      runtimeScope={buildAssistantRuntimeScope(state.identity)}
+    />
+  );
+}
+
 function App() {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/chat" replace />} />
-      <Route path="/chat" element={<AssistantWorkspace />} />
-      <Route path="/settings/personal" element={<AssistantWorkspace />} />
+      <Route path="/chat" element={<AssistantIdentityGate />} />
+      <Route path="/settings/personal" element={<AssistantIdentityGate />} />
       <Route path="/chat/company-research" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/customer-analysis" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/conversation-understanding" element={<Navigate to="/chat" replace />} />

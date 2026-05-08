@@ -1176,8 +1176,38 @@ class StubYzjClient extends YzjClient {
     super({ baseUrl: 'https://stub.yzj.local' });
   }
 
+  override async getAppAccessToken(): Promise<string> {
+    return 'app-token';
+  }
+
   override async getAccessToken(): Promise<string> {
     return 'access-token';
+  }
+
+  override async resolveTicket(params: {
+    accessToken: string;
+    appId: string;
+    ticket: string;
+  }) {
+    if (params.ticket === 'other-eid-ticket') {
+      return {
+        appid: params.appId,
+        eid: 'other-eid',
+        username: '外部用户',
+        userid: 'uid-other',
+        openid: 'open-other',
+      };
+    }
+
+    return {
+      appid: params.appId,
+      eid: '21024647',
+      username: '陈伟棠',
+      userid: 'uid-chen',
+      networkid: 'network-1',
+      deviceId: 'device-1',
+      openid: 'open-chen',
+    };
   }
 
   override async listActiveEmployees(params: {
@@ -1670,6 +1700,7 @@ async function createTestServer(options: {
 
   const server = createAdminApiServer({
     config,
+    yzjClient: new StubYzjClient([]),
     orgSyncService,
     approvalFileService: new StubApprovalFileService(),
     shadowMetadataService,
@@ -1698,9 +1729,16 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
 
   try {
     const tenantResponse = await fetch(`${runtime.baseUrl}/api/settings/tenant-app`);
-    const tenantPayload = (await tenantResponse.json()) as { eid: string; appId: string };
+    const tenantPayload = (await tenantResponse.json()) as {
+      eid: string;
+      appId: string;
+      aiApp: { appId: string };
+      lightCloudRecordApp: { appId: string; configured: boolean };
+    };
     assert.equal(tenantPayload.eid, '21024647');
     assert.equal(tenantPayload.appId, '501037729');
+    assert.equal(tenantPayload.aiApp.appId, '501037729');
+    assert.equal(tenantPayload.lightCloudRecordApp.configured, true);
 
     const runsResponse = await fetch(`${runtime.baseUrl}/api/agent/runs`);
     assert.equal(runsResponse.status, 200);
@@ -1718,10 +1756,48 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
 
     const authResponse = await fetch(`${runtime.baseUrl}/api/settings/yzj-auth`);
     const authPayload = (await authResponse.json()) as {
-      credentials: Array<{ maskedValue: string; label: string }>;
+      tokenScopes: string[];
+      credentials: Array<{ maskedValue: string; label: string; group: string }>;
     };
-    assert.equal(authPayload.credentials.length, 4);
+    assert.deepEqual(authPayload.tokenScopes, ['app', 'team', 'resGroupSecret']);
+    assert.equal(authPayload.credentials.length, 7);
     assert.match(authPayload.credentials[1].maskedValue, /\*\*\*/);
+    assert.equal(authPayload.credentials.some((item) => item.group === 'lightcloud_record_app'), true);
+
+    const localIdentityResponse = await fetch(`${runtime.baseUrl}/api/yzj/auth/local-identity`);
+    const localIdentityPayload = (await localIdentityResponse.json()) as {
+      source: string;
+      eid: string;
+      appId: string;
+      operatorOpenId: string;
+    };
+    assert.equal(localIdentityPayload.source, 'local_fixed');
+    assert.equal(localIdentityPayload.eid, '21024647');
+    assert.equal(localIdentityPayload.appId, '501037729');
+    assert.equal(localIdentityPayload.operatorOpenId, '69e75eb5e4b0e65b61c014da');
+
+    const ticketIdentityResponse = await fetch(`${runtime.baseUrl}/api/yzj/auth/resolve-ticket`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket: 'ticket-001' }),
+    });
+    const ticketIdentityPayload = (await ticketIdentityResponse.json()) as {
+      source: string;
+      eid: string;
+      operatorOpenId: string;
+      userName: string;
+    };
+    assert.equal(ticketIdentityPayload.source, 'ticket');
+    assert.equal(ticketIdentityPayload.eid, '21024647');
+    assert.equal(ticketIdentityPayload.operatorOpenId, 'open-chen');
+    assert.equal(ticketIdentityPayload.userName, '陈伟棠');
+
+    const crossTenantResponse = await fetch(`${runtime.baseUrl}/api/yzj/auth/resolve-ticket`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket: 'other-eid-ticket' }),
+    });
+    assert.equal(crossTenantResponse.status, 400);
 
     const triggerResponse = await fetch(`${runtime.baseUrl}/api/settings/org-sync/manual-sync`, {
       method: 'POST',

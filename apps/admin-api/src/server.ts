@@ -238,6 +238,9 @@ const agentService = new AgentService({
 
 const server = createAdminApiServer({
   config,
+  yzjClient: new YzjClient({
+    baseUrl: config.yzj.baseUrl,
+  }),
   orgSyncService,
   orgSyncRepository,
   approvalFileService,
