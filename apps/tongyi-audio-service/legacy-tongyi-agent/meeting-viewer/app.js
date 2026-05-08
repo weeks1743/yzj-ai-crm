@@ -24,6 +24,14 @@ const TASK_ALIAS_STORAGE_PREFIX = "meeting-viewer-task-aliases-";
 
 const els = {};
 
+function viewerApiPath(path) {
+  if (!path || path.startsWith("#") || /^https?:\/\//i.test(path)) {
+    return path;
+  }
+  const prefix = window.location.pathname.includes("/audio-viewer/") ? "/audio-viewer" : "";
+  return `${prefix}${path}`;
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   bindElements();
   bindEvents();
@@ -167,7 +175,7 @@ function bindEvents() {
 }
 
 async function loadTasks() {
-  const response = await fetch("/api/tasks");
+  const response = await fetch(viewerApiPath("/api/tasks"));
   const payload = await response.json();
   state.tasks = payload.tasks || [];
 
@@ -192,7 +200,7 @@ async function loadTasks() {
 
 async function loadTask(taskId) {
   els.taskMeta.textContent = `正在加载 ${taskId}`;
-  const response = await fetch(`/api/task/${taskId}`);
+  const response = await fetch(viewerApiPath(`/api/task/${taskId}`));
   const bundle = await response.json();
   state.bundle = normalizeBundle(bundle);
   state.activeTranscriptIndex = -1;
@@ -446,7 +454,7 @@ function renderQaCards() {
 
 function renderAudio() {
   const playbackUrl = state.bundle.media?.playbackUrl;
-  els.audio.src = playbackUrl || "";
+  els.audio.src = playbackUrl ? viewerApiPath(playbackUrl) : "";
   els.audio.load();
   els.audio.playbackRate = Number(els.speedSelect.value);
   state.pendingSeekSeconds = null;
@@ -983,7 +991,7 @@ function renderProfileResult() {
 
   els.profilePrompt.textContent = state.profileResult.prompt;
   els.profileMarkdown.innerHTML = renderProfileMarkdown(state.profileResult.markdown);
-  els.profileOpenLink.href = state.profileResult.markdownUrl;
+  els.profileOpenLink.href = viewerApiPath(state.profileResult.markdownUrl);
   els.profileOpenLink.classList.remove("is-hidden");
   els.analyzeProfileButton.textContent = state.profileBusy ? "生成中..." : "生成画像 md";
 }
@@ -997,7 +1005,7 @@ async function analyzeProfile() {
   renderProfileResult();
 
   try {
-    const response = await fetch(`/api/task/${state.bundle.id}/profile-analysis`, {
+    const response = await fetch(viewerApiPath(`/api/task/${state.bundle.id}/profile-analysis`), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

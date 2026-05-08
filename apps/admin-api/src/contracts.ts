@@ -159,6 +159,7 @@ export interface AppConfig {
     };
     tongyiAudioService: {
       baseUrl: string;
+      publicBaseUrl: string;
     };
   };
   meta: {
@@ -195,6 +196,7 @@ export interface YzjAuthResolveTicketRequest {
 export interface YzjAuthIdentityResponse {
   source: 'ticket' | 'local_fixed';
   eid: string;
+  displayEid: string;
   appId: string;
   operatorOpenId: string;
   userId: string | null;

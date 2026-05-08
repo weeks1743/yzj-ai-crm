@@ -738,7 +738,8 @@ test('uploadTask restarts failed md5 cache instead of returning stale dependency
 test('getMeetingViewerUrl redirects completed task to provider or fixture viewer id', async () => {
   const config = createTestConfig({
     embeddingApiKey: null,
-    tongyiAudioServiceBaseUrl: 'http://127.0.0.1:3018/',
+    tongyiAudioServiceBaseUrl: 'http://tongyi-audio-service:3018/',
+    tongyiAudioPublicBaseUrl: 'https://chat.xiami66.com/audio-viewer/',
   });
   const record: RecordingTaskRecord = {
     taskId: 'recording-task-viewer',
@@ -779,7 +780,70 @@ test('getMeetingViewerUrl redirects completed task to provider or fixture viewer
 
   const url = await service.getMeetingViewerUrl(record.taskId);
 
-  assert.equal(url, 'http://127.0.0.1:3018/meeting-viewer/?task=EV5TddyrE5zM');
+  assert.equal(url, 'https://chat.xiami66.com/audio-viewer/meeting-viewer/?task=EV5TddyrE5zM');
+});
+
+test('getMeetingViewerUrl uses md5 output directory when provider data id is only an alias', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-viewer-'));
+  try {
+    const taskDir = join(tempDir, 'md5-viewer');
+    const assetsDir = join(taskDir, 'assets');
+    mkdirSync(assetsDir, { recursive: true });
+    const playbackPath = join(assetsDir, 'playback.mp3');
+    writeFileSync(playbackPath, 'fake-audio', 'utf8');
+
+    const config = createTestConfig({
+      embeddingApiKey: null,
+      tongyiAudioPublicBaseUrl: 'https://chat.xiami66.com/audio-viewer/',
+    });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-viewer-md5',
+      eid: config.yzj.eid,
+      appId: config.yzj.appId,
+      serviceTaskId: 'audio-task-viewer-md5',
+      providerDataId: 'DATA-ID-ONLY',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: 'visit.mp3',
+        mimeType: 'audio/mpeg',
+        size: 123,
+        md5: 'md5-viewer',
+      },
+      anchors: {},
+      servicePayload: {
+        playback: {
+          available: true,
+          path: playbackPath,
+        },
+      },
+      artifactId: null,
+      materialPath: null,
+      materialSource: null,
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+      } as any,
+      client: {
+        getTask: async () => {
+          throw new Error('audio service offline during viewer url lookup');
+        },
+      } as any,
+      artifactService: {} as any,
+    });
+
+    const url = await service.getMeetingViewerUrl(record.taskId);
+
+    assert.equal(url, 'https://chat.xiami66.com/audio-viewer/meeting-viewer/?task=md5-viewer');
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('createSkillJob sends structured Tongyi analysis JSON before recording markdown', async () => {

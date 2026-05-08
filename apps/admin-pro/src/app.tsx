@@ -6,15 +6,30 @@ import {
 import type { RunTimeLayoutConfig } from '@umijs/max';
 import { Link } from '@umijs/max';
 import { Avatar, Button, Space, Tag, Tooltip } from 'antd';
-import { brandTitle, tenantContext } from '@shared';
+import { brandTitle } from '@shared';
+import type { YzjAuthIdentityResponse } from '@shared/types';
 import { applyDocumentBranding } from '@shared/dom-branding';
 import brandLogo from '@shared/assets/logo.png';
+import { resolveAdminIdentity } from '@/utils/yzjIdentity';
 
 const adminBrandTitle = brandTitle;
+const fallbackIdentity: YzjAuthIdentityResponse = {
+  source: 'local_fixed',
+  eid: '未解析',
+  displayEid: '未解析',
+  appId: '未解析',
+  operatorOpenId: '未解析',
+  userId: null,
+  userName: '云之家用户',
+  networkId: null,
+  deviceId: null,
+};
 
 export async function getInitialState() {
+  const currentUser = await resolveAdminIdentity().catch(() => fallbackIdentity);
+
   return {
-    tenantContext,
+    currentUser,
     settings: {
       colorPrimary: '#1677ff',
     },
@@ -50,11 +65,8 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => {
       },
     ],
     actionsRender: () => [
-      <Tag key="tenant" color="blue" bordered={false}>
-        {initialState?.tenantContext?.tenantName}
-      </Tag>,
       <Tag key="eid" bordered={false}>
-        <ClusterOutlined /> {initialState?.tenantContext?.eid}
+        <ClusterOutlined /> {initialState?.currentUser?.displayEid || initialState?.currentUser?.eid}
       </Tag>,
       <Tooltip key="notice" title="系统通知">
         <Button type="text" icon={<BellOutlined />} />
@@ -65,11 +77,11 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => {
     ],
     avatarProps: {
       src: undefined,
-      title: initialState?.tenantContext?.owner,
+      title: initialState?.currentUser?.userName,
       render: (_, children) => (
         <Space>
           <Avatar style={{ backgroundColor: '#1677ff' }}>
-            {initialState?.tenantContext?.owner?.slice(0, 1)}
+            {initialState?.currentUser?.userName?.slice(0, 1)}
           </Avatar>
           {children}
         </Space>

@@ -13,11 +13,12 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .config import ServiceConfig, load_config
-from .storage import TaskStore
+from .storage import TaskStore, resolve_fixture_task_dir
 
 VIEWER_STATIC_DIR = Path(__file__).resolve().parents[2] / "legacy-tongyi-agent" / "meeting-viewer"
 PROFILE_DIR_NAME = "profile-analysis"
 RANGE_CHUNK_SIZE = 64 * 1024
+AUDIO_VIEWER_PREFIX = "/audio-viewer"
 
 
 class AudioService:
@@ -35,7 +36,14 @@ def create_handler(service: AudioService) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path == "/health":
+            route_path = _strip_audio_viewer_prefix(parsed.path)
+            if route_path == "/" and _has_audio_viewer_prefix(parsed.path):
+                self.send_response(HTTPStatus.FOUND)
+                self.send_header("Location", f"{AUDIO_VIEWER_PREFIX}/meeting-viewer/")
+                self.end_headers()
+                return None
+
+            if route_path == "/health":
                 return self._json({
                     "status": "ok",
                     "provider": "tongyi-tingwu",
@@ -55,32 +63,32 @@ def create_handler(service: AudioService) -> type[BaseHTTPRequestHandler]:
                     ],
                 })
 
-            if parsed.path == "/meeting-viewer":
+            if route_path == "/meeting-viewer":
                 self.send_response(HTTPStatus.FOUND)
-                self.send_header("Location", "/meeting-viewer/")
+                self.send_header("Location", _with_audio_viewer_prefix(parsed.path, "/meeting-viewer/"))
                 self.end_headers()
                 return None
 
-            if parsed.path == "/meeting-viewer/":
+            if route_path == "/meeting-viewer/":
                 return self._serve_viewer_static("index.html")
 
-            if parsed.path.startswith("/meeting-viewer/"):
-                return self._serve_viewer_static(parsed.path.removeprefix("/meeting-viewer/"))
+            if route_path.startswith("/meeting-viewer/"):
+                return self._serve_viewer_static(route_path.removeprefix("/meeting-viewer/"))
 
-            if parsed.path == "/api/tasks":
+            if route_path == "/api/tasks":
                 return self._json({"tasks": _list_viewer_tasks(service.config)})
 
-            viewer_task_id = _match_viewer_task_path(parsed.path)
+            viewer_task_id = _match_viewer_task_path(route_path)
             if viewer_task_id:
                 bundle = _load_viewer_task_bundle(service.config, viewer_task_id)
                 if bundle is None:
                     return self._json_error("TASK_NOT_FOUND", "Task not found", HTTPStatus.NOT_FOUND)
                 return self._json(bundle)
 
-            if parsed.path.startswith("/outputs/"):
-                return self._serve_output_file(parsed.path)
+            if route_path.startswith("/outputs/"):
+                return self._serve_output_file(route_path)
 
-            task_id = _match_task_path(parsed.path)
+            task_id = _match_task_path(route_path)
             if task_id:
                 try:
                     task = service.store.get_task(task_id)
@@ -92,14 +100,15 @@ def create_handler(service: AudioService) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path == "/api/audio-tasks":
+            route_path = _strip_audio_viewer_prefix(parsed.path)
+            if route_path == "/api/audio-tasks":
                 return self._create_task()
 
-            viewer_profile_task_id = _match_viewer_profile_path(parsed.path)
+            viewer_profile_task_id = _match_viewer_profile_path(route_path)
             if viewer_profile_task_id:
                 return self._create_viewer_profile_analysis(viewer_profile_task_id)
 
-            materialize_task_id = _match_materialize_path(parsed.path)
+            materialize_task_id = _match_materialize_path(route_path)
             if materialize_task_id:
                 return self._materialize_task(materialize_task_id)
 
@@ -314,6 +323,24 @@ def _match_viewer_profile_path(path: str) -> str | None:
     return unquote(match.group(1)) if match else None
 
 
+def _strip_audio_viewer_prefix(path: str) -> str:
+    if path == AUDIO_VIEWER_PREFIX:
+        return "/"
+    if path.startswith(f"{AUDIO_VIEWER_PREFIX}/"):
+        return path.removeprefix(AUDIO_VIEWER_PREFIX)
+    return path
+
+
+def _has_audio_viewer_prefix(path: str) -> bool:
+    return path == AUDIO_VIEWER_PREFIX or path.startswith(f"{AUDIO_VIEWER_PREFIX}/")
+
+
+def _with_audio_viewer_prefix(original_path: str, target_path: str) -> str:
+    if _has_audio_viewer_prefix(original_path):
+        return f"{AUDIO_VIEWER_PREFIX}{target_path}"
+    return target_path
+
+
 def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     length = int(handler.headers.get("Content-Length") or "0")
     if length <= 0:
@@ -428,7 +455,46 @@ def _find_viewer_task_dir(config: ServiceConfig, task_id: str) -> Path | None:
         candidate = root / safe_task_id
         if candidate.exists() and candidate.is_dir():
             return candidate
+    indexed_task_dir = _find_viewer_task_dir_from_task_index(config, safe_task_id)
+    if indexed_task_dir is not None:
+        return indexed_task_dir
     return None
+
+
+def _find_viewer_task_dir_from_task_index(config: ServiceConfig, task_id: str) -> Path | None:
+    task_store_dir = config.output_dir / "_tasks"
+    if not task_store_dir.exists():
+        return None
+
+    for path in task_store_dir.glob("*.json"):
+        payload = _read_json_file(path)
+        if not isinstance(payload, dict):
+            continue
+        file_payload = payload.get("file")
+        file_md5 = file_payload.get("md5") if isinstance(file_payload, dict) else None
+        aliases = {
+            payload.get("taskId"),
+            payload.get("providerDataId"),
+            payload.get("fixtureTaskId"),
+            file_md5,
+        }
+        if task_id not in {str(item) for item in aliases if item}:
+            continue
+        for candidate in _viewer_task_dir_candidates(config, payload, file_md5):
+            if _is_viewer_task_dir(candidate):
+                return candidate
+    return None
+
+
+def _viewer_task_dir_candidates(config: ServiceConfig, payload: dict[str, Any], file_md5: Any) -> list[Path]:
+    candidates: list[Path] = []
+    fixture_task_id = payload.get("fixtureTaskId")
+    if isinstance(fixture_task_id, str) and fixture_task_id.strip():
+        candidates.append(resolve_fixture_task_dir(config, fixture_task_id.strip()))
+    for value in (file_md5, payload.get("providerDataId"), payload.get("taskId")):
+        if isinstance(value, str) and value.strip():
+            candidates.append(config.output_dir / value.strip())
+    return candidates
 
 
 def _is_viewer_task_dir(path: Path) -> bool:

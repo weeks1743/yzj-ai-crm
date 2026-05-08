@@ -63,6 +63,20 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.equal(config.external.image.timeoutMs, 150000);
   assert.equal(config.external.skillRuntime.baseUrl, 'http://127.0.0.1:3012');
   assert.equal(config.external.tongyiAudioService.baseUrl, 'http://127.0.0.1:3018');
+  assert.equal(config.external.tongyiAudioService.publicBaseUrl, 'http://127.0.0.1:3018');
+});
+
+test('loadAppConfig separates internal Tongyi audio service URL from public viewer URL', () => {
+  const config = loadAppConfig({
+    env: {
+      ...baseEnv,
+      TONGYI_AUDIO_SERVICE_BASE_URL: 'http://tongyi-audio-service:3018',
+      TONGYI_AUDIO_PUBLIC_BASE_URL: 'https://chat.xiami66.com/audio-viewer',
+    },
+  });
+
+  assert.equal(config.external.tongyiAudioService.baseUrl, 'http://tongyi-audio-service:3018');
+  assert.equal(config.external.tongyiAudioService.publicBaseUrl, 'https://chat.xiami66.com/audio-viewer');
 });
 
 test('loadAppConfig rejects invalid PostgreSQL schema name', () => {
@@ -174,6 +188,7 @@ test('loadAppConfig accepts Docker service-name connection values', () => {
   assert.equal(config.qdrant.url, 'http://qdrant:6333');
   assert.equal(config.external.skillRuntime.baseUrl, 'http://skill-runtime:3012');
   assert.equal(config.external.tongyiAudioService.baseUrl, 'http://tongyi-audio-service:3018');
+  assert.equal(config.external.tongyiAudioService.publicBaseUrl, 'http://tongyi-audio-service:3018');
 });
 
 test('loadAppConfig rejects invalid connection environment values', () => {
@@ -184,6 +199,7 @@ test('loadAppConfig rejects invalid connection environment values', () => {
     ['QDRANT_URL', 'qdrant:6333'],
     ['SKILL_RUNTIME_BASE_URL', 'skill-runtime:3012'],
     ['TONGYI_AUDIO_SERVICE_BASE_URL', 'tongyi-audio-service:3018'],
+    ['TONGYI_AUDIO_PUBLIC_BASE_URL', 'chat.xiami66.com/audio-viewer'],
   ] as const) {
     assert.throws(
       () =>

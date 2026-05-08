@@ -15,6 +15,7 @@ export const ASSISTANT_OPERATOR_OPEN_ID =
 export const ASSISTANT_LOCAL_IDENTITY: YzjAuthIdentityResponse = {
   source: 'local_fixed',
   eid: '21024647',
+  displayEid: '21024647',
   appId: '501037729',
   operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
   userId: null,

@@ -15,6 +15,7 @@ export function isPersistableYzjIdentity(value: unknown): value is YzjAuthIdenti
   return Boolean(
     candidate.eid
     && typeof candidate.eid === 'string'
+    && (!candidate.displayEid || typeof candidate.displayEid === 'string')
     && candidate.appId
     && typeof candidate.appId === 'string'
     && candidate.operatorOpenId
@@ -35,7 +36,12 @@ export function readCachedAssistantIdentity(
       return null;
     }
     const parsed = JSON.parse(raw) as unknown;
-    return isPersistableYzjIdentity(parsed) ? parsed : null;
+    return isPersistableYzjIdentity(parsed)
+      ? {
+          ...parsed,
+          displayEid: parsed.displayEid || parsed.eid,
+        }
+      : null;
   } catch {
     return null;
   }

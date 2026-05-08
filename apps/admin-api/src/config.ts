@@ -48,6 +48,7 @@ export const ADMIN_API_ENV_CONTRACT_KEYS = [
   'EXT_IMAGE_MODEL',
   'EXT_IMAGE_TIMEOUT_MS',
   'TONGYI_AUDIO_SERVICE_PORT',
+  'TONGYI_AUDIO_PUBLIC_BASE_URL',
   'TONGYI_DASHSCOPE_API_KEY',
   'TONGYI_TINGWU_APP_ID',
   'TONGYI_AUDIO_OUTPUT_DIR',
@@ -330,6 +331,9 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
     'TONGYI_AUDIO_SERVICE_BASE_URL',
     envFilePath,
   );
+  const tongyiAudioPublicBaseUrl = env.TONGYI_AUDIO_PUBLIC_BASE_URL?.trim()
+    ? parseHttpBaseUrl(env.TONGYI_AUDIO_PUBLIC_BASE_URL, 'TONGYI_AUDIO_PUBLIC_BASE_URL', envFilePath)
+    : tongyiAudioServiceBaseUrl;
 
   return {
     yzj: {
@@ -419,6 +423,7 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
       },
       tongyiAudioService: {
         baseUrl: tongyiAudioServiceBaseUrl,
+        publicBaseUrl: tongyiAudioPublicBaseUrl,
       },
     },
     meta: {

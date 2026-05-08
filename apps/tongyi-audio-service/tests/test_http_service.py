@@ -272,7 +272,16 @@ class HttpServiceTest(unittest.TestCase):
                 self.assertIn("text/html", headers["content-type"])
                 self.assertIn("智能纪要查看器", body.decode("utf-8"))
 
+                status, headers, body = _raw_request(port, "GET", "/audio-viewer/meeting-viewer/")
+                self.assertEqual(status, 200)
+                self.assertIn("text/html", headers["content-type"])
+                self.assertIn("智能纪要查看器", body.decode("utf-8"))
+
                 status, payload = _request(port, "GET", "/api/tasks")
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["tasks"][0]["id"], "EV5")
+
+                status, payload = _request(port, "GET", "/audio-viewer/api/tasks")
                 self.assertEqual(status, 200)
                 self.assertEqual(payload["tasks"][0]["id"], "EV5")
 
@@ -283,10 +292,25 @@ class HttpServiceTest(unittest.TestCase):
                 self.assertEqual(payload["assets"]["mindMapSummary"]["mindMapSummary"][0]["topic"][0]["title"], "试点推进")
                 self.assertEqual(payload["media"]["playbackUrl"], "/outputs/EV5/assets/playback.mp3")
 
+                status, payload = _request(port, "GET", "/audio-viewer/api/task/EV5")
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["assets"]["meetingAssistance"]["keywords"], ["预算", "审批", "试点"])
+                self.assertEqual(payload["media"]["playbackUrl"], "/outputs/EV5/assets/playback.mp3")
+
                 status, headers, body = _raw_request(
                     port,
                     "GET",
                     "/outputs/EV5/assets/playback.mp3",
+                    {"Range": "bytes=0-3"},
+                )
+                self.assertEqual(status, 206)
+                self.assertEqual(headers["content-range"], "bytes 0-3/16")
+                self.assertEqual(body, b"fake")
+
+                status, headers, body = _raw_request(
+                    port,
+                    "GET",
+                    "/audio-viewer/outputs/EV5/assets/playback.mp3",
                     {"Range": "bytes=0-3"},
                 )
                 self.assertEqual(status, 206)
@@ -303,9 +327,103 @@ class HttpServiceTest(unittest.TestCase):
                 self.assertIn("CRM 客户拜访结构化画像", payload["markdown"])
                 self.assertTrue((fixture_dir / "profile-analysis").exists())
 
+                status, payload = _request(
+                    port,
+                    "POST",
+                    "/audio-viewer/api/task/EV5/profile-analysis",
+                    {"scenario": "crm_visit"},
+                )
+                self.assertEqual(status, 200)
+                self.assertIn("CRM 客户拜访结构化画像", payload["markdown"])
+                self.assertEqual(payload["markdownUrl"].startswith("/outputs/EV5/profile-analysis/"), True)
+
                 status, payload = _request(port, "GET", "/api/task/missing")
                 self.assertEqual(status, 404)
                 self.assertEqual(payload["code"], "TASK_NOT_FOUND")
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
+                server.server_close()
+
+    def test_meeting_viewer_resolves_provider_data_alias_to_md5_output_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "outputs"
+            task_dir = output_dir / "md5-real"
+            assets_dir = task_dir / "assets"
+            assets_dir.mkdir(parents=True)
+            (assets_dir / "playback.mp3").write_bytes(b"fake-audio-bytes")
+            (assets_dir / "summarization.json").write_text(
+                json.dumps({"paragraphSummary": "真实上传任务摘要。"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (assets_dir / "mindMapSummary.json").write_text(
+                json.dumps({"mindMapSummary": [{"title": "真实上传任务"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            task_index_dir = output_dir / "_tasks"
+            task_index_dir.mkdir(parents=True)
+            (task_index_dir / "audio-task-real.json").write_text(
+                json.dumps(
+                    {
+                        "taskId": "audio-task-real",
+                        "provider": "tongyi-tingwu",
+                        "status": "succeeded",
+                        "providerDataId": "DATA-ID-ONLY",
+                        "fixtureTaskId": None,
+                        "createdAt": "2026-05-08T00:00:00+08:00",
+                        "updatedAt": "2026-05-08T00:00:00+08:00",
+                        "file": {
+                            "fileName": "visit.mp3",
+                            "mimeType": "audio/mpeg",
+                            "size": 16,
+                            "md5": "md5-real",
+                            "localPath": str(output_dir / "_uploads" / "md5-real.mp3"),
+                        },
+                        "errorMessage": None,
+                        "materialPath": None,
+                        "materialSource": None,
+                        "anchors": {},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            config = ServiceConfig(
+                host="127.0.0.1",
+                port=0,
+                dashscope_api_key=None,
+                tingwu_app_id=None,
+                output_dir=output_dir,
+                fixture_output_dir=root / "fixtures",
+                poll_interval_seconds=1,
+                task_timeout_seconds=1,
+            )
+            server = ThreadingHTTPServer((config.host, 0), create_handler(AudioService(config)))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_port
+                status, payload = _request(port, "GET", "/api/task/DATA-ID-ONLY")
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["id"], "DATA-ID-ONLY")
+                self.assertEqual(payload["meta"]["id"], "md5-real")
+                self.assertEqual(payload["assets"]["summarization"]["paragraphSummary"], "真实上传任务摘要。")
+                self.assertEqual(payload["media"]["playbackUrl"], "/outputs/DATA-ID-ONLY/assets/playback.mp3")
+
+                status, headers, body = _raw_request(
+                    port,
+                    "GET",
+                    "/outputs/DATA-ID-ONLY/assets/playback.mp3",
+                    {"Range": "bytes=0-3"},
+                )
+                self.assertEqual(status, 206)
+                self.assertEqual(headers["content-range"], "bytes 0-3/16")
+                self.assertEqual(body, b"fake")
+
+                status, headers, _ = _raw_request(port, "GET", "/audio-viewer")
+                self.assertEqual(status, 302)
+                self.assertEqual(headers["location"], "/audio-viewer/meeting-viewer/")
             finally:
                 server.shutdown()
                 thread.join(timeout=2)

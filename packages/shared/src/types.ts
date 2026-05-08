@@ -1216,6 +1216,7 @@ export interface YzjAuthSettingsResponse {
 export interface YzjAuthIdentityResponse {
   source: 'ticket' | 'local_fixed';
   eid: string;
+  displayEid: string;
   appId: string;
   operatorOpenId: string;
   userId: string | null;

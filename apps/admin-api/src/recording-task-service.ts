@@ -427,7 +427,7 @@ export class RecordingTaskService {
     if (!viewerTaskId) {
       throw new BadRequestError('录音任务缺少通义任务标识，不能打开录音查看页');
     }
-    return `${trimTrailingSlash(this.options.config.external.tongyiAudioService.baseUrl)}/meeting-viewer/?task=${encodeURIComponent(viewerTaskId)}`;
+    return `${trimTrailingSlash(this.options.config.external.tongyiAudioService.publicBaseUrl)}/meeting-viewer/?task=${encodeURIComponent(viewerTaskId)}`;
   }
 
   async createSkillJob(taskId: string, input: { skillCode?: string }): Promise<ExternalSkillJobResponse> {
@@ -1302,18 +1302,76 @@ function resolveViewerTaskId(record: RecordingTaskRecord): string {
   if (record.fixtureTaskId) {
     return record.fixtureTaskId;
   }
-  const materialPath = record.materialPath?.trim();
-  if (materialPath) {
-    const taskDir = dirname(resolve(materialPath));
-    try {
-      if (statSync(resolve(taskDir, 'assets'), { throwIfNoEntry: false })?.isDirectory()) {
-        return basename(taskDir);
-      }
-    } catch {
-      // Fall back to providerDataId below.
-    }
+  const materialTaskId = resolveViewerTaskIdFromKnownOutputPath(record.materialPath);
+  if (materialTaskId) {
+    return materialTaskId;
+  }
+  const playbackTaskId = resolveViewerTaskIdFromKnownOutputPath(readPlaybackPath(record.servicePayload));
+  if (playbackTaskId) {
+    return playbackTaskId;
+  }
+  const uploadTaskId = resolveViewerTaskIdFromUploadPath(
+    readServiceFileLocalPath(record.servicePayload),
+    record.file.md5,
+  );
+  if (uploadTaskId) {
+    return uploadTaskId;
   }
   return record.providerDataId || '';
+}
+
+function resolveViewerTaskIdFromKnownOutputPath(pathValue: string | null | undefined): string {
+  const trimmedPath = pathValue?.trim();
+  if (!trimmedPath) {
+    return '';
+  }
+  const normalizedPath = resolve(trimmedPath);
+  const parentDir = dirname(normalizedPath);
+  const taskDir = ['assets', 'profile-analysis'].includes(basename(parentDir))
+    ? dirname(parentDir)
+    : parentDir;
+  try {
+    if (statSync(resolve(taskDir, 'assets'), { throwIfNoEntry: false })?.isDirectory()) {
+      return basename(taskDir);
+    }
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+function resolveViewerTaskIdFromUploadPath(pathValue: string | null | undefined, md5: string): string {
+  const trimmedPath = pathValue?.trim();
+  const trimmedMd5 = md5.trim();
+  if (!trimmedPath || !trimmedMd5) {
+    return '';
+  }
+  const outputRoot = dirname(dirname(resolve(trimmedPath)));
+  const taskDir = resolve(outputRoot, trimmedMd5);
+  try {
+    if (statSync(resolve(taskDir, 'assets'), { throwIfNoEntry: false })?.isDirectory()) {
+      return basename(taskDir);
+    }
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+function readPlaybackPath(payload: Record<string, unknown>): string | null {
+  const playback = payload.playback;
+  if (!playback || typeof playback !== 'object') {
+    return null;
+  }
+  return readPayloadString((playback as Record<string, unknown>).path) || null;
+}
+
+function readServiceFileLocalPath(payload: Record<string, unknown>): string | null {
+  const file = payload.file;
+  if (!file || typeof file !== 'object') {
+    return null;
+  }
+  return readPayloadString((file as Record<string, unknown>).localPath) || null;
 }
 
 function trimTrailingSlash(value: string): string {

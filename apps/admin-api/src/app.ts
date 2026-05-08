@@ -230,6 +230,7 @@ function buildLocalFixedIdentity(config: AppConfig): YzjAuthIdentityResponse {
   return {
     source: 'local_fixed',
     eid: config.yzj.eid,
+    displayEid: config.yzj.eid,
     appId: config.yzj.appId,
     operatorOpenId: LOCAL_FIXED_OPERATOR_OPEN_ID,
     userId: null,
@@ -283,6 +284,7 @@ async function resolveYzjTicketIdentity(
   return {
     source: 'ticket',
     eid,
+    displayEid: eid,
     appId: context.appid?.trim() || options.config.yzj.appId,
     operatorOpenId: context.openid.trim(),
     userId: context.userid?.trim() || null,

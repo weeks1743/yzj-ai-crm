@@ -13,6 +13,7 @@ test('assistant auth cache restores resolved ticket identity for internal naviga
   const identity: YzjAuthIdentityResponse = {
     source: 'ticket',
     eid: '21024647',
+    displayEid: '21024647',
     appId: '501037729',
     operatorOpenId: 'openid-1',
     userId: 'user-1',

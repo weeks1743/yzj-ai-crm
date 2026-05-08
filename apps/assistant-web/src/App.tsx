@@ -240,13 +240,6 @@ const recordResultCatalog: Catalog = {
 
 registerCatalog(recordResultCatalog);
 
-const runtimeTenantContext = {
-  owner: '陈伟棠',
-  tenantName: '金蝶云之家销售',
-  eidLabel: '由 admin-api 配置',
-  appIdLabel: '由 admin-api 配置',
-};
-
 const senderShortcutIcons = [
   <FileSearchOutlined />,
 ];
@@ -5698,7 +5691,11 @@ function AssistantConversationRuntime({
         scene={scene}
         sourceTags={getSceneSourceTags(scene.key)}
         slashCommand={scene.key === 'chat' ? 'slash 命令入口' : getSceneSlashCommand(scene.key)}
-        tenantContext={runtimeTenantContext}
+        tenantContext={{
+          tenantName: runtimeScope.identity.userName || '云之家用户',
+          eidLabel: runtimeScope.identity.displayEid || runtimeScope.identity.eid,
+          appIdLabel: runtimeScope.identity.appId,
+        }}
         agentTrace={latestAgentTrace}
         evidence={latestEvidence}
         recordingTasks={recordingTasks.map((task) => ({
@@ -6133,8 +6130,6 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
     }
   }, [activeConversationKey, location.pathname, navigate, setActiveConversationKey]);
 
-  const footerSubtitle = `${personalSettings.roleLabel}${personalSettings.isDefaultSoulPrompt ? ' · SOUL 未配置' : ' · SOUL 已配置'}`;
-
   const onCreateConversation = () => {
     const existingBlankConversation = conversations.find((item) => (
       isBlankUserConversation(runtimeScope, item as ConversationSession)
@@ -6209,14 +6204,11 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
       <div className={styles.sideFooter}>
         <Space size={10}>
           <Avatar size={24} style={{ backgroundColor: '#1677ff' }}>
-            {personalSettings.displayName.slice(0, 1)}
+            {(runtimeScope.identity.userName || personalSettings.displayName).slice(0, 1)}
           </Avatar>
           <Space orientation="vertical" size={0} className={styles.sideFooterInfo}>
             <Text strong ellipsis>
-              {personalSettings.displayName}
-            </Text>
-            <Text type="secondary" ellipsis>
-              {footerSubtitle}
+              {runtimeScope.identity.userName || personalSettings.displayName}
             </Text>
           </Space>
         </Space>

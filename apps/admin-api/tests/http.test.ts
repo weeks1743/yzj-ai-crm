@@ -2804,7 +2804,7 @@ test('HTTP endpoints expose recording viewer redirect and downstream skill job c
     recordingTaskService: {
       getMeetingViewerUrl: async (taskId: string) => {
         calls.push({ method: 'viewer', taskId });
-        return 'http://127.0.0.1:3018/meeting-viewer/?task=EV5TddyrE5zM';
+        return 'https://chat.xiami66.com/audio-viewer/meeting-viewer/?task=EV5TddyrE5zM';
       },
 	      createSkillJob: async (taskId: string, payload: unknown) => {
 	        calls.push({ method: 'skill-job', taskId, payload });
@@ -2849,7 +2849,7 @@ test('HTTP endpoints expose recording viewer redirect and downstream skill job c
     assert.equal(viewerResponse.status, 302);
     assert.equal(
       viewerResponse.headers.get('location'),
-      'http://127.0.0.1:3018/meeting-viewer/?task=EV5TddyrE5zM',
+      'https://chat.xiami66.com/audio-viewer/meeting-viewer/?task=EV5TddyrE5zM',
     );
 
     const skillJobResponse = await fetch(
