@@ -70,6 +70,12 @@ const implementationTypeLabels: Record<ExternalSkillCatalogItem['implementationT
   placeholder: '占位能力',
 };
 
+const assetArtifactKindLabels: Record<string, string> = {
+  company_research: '公司研究资料',
+  recording_material: '录音资料包',
+  analysis_material: '分析资料',
+};
+
 function isExternalSkillRecord(record: RowData): record is ExternalSkillCatalogItem {
   return 'skillCode' in record;
 }
@@ -451,8 +457,40 @@ function ExternalSkillBasicInfo({ skill }: { skill: ExternalSkillCatalogItem }) 
           )}
         </ProDescriptions.Item>
       </ProDescriptions>
+      <ExternalSkillAssetMaterializationPreview skill={skill} />
       <UpstreamMaterialPreview skill={skill} />
     </Space>
+  );
+}
+
+function ExternalSkillAssetMaterializationPreview({ skill }: { skill: ExternalSkillCatalogItem }) {
+  const policy = skill.assetMaterialization ?? {
+    enabled: false,
+    label: '未配置',
+    description: '当前技能未配置资料沉淀策略。',
+  };
+
+  return (
+    <ProDescriptions column={1} title="资料沉淀策略">
+      <ProDescriptions.Item label="是否沉淀资料">
+        <Space>
+          <Switch
+            checked={policy.enabled}
+            checkedChildren="开启"
+            disabled
+            unCheckedChildren="关闭"
+          />
+          <Tag color={policy.enabled ? 'success' : 'default'}>
+            {policy.enabled ? '生成资料资产' : '仅返回结果'}
+          </Tag>
+        </Space>
+      </ProDescriptions.Item>
+      <ProDescriptions.Item label="资料类型">
+        {policy.artifactKind ? assetArtifactKindLabels[policy.artifactKind] ?? policy.artifactKind : '—'}
+      </ProDescriptions.Item>
+      <ProDescriptions.Item label="策略标签">{policy.label}</ProDescriptions.Item>
+      <ProDescriptions.Item label="说明">{policy.description ?? '—'}</ProDescriptions.Item>
+    </ProDescriptions>
   );
 }
 

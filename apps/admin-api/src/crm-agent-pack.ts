@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import type {
+  AgentAttachment,
   AgentEvidenceCard,
   AgentRecordResultFieldView,
   AgentRecordResultRecordView,
@@ -13,6 +16,7 @@ import type {
   AppConfig,
   ArtifactAnchor,
   ArtifactDetailResponse,
+  ExternalSkillAssetMaterializationConfig,
   ExternalSkillJobResponse,
   IntentFrame,
   ShadowExecuteGetResponse,
@@ -38,7 +42,9 @@ import {
   type ConfirmationRequest,
   type ContextFrame,
   type FieldOptionHint,
+  type GenericIntentFrame,
   type MetaQuestion,
+  type MetaQuestionCard,
   type MetaQuestionLookup,
   type PendingInteraction,
   type RecordWritePreviewRow,
@@ -72,17 +78,21 @@ import type { RecordingTaskService } from './recording-task-service.js';
 import type { ShadowMetadataService } from './shadow-metadata-service.js';
 import { AgentToolRegistry } from './tool-registry.js';
 import { getErrorMessage } from './errors.js';
+import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 const CRM_RECORD_OBJECTS: ShadowObjectKey[] = ['customer', 'contact', 'opportunity', 'followup'];
 const COMPANY_RESEARCH_TOOL = 'external.company_research';
 const COMPANY_RESEARCH_RUNTIME_TOOL = 'ext.company_research_pm';
 const COMPANY_RESEARCH_SERVICE_LABEL = '公司研究服务';
 const COMPANY_RESEARCH_MATERIAL_LABEL = '公司研究资料';
+const YUNZHIJIA_VISIT_PREP_TOOL = 'external.yunzhijia_visit_prep';
+const YUNZHIJIA_VISIT_PREP_RUNTIME_TOOL = 'ext.yunzhijia_visit_prep';
+const YUNZHIJIA_VISIT_PREP_SERVICE_LABEL = '客户拜访准备助手';
+const YUNZHIJIA_VISIT_PREP_MATERIAL_LABEL = '客户拜访准备资料';
 const RECORDING_MATERIAL_TOOL = 'artifact.recording_material.prepare';
 const CONTEXT_SUMMARY_TOOL = 'meta.context_summary';
 const EXTERNAL_INFO_SOURCE_LABEL = '外部信息';
 const INTERNAL_RECORDS_SOURCE_LABEL = '系统内记录';
-const RECORDING_NEEDS_SUMMARY_LABEL = '拜访需求摘要';
 const DEFAULT_EXTERNAL_INFO_SEARCH_LIMIT = 5;
 const VISIT_NEEDS_ANALYSIS_SEARCH_LIMIT = 10;
 const VISIT_NEEDS_PRIMARY_ANALYSIS_LIMIT = 4;
@@ -94,8 +104,12 @@ const VISIT_NEEDS_ANALYSIS_SOURCE_ORDER = [
   { sourceToolCode: 'ext.customer_value_positioning_pm', titleKeyword: '客户价值定位' },
 ];
 const VISIT_NEEDS_PRIMARY_ANALYSIS_SOURCE_CODE = 'ext.customer_needs_todo_analysis';
-const VISIT_NEEDS_DEMAND_KEYWORDS = /(需求|诉求|痛点|关注|希望|需要|要求|提出|建议|期望|问题|待办|流程|审批|报销|采购|合同|考勤|项目|费用|多语言|海外|AI|知识库|ERP|集成|对接|权限|组织|资产|发票)/;
-const VISIT_NEEDS_SIGNAL_NOISE_KEYWORDS = /(基本信息|录音任务|生成时间|来源文件|关联客户|关联商机|关联跟进记录|后续动作建议|可基于本资料包|正式写入前|录音查看页|资料边界|项目\/场景背景|待补充|材料\/证据|证据不足|需销售后续补充|缺乏|无法确认)/;
+const VISIT_NEEDS_DEMAND_KEYWORDS = /(需求|诉求|痛点|关注|希望|需要|要求|提出|期望|问题|流程|审批|报销|采购|合同|考勤|费用|多语言|海外|AI|知识库|ERP|集成|对接|权限|组织|资产|发票)/;
+const VISIT_NEEDS_SIGNAL_NOISE_KEYWORDS = /(基本信息|录音任务|生成时间|来源文件|关联客户|关联商机|关联跟进记录|后续动作建议|建议下一步|可基于本资料包|正式写入前|录音查看页|资料边界|项目\/场景背景|待补充|材料\/证据|证据不足|需销售后续补充|缺乏|无法确认|暂无明确|没有明确|未明确|未提及明确)/;
+const VISIT_NEEDS_CUSTOMER_VOICE_KEYWORDS = /(客户|对方|其|用户|业务方|使用方|决策方).{0,24}(?:提出|提到|希望|需要|要求|关注|期望|反馈|明确|担心)|(?:提出|提到|希望|需要|要求|关注|期望|反馈|明确).{0,24}(?:需求|诉求|痛点|问题|关注点)/;
+const VISIT_NEEDS_CONCRETE_NEED_KEYWORDS = /(采购|合同|审批|报销|考勤|费用|多语言|海外|AI|知识库|ERP|集成|对接|权限|组织架构|数据权限|研发费用|项目费用|发票|移动端|流程线上化|自动化|重复录入|全球协同)/;
+const VISIT_NEEDS_INTERNAL_ACTION_KEYWORDS = /^(?:建议|可|可以|请|需要|需|应|优先|后续|下一步|继续|尽快|如果|若)/;
+const VISIT_NEEDS_INTERNAL_MAINTENANCE_KEYWORDS = /(补充|补齐|补录|打开完整|打开下方|确认|核对|安排|跟进|拜访路线|区域经营|销售|预算与决策链|资料|证据|记录|省、市、区|省市区|客户状态只有静态资料|过程沉淀|联系人数量|商机阶段|预计成交时间)/;
 const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1' as const;
 const RECORD_RESULT_PAGE_ENDPOINT = '/api/agent/record-search-page' as const;
 const META_QUESTION_OPTIONS_ENDPOINT = '/api/agent/meta-question-options' as const;
@@ -390,7 +404,20 @@ const CRM_TOOL_ARBITRATION_RULES: ToolArbitrationRule[] = [
               reason: '用户明确要求外部研究，直接选择公司研究工具。',
               confidence: 0.86,
             }
-          : null;
+            : null;
+      }
+
+      const visitPrepInput = resolveYunzhijiaVisitPrepInput(query, target.name);
+      if (visitPrepInput.companyName) {
+        return {
+          mode: 'direct',
+          intentCode: 'external_research',
+          subjectType: 'company',
+          subjectName: visitPrepInput.companyName,
+          directToolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+          reason: '用户明确要求准备客户拜访材料，选择客户拜访准备助手。',
+          confidence: 0.88,
+        };
       }
 
       const recordLookupName = target.kind === 'record'
@@ -482,6 +509,7 @@ export function createCrmAgentRuntimeParts(options: CrmAgentPackOptions): {
     registerRecordTools(registry, objectKey, options);
   }
   registerCompanyResearchTool(registry, options);
+  registerYunzhijiaVisitPrepTool(registry, options);
   registerArtifactSearchTool(registry, options);
   registerRecordingMaterialTool(registry);
   registerMetaTools(registry, options);
@@ -731,9 +759,17 @@ function normalizeDataSourceScope(value: unknown): DataSourceScope {
     : 'auto';
 }
 
-function inferContextSummaryDataSourceScope(query: string, currentScope: DataSourceScope): DataSourceScope {
+function inferContextSummaryDataSourceScope(
+  query: string,
+  currentScope: DataSourceScope,
+  intentFrame?: GenericIntentFrame | null,
+): DataSourceScope {
   if (currentScope !== 'auto') {
     return currentScope;
+  }
+  const semanticIntent = analyzeContextSummarySemanticIntent(query, intentFrame);
+  if (semanticIntent.requiresExternalInfo) {
+    return 'combined';
   }
   return /(公司研究|录音|拜访|需求|待办|问题陈述|客户问题|价值|风险|阻塞|简报|赢单|开场|客户诉求)/.test(query)
     ? 'combined'
@@ -763,7 +799,7 @@ function shouldRouteToExternalInfo(input: AgentPlannerInput, scopeResolution: Da
   if (resolveExplicitCustomerRecordInfoName(query, input.intentFrame.target)) {
     return false;
   }
-  if (isDirectRecordLookupQuery(query) && inferExplicitRecordObject(query)) {
+  if (isDirectRecordLookupQuery(query) && (inferExplicitRecordObject(query) || resolveCustomerRecordLookupName(query))) {
     return false;
   }
   if (input.intentFrame.target.kind === 'artifact' || isArtifactFollowupQuestion(input)) {
@@ -776,7 +812,20 @@ function shouldRouteToExternalInfo(input: AgentPlannerInput, scopeResolution: Da
 
 function shouldRouteToContextSummary(input: AgentPlannerInput, scopeResolution: DataSourceScopeResolution): boolean {
   const query = scopeResolution.normalizedQuery || input.request.query;
+  const semanticIntent = analyzeContextSummarySemanticIntent(query, input.intentFrame);
   if (isWriteLikeRecordMutationQuery(query, input.intentFrame.actionType)) {
+    return false;
+  }
+
+  if (
+    input.intentFrame.target.kind === 'external_subject'
+    && input.intentFrame.target.objectType === 'company'
+    && !semanticIntent.shouldRoute
+  ) {
+    return false;
+  }
+
+  if (isArtifactFollowupQuestion(input) && !semanticIntent.isComplex) {
     return false;
   }
 
@@ -788,6 +837,18 @@ function shouldRouteToContextSummary(input: AgentPlannerInput, scopeResolution: 
     if (isDirectRecordLookupQuery(query) && !isCustomerRecordSummaryQuery(query)) {
       return false;
     }
+    return true;
+  }
+
+  if (
+    isDirectRecordLookupQuery(query)
+    && (inferExplicitRecordObject(query) || resolveCustomerRecordLookupName(query))
+    && !isRecordLookupContextSummaryOverride(query)
+  ) {
+    return false;
+  }
+
+  if (semanticIntent.shouldRoute) {
     return true;
   }
 
@@ -944,6 +1005,7 @@ function selectTool(
   const query = input.request.query.trim();
   const dataSourceScope = resolveDataSourceScope(query);
   const scopedQuery = dataSourceScope.normalizedQuery || query;
+  const contextSummaryIntent = analyzeContextSummarySemanticIntent(scopedQuery, input.intentFrame);
   const target = input.intentFrame.target;
   const recordOpenAction = readRecordOpenClientAction(input.request.clientAction);
   const recordPreviewCreateAction = readRecordPreviewCreateClientAction(input.request.clientAction);
@@ -994,23 +1056,18 @@ function selectTool(
     });
   }
 
-  const customerLookupName = resolveCustomerRecordLookupName(scopedQuery);
-  if (isComplexContextSummaryQuery(scopedQuery) && !hasExplicitRecordMutationVerb(scopedQuery, input.intentFrame.legacyIntentFrame.actionType)) {
-    const summaryType = inferContextSummaryType(scopedQuery);
-    const summaryDataSourceScope = inferContextSummaryDataSourceScope(scopedQuery, dataSourceScope.scope);
+  const visitPrepInput = resolveYunzhijiaVisitPrepInput(scopedQuery, target.name || input.focusedName);
+  if (visitPrepInput.matched) {
     return wrapSelectedTool({
-      toolCode: CONTEXT_SUMMARY_TOOL,
-      reason: summaryDataSourceScope === 'combined'
-        ? '用户要求融合外部信息和系统内记录，选择通用上下文摘要工具。'
-        : '用户要求消费系统内记录，选择通用上下文摘要工具。',
-      input: {
-        query: scopedQuery,
-        dataSourceScope: summaryDataSourceScope,
-        summaryType,
-      },
-      confidence: dataSourceScope.explicit ? 0.9 : 0.84,
+      toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+      reason: '用户通过 /拜访准备 或同义表达显性调用客户拜访准备助手。',
+      input: { ...visitPrepInput },
+      confidence: 0.9,
     });
   }
+
+  const customerLookupName = resolveCustomerRecordLookupName(scopedQuery);
+  const directRecordLookupObject = isDirectRecordLookupQuery(scopedQuery) ? inferExplicitRecordObject(scopedQuery) : null;
 
   if (dataSourceScope.scope === 'auto' && customerLookupName && isSimpleCustomerRecordLookupQuery(scopedQuery)) {
     const objectKey: ShadowObjectKey = 'customer';
@@ -1031,6 +1088,28 @@ function selectTool(
         resolvedContext: input.resolvedContext ?? null,
       }),
       confidence: 0.8,
+    });
+  }
+
+  if (
+    contextSummaryIntent.isComplex
+    && (!directRecordLookupObject || isRecordLookupContextSummaryOverride(scopedQuery))
+    && (!(isDirectRecordLookupQuery(scopedQuery) && customerLookupName) || isRecordLookupContextSummaryOverride(scopedQuery))
+    && !hasExplicitRecordMutationVerb(scopedQuery, input.intentFrame.legacyIntentFrame.actionType)
+  ) {
+    const summaryType = contextSummaryIntent.summaryType;
+    const summaryDataSourceScope = inferContextSummaryDataSourceScope(scopedQuery, dataSourceScope.scope, input.intentFrame);
+    return wrapSelectedTool({
+      toolCode: CONTEXT_SUMMARY_TOOL,
+      reason: summaryDataSourceScope === 'combined'
+        ? `用户语义意图需要融合外部资料和系统内记录，选择通用上下文摘要工具：${contextSummaryIntent.reasons.join('、')}。`
+        : `用户语义意图需要消费系统内记录，选择通用上下文摘要工具：${contextSummaryIntent.reasons.join('、')}。`,
+      input: {
+        query: scopedQuery,
+        dataSourceScope: summaryDataSourceScope,
+        summaryType,
+      },
+      confidence: Math.max(dataSourceScope.explicit ? 0.9 : 0.84, contextSummaryIntent.confidence),
     });
   }
 
@@ -1057,19 +1136,19 @@ function selectTool(
   }
 
   if (shouldRouteToContextSummary(input, dataSourceScope)) {
-    const summaryType = inferContextSummaryType(scopedQuery);
-    const summaryDataSourceScope = inferContextSummaryDataSourceScope(scopedQuery, dataSourceScope.scope);
+    const summaryType = contextSummaryIntent.summaryType;
+    const summaryDataSourceScope = inferContextSummaryDataSourceScope(scopedQuery, dataSourceScope.scope, input.intentFrame);
     return wrapSelectedTool({
       toolCode: CONTEXT_SUMMARY_TOOL,
       reason: summaryDataSourceScope === 'combined'
-        ? '用户要求融合外部信息和系统内记录，选择通用上下文摘要工具。'
-        : '用户要求消费系统内记录，选择通用上下文摘要工具。',
+        ? `用户语义意图需要融合外部资料和系统内记录，选择通用上下文摘要工具：${contextSummaryIntent.reasons.join('、') || '上下文摘要'}。`
+        : `用户语义意图需要消费系统内记录，选择通用上下文摘要工具：${contextSummaryIntent.reasons.join('、') || '上下文摘要'}。`,
       input: {
         query: scopedQuery,
         dataSourceScope: summaryDataSourceScope,
         summaryType,
       },
-      confidence: dataSourceScope.explicit ? 0.88 : 0.82,
+      confidence: Math.max(dataSourceScope.explicit ? 0.88 : 0.82, contextSummaryIntent.confidence),
     });
   }
 
@@ -1145,7 +1224,8 @@ function selectTool(
     && hasContextSummarySubject(input)
     && !isWriteLikeRecordMutationQuery(query, input.intentFrame.actionType)
   ) {
-    const summaryType = inferContextSummaryType(query);
+    const summaryIntent = analyzeContextSummarySemanticIntent(query, input.intentFrame);
+    const summaryType = summaryIntent.summaryType;
     return wrapSelectedTool({
       toolCode: CONTEXT_SUMMARY_TOOL,
       reason: summaryType === 'journey'
@@ -1445,6 +1525,9 @@ function buildCrmArbitrationToolInput(toolCode: string, subjectName: string, que
       companyName,
     };
   }
+  if (toolCode === YUNZHIJIA_VISIT_PREP_TOOL) {
+    return { ...resolveYunzhijiaVisitPrepInput(query, companyName) };
+  }
   return {
     query,
     subjectName: companyName,
@@ -1478,6 +1561,126 @@ function resolveExplicitCustomerRecordInfoName(
     return '';
   }
   return cleanupCompanyName(target.name || extractCompanyName(query));
+}
+
+interface YunzhijiaVisitPrepResolvedInput {
+  matched: boolean;
+  customerName: string;
+  customerFormInstId?: string;
+  companyName: string;
+  companyResearchArtifactId?: string;
+  customerNeed: string;
+  visitAudience?: string;
+}
+
+interface YunzhijiaVisitPrepCustomerContext {
+  customerFormInstId: string;
+  customerName: string;
+  companyName: string;
+  record?: ShadowLiveRecord;
+}
+
+function resolveYunzhijiaVisitPrepInput(query: string, fallbackCompanyName?: string | null): YunzhijiaVisitPrepResolvedInput {
+  const normalized = query.trim();
+  if (!isYunzhijiaVisitPrepQuery(normalized)) {
+    return {
+      matched: false,
+      customerName: '',
+      companyName: '',
+      customerNeed: '',
+    };
+  }
+
+  const withoutCommand = stripYunzhijiaVisitPrepCommand(normalized);
+  const companyName = extractYunzhijiaVisitPrepCompanyName(withoutCommand, fallbackCompanyName);
+  return {
+    matched: true,
+    customerName: companyName,
+    companyName,
+    customerNeed: extractYunzhijiaVisitPrepCustomerNeed(withoutCommand, companyName),
+    visitAudience: extractYunzhijiaVisitPrepAudience(withoutCommand),
+  };
+}
+
+function isYunzhijiaVisitPrepQuery(query: string): boolean {
+  if (/(?:查询|查一下|查看|打开|新增|新建|创建|录入|补录|写入|更新|修改).{0,12}(?:拜访记录|跟进记录)/.test(query)) {
+    return false;
+  }
+  return /\/拜访准备|客户拜访准备助手|客户拜访准备|拜访准备|客户拜访|讲解提纲|客户演示准备|拜访计划/.test(query);
+}
+
+function stripYunzhijiaVisitPrepCommand(query: string): string {
+  return query
+    .replace(/^\/(?:拜访准备|客户拜访准备|客户演示准备|讲解提纲|拜访计划)\s*/i, '')
+    .replace(/^(?:请|帮我|麻烦|基于|根据|用)?\s*(?:为|给)?\s*/, '')
+    .replace(/^(?:客户拜访准备助手|客户拜访准备|拜访准备|客户拜访|客户演示准备|讲解提纲|拜访计划)\s*/, '')
+    .replace(/^(?:为|给)\s*/, '')
+    .trim();
+}
+
+function extractYunzhijiaVisitPrepCompanyName(value: string, fallbackCompanyName?: string | null): string {
+  const fallback = cleanupCompanyName(fallbackCompanyName ?? '');
+  const normalized = value.trim();
+  if (!normalized) {
+    return fallback;
+  }
+
+  const companySuffixMatch = normalized.match(/([^\s，,。；;：:\n]{2,80}?(?:股份有限公司|有限责任公司|有限公司|集团|公司|银行|医院|学校|大学|研究院|事务所|协会|中心|工厂|厂))/);
+  if (companySuffixMatch?.[1]) {
+    return cleanupCompanyName(companySuffixMatch[1]);
+  }
+
+  const beforeSeparator = normalized.split(/[，,。；;：:\n]/)[0]?.trim() ?? '';
+  const stripped = beforeSeparator
+    .replace(/(?:客户|公司|企业)?(?:关注|需求|诉求|痛点|希望|需要|想要|要解决|拜访对象|面向).*/, '')
+    .replace(/(?:准备|生成|输出|整理|做一份|做个)?(?:拜访材料|讲解提纲|演示准备|拜访计划).*/g, '')
+    .trim();
+  const candidate = cleanupCompanyName(stripped);
+  return isUsableCompanyName(candidate) ? candidate : fallback;
+}
+
+function extractYunzhijiaVisitPrepCustomerNeed(value: string, companyName: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return '';
+  }
+
+  const needPatterns = [
+    /(?:客户)?(?:主要)?(?:关注|需求|诉求|痛点|希望|需要|想要|要解决|关心)[：:是为在于]*([^。；;\n]+)/,
+    /(?:围绕|关于|聚焦|重点讲|重点介绍)[：:是为在于]*([^。；;\n]+)/,
+  ];
+  for (const pattern of needPatterns) {
+    const matched = normalized.match(pattern)?.[1]?.trim();
+    if (matched) {
+      return cleanupYunzhijiaVisitPrepNeed(matched);
+    }
+  }
+
+  const parts = normalized.split(/[，,。；;\n]/).map((item) => item.trim()).filter(Boolean);
+  const afterCompany = parts.find((item) => !item.includes(companyName) && VISIT_NEEDS_DEMAND_KEYWORDS.test(item));
+  if (afterCompany) {
+    return cleanupYunzhijiaVisitPrepNeed(afterCompany);
+  }
+
+  if (parts.length > 1) {
+    return cleanupYunzhijiaVisitPrepNeed(parts.slice(1).join('，'));
+  }
+  return '';
+}
+
+function extractYunzhijiaVisitPrepAudience(value: string): string | undefined {
+  const matched = value.match(/(?:拜访对象|面向|参会人|对象|给)(?:是|为|：|:)?\s*([^，,。；;\n]{2,40})/)?.[1]?.trim();
+  if (!matched) {
+    return undefined;
+  }
+  return matched.replace(/(?:客户)?(?:关注|需求|诉求|痛点|希望|需要).*/, '').trim() || undefined;
+}
+
+function cleanupYunzhijiaVisitPrepNeed(value: string): string {
+  return value
+    .replace(/^(?:客户)?(?:主要)?(?:关注|需求|诉求|痛点|希望|需要|想要|要解决|关心)[：:是为在于]*/, '')
+    .replace(/(?:，|,)?(?:拜访对象|面向|参会人|对象)(?:是|为|：|:).*/, '')
+    .trim();
 }
 
 function isExplicitCompanyResearchQuery(query: string): boolean {
@@ -2268,7 +2471,14 @@ function removeConsumedSearchTexts(query: string, consumedTexts: string[]): stri
 function cleanupRecordNameCandidate(value: string, objectKey: string): string {
   const labels = getRecordObjectLabelPattern(objectKey);
   const scope = getRecordCollectionScopePattern();
-  return cleanupCompanyName(value)
+  const cleaned = cleanupCompanyName(value);
+  if (objectKey === 'customer') {
+    return cleaned
+      .replace(new RegExp(`(?:\\s*的)?\\s*(?:${scope})?\\s*客户$`), '')
+      .replace(new RegExp(`(?:\\s+|的)\\s*(?:${scope})?\\s*公司$`), '')
+      .trim();
+  }
+  return cleaned
     .replace(new RegExp(`(?:\\s*的)?\\s*(?:${scope})?\\s*(?:${labels})$`), '')
     .trim();
 }
@@ -2687,7 +2897,7 @@ function buildWritableFieldEntries(input: {
 
 function isMetadataPromptableWriteField(field: ShadowStandardizedField): boolean {
   const paramKey = field.writeParameterKey?.trim() || field.fieldCode?.trim();
-  if (!paramKey || field.readOnly || field.edit === false) {
+  if (!paramKey || field.readOnly || field.edit === false || field.isSystemField) {
     return false;
   }
   return field.writePolicy === 'promptable';
@@ -2965,12 +3175,17 @@ function trimValueBeforeKnownLabels(
 }
 
 function buildShortLabelVariants(label: string): string[] {
+  const isMobileLabel = label.includes('手机');
+  const isPhoneLabel = label.includes('电话');
+  const isOfficePhoneLabel = label.includes('办公') && isPhoneLabel;
   return [
     label.replace(/姓名$/, ''),
     label.includes('姓名') ? '姓名' : '',
-    label.includes('手机') ? '手机' : '',
-    label.includes('手机') || label.includes('电话') ? '电话' : '',
-    label.includes('手机') || label.includes('电话') ? '手机号' : '',
+    isMobileLabel ? '手机' : '',
+    isMobileLabel ? '手机号' : '',
+    isMobileLabel ? '联系方式' : '',
+    isPhoneLabel && !isOfficePhoneLabel ? '电话' : '',
+    isOfficePhoneLabel ? '办公电话' : '',
     label.includes('预算') ? '预算' : '',
     label.includes('销售阶段') ? '阶段' : '',
     label.includes('预计成交时间') ? '成交时间' : '',
@@ -3527,8 +3742,7 @@ export async function buildMetaQuestionOptionsResponse(input: {
     return {
       options: buildEmployeeOptionHints(
         await input.orgSyncRepository?.findEmployees({
-          eid: input.config.yzj.eid,
-          appId: input.config.yzj.appId,
+          ...resolveAgentIsolationTenant(input.config),
           keyword,
           limit: pageSize,
         }) ?? [],
@@ -3549,6 +3763,12 @@ export async function buildMetaQuestionOptionsResponse(input: {
         pageSize,
         operatorOpenId: input.request.tenantContext.operatorOpenId.trim(),
       }),
+    };
+  }
+
+  if (context.field.widgetType === 'publicOptBoxWidget') {
+    return {
+      options: buildFieldOptionLookupHints(context.field, keyword, pageSize),
     };
   }
 
@@ -3595,6 +3815,43 @@ function buildEmployeeOptionHints(candidates: OrgEmployeeCandidate[]): FieldOpti
     description: candidate.jobTitle ?? undefined,
     source: 'employee' as const,
   }));
+}
+
+function buildFieldOptionLookupHints(
+  field: ShadowStandardizedField,
+  keyword: string,
+  pageSize: number,
+): FieldOptionHint[] {
+  const normalizedKeyword = normalizeFieldOptionLookupText(keyword);
+  if (!normalizedKeyword) {
+    return [];
+  }
+  return field.options
+    .filter((option) => {
+      const searchable = [
+        option.title,
+        option.value,
+        option.key,
+        option.dicId,
+        option.code ?? undefined,
+        ...(option.aliases ?? []),
+      ]
+        .filter((item): item is string => Boolean(item?.trim()))
+        .map(normalizeFieldOptionLookupText);
+      return searchable.some((candidate) => candidate.includes(normalizedKeyword));
+    })
+    .slice(0, pageSize)
+    .map((option) => ({
+      label: option.title || option.value || option.key || option.dicId || '',
+      value: normalizeOptionHintValue(field, option),
+      key: option.key || option.dicId,
+      source: 'field_option' as const,
+    }))
+    .filter((option) => option.label && option.value !== '');
+}
+
+function normalizeFieldOptionLookupText(value: string): string {
+  return value.replace(/\s+/g, '').trim().toLowerCase();
 }
 
 async function buildRecordLookupOptionHints(input: {
@@ -3763,13 +4020,18 @@ function buildRecordResultRecordView(input: {
 }): RecordResultRecordView {
   const record = input.record;
   const title = readLiveRecordDisplayName(record, input.capability) || input.fallbackTitle || `${mapRecordObjectLabel(input.objectKey)}记录`;
-  const primaryFields = buildRecordResultFields(record, getPrimaryRecordFieldTitles(input.objectKey));
-  const relationFields = buildRecordResultFields(record, getRelationRecordFieldTitles(input.objectKey));
+  const primaryFields = buildRecordResultFields(record, getPrimaryRecordFieldTitles(input.objectKey), input.objectKey);
+  const relationFields = buildRecordResultFields(record, getRelationRecordFieldTitles(input.objectKey), input.objectKey);
   const usedLabels = new Set(primaryFields.map((field) => field.label));
   const secondaryFields = [
     ...(record.fields ?? []).map((field) => ({
       label: field.title ?? field.codeId,
-      value: stringifyRecordDisplayCandidate(field.value ?? field.rawValue, record.formInstId),
+      value: stringifyRecordFieldDisplayCandidate(
+        field.value ?? field.rawValue,
+        record.formInstId,
+        field.title ?? field.codeId ?? '',
+        input.objectKey,
+      ),
     })),
     ...readImportantRecordFields(record),
   ]
@@ -3789,10 +4051,14 @@ function buildRecordResultRecordView(input: {
   };
 }
 
-function buildRecordResultFields(record: ShadowLiveRecord, orderedTitles: string[]): RecordResultFieldView[] {
+function buildRecordResultFields(
+  record: ShadowLiveRecord,
+  orderedTitles: string[],
+  objectKey?: ShadowObjectKey,
+): RecordResultFieldView[] {
   const fields: RecordResultFieldView[] = [];
   for (const title of orderedTitles) {
-    const value = readFieldByTitles(record, [title]);
+    const value = readFieldByTitles(record, [title], objectKey);
     if (value) {
       fields.push({ label: title, value });
     }
@@ -3821,7 +4087,7 @@ function buildRecordResultTags(record: ShadowLiveRecord, objectKey: ShadowObject
         ? ['启用状态']
         : ['跟进方式'];
   return candidates
-    .map((title) => readFieldByTitles(record, [title]))
+    .map((title) => readFieldByTitles(record, [title], objectKey))
     .filter(Boolean)
     .slice(0, 4);
 }
@@ -3830,7 +4096,7 @@ function buildRecordResultSubtitle(record: ShadowLiveRecord, objectKey: ShadowOb
   const region = [readFieldByTitles(record, ['省']), readFieldByTitles(record, ['市']), readFieldByTitles(record, ['区'])]
     .filter(Boolean)
     .join(' / ');
-  const relation = readFieldByTitles(record, getRelationRecordFieldTitles(objectKey));
+  const relation = readFieldByTitles(record, getRelationRecordFieldTitles(objectKey), objectKey);
   if (objectKey === 'customer') {
     return region;
   }
@@ -3838,9 +4104,9 @@ function buildRecordResultSubtitle(record: ShadowLiveRecord, objectKey: ShadowOb
     return [relation, region].filter(Boolean).join(' / ');
   }
   if (objectKey === 'opportunity') {
-    return relation || readFieldByTitles(record, ['预计成交时间']);
+    return relation || readFieldByTitles(record, ['预计成交时间'], objectKey);
   }
-  return readFieldByTitles(record, ['跟进时间', '拜访时间']) || relation;
+  return readFieldByTitles(record, ['跟进时间', '拜访时间'], objectKey) || relation;
 }
 
 function getPrimaryRecordFieldTitles(objectKey: ShadowObjectKey): string[] {
@@ -4216,20 +4482,75 @@ function readRecordQueryDisplayFallbackName(query: string | undefined, objectKey
 }
 
 function stringifyRecordDisplayCandidate(value: unknown, formInstId?: string): string {
-  const candidate = sanitizeRecordDisplayText(stringifyPreviewValue(value).trim());
+  const rawCandidate = stringifyPreviewValue(value).trim();
+  if (rawCandidate && isLikelyInternalRecordIdentifier(rawCandidate, formInstId)) {
+    return '';
+  }
+  const candidate = sanitizeRecordDisplayText(rawCandidate);
   return candidate && !isLikelyInternalRecordIdentifier(candidate, formInstId)
     ? candidate
     : '';
+}
+
+function stringifyRecordFieldDisplayCandidate(
+  value: unknown,
+  formInstId: string | undefined,
+  label: string,
+  objectKey?: ShadowObjectKey,
+): string {
+  const candidate = stringifyRecordDisplayCandidate(value, formInstId);
+  if (candidate) {
+    return candidate;
+  }
+  if (!hasMeaningfulValue(value)) {
+    return '';
+  }
+  return getRecordFieldFallbackLabel(label, objectKey);
+}
+
+function getRecordFieldFallbackLabel(label: string, objectKey?: ShadowObjectKey): string {
+  const normalizedLabel = label.replace(/\s+/g, '');
+  if (/部门|组织|dept/i.test(normalizedLabel)) {
+    return '已选择部门';
+  }
+  if (/负责人|销售负责人|所有者|所属人|跟进人|跟进负责人|服务代表|售后服务代表|申请人|创建人|openId|人员/i.test(normalizedLabel)) {
+    return '已绑定人员';
+  }
+  const relationTitles = objectKey ? getRelationRecordFieldTitles(objectKey) : [];
+  const isRelation =
+    relationTitles.some((title) => title.replace(/\s+/g, '') === normalizedLabel) ||
+    /^(?:关联|所属|绑定|选择)/.test(normalizedLabel) ||
+    /(?:客户编号|联系人编号|商机编号)$/.test(normalizedLabel);
+  if (!isRelation) {
+    return '';
+  }
+  if (/客户|公司/.test(normalizedLabel)) {
+    return '已关联客户';
+  }
+  if (/商机|机会/.test(normalizedLabel)) {
+    return '已关联商机';
+  }
+  if (/联系人/.test(normalizedLabel)) {
+    return '已关联联系人';
+  }
+  return '已关联记录';
 }
 
 function sanitizeRecordDisplayText(value: string): string {
   if (!value) {
     return '';
   }
-  return value.replace(
-    /((?:负责人|销售负责人|所有者|所属人|跟进人|跟进负责人|服务代表|售后服务代表|申请人|创建人|openId|open_id)\s*[：:]\s*)[0-9a-f]{16,64}/gi,
-    '$1已绑定人员',
-  );
+  const internalId = '[0-9a-f]{16,64}';
+  const normalized = value
+    .replace(
+      new RegExp(`((?:负责人|销售负责人|所有者|所属人|跟进人|跟进负责人|服务代表|售后服务代表|申请人|创建人|openId|open_id)\\s*[：:]\\s*)${internalId}`, 'gi'),
+      '$1已绑定人员',
+    )
+    .replace(
+      new RegExp(`((?:所属部门|部门|组织|部门ID|deptId|departmentId)\\s*[：:]\\s*)${internalId}`, 'gi'),
+      '$1已选择部门',
+    );
+  return normalized.trim();
 }
 
 function isLikelyInternalRecordIdentifier(value: string, formInstId?: string): boolean {
@@ -4241,6 +4562,7 @@ function isLikelyInternalRecordIdentifier(value: string, formInstId?: string): b
     return true;
   }
   return /^[0-9a-f]{16,64}$/i.test(normalized)
+    || /^[0-9a-f]{16,64}的(?:商机|机会|商机跟进记录|跟进记录|拜访记录|回访记录)$/i.test(normalized)
     || /^(?:customer|contact|opportunity|followup|form|record)[-_][A-Za-z0-9_-]+$/i.test(normalized);
 }
 
@@ -4290,7 +4612,7 @@ function readImportantRecordFields(record: {
       if (!label || isInternalRecordIdentityParam(label) || /^(?:id|_id_|formInstId|form_inst_id)$/i.test(label)) {
         continue;
       }
-      const value = stringifyRecordDisplayCandidate(rawValue, record.formInstId);
+      const value = stringifyRecordFieldDisplayCandidate(rawValue, record.formInstId, label);
       if (!value) {
         continue;
       }
@@ -4309,11 +4631,11 @@ function readImportantValueByTitles(record: {
   formInstId?: string;
   important?: Record<string, unknown>;
   rawRecord?: Record<string, unknown>;
-}, titles: string[]): string {
+}, titles: string[], objectKey?: ShadowObjectKey): string {
   const lookupKeys = titles.flatMap((title) => IMPORTANT_FIELD_ALIASES[title] ?? [title]);
   for (const source of [...readImportantSources(record), record.rawRecord].filter(isRecordLike)) {
     for (const key of lookupKeys) {
-      const value = stringifyRecordDisplayCandidate(source[key], record.formInstId);
+      const value = stringifyRecordFieldDisplayCandidate(source[key], record.formInstId, key, objectKey);
       if (value) {
         return value;
       }
@@ -4385,6 +4707,15 @@ interface RecordAgentControl {
       label?: string;
     }>;
   };
+  updateTargetLookup?: {
+    objectKey?: ShadowObjectKey;
+    targetName?: string;
+    candidates?: Array<{
+      formInstId?: string;
+      name?: string;
+      summary?: string;
+    }>;
+  };
   targetSanitization?: TargetSanitizationTrace;
   choiceRouting?: {
     answerParamKey?: string;
@@ -4418,6 +4749,7 @@ function hasRecordAgentControlPayload(control: RecordAgentControl): boolean {
   return Boolean(
     control.duplicateCheck
     || control.searchExtraction
+    || control.updateTargetLookup
     || control.subjectName
     || control.choiceRouting
     || control.targetSanitization
@@ -5315,7 +5647,7 @@ function buildMetaQuestionCard(input: {
   summary: string;
   userPreview: RecordWritePreviewView;
   partialInput: Record<string, unknown>;
-}) {
+}): MetaQuestionCard {
   const currentValues = Object.fromEntries(
     input.userPreview.summaryRows
       .filter((row) => row.paramKey)
@@ -5346,6 +5678,7 @@ function buildMetaQuestionCard(input: {
   return {
     title: '还需要补充以下信息',
     description: input.summary,
+    layout: 'missing_fields',
     toolCode: input.toolCode,
     submitLabel: '补充并继续预览',
     currentValues,
@@ -5376,6 +5709,9 @@ function inferQuestionType(row: RecordWritePreviewRow): MetaQuestion['type'] {
 function buildFieldOptionHints(paramKey: string, fields?: ShadowStandardizedField[]): FieldOptionHint[] | undefined {
   const field = findFieldByParamKey(paramKey, fields);
   if (!field) {
+    return undefined;
+  }
+  if (field.widgetType === 'publicOptBoxWidget') {
     return undefined;
   }
   if (field.options?.length) {
@@ -5413,6 +5749,9 @@ function buildFieldQuestionLookup(input: {
       : inferRelationTargetObjectKey(field);
     return targetObjectKey ? buildRecordMetaQuestionLookup(targetObjectKey) : undefined;
   }
+  if (field.widgetType === 'publicOptBoxWidget') {
+    return buildFieldOptionMetaQuestionLookup();
+  }
   return undefined;
 }
 
@@ -5433,6 +5772,17 @@ function buildRecordMetaQuestionLookup(targetObjectKey: ShadowObjectKey): MetaQu
     endpoint: META_QUESTION_OPTIONS_ENDPOINT,
     source: 'record',
     targetObjectKey,
+    minKeywordLength: 1,
+    pageSize: DEFAULT_META_QUESTION_OPTION_PAGE_SIZE,
+    allowFreeText: false,
+  };
+}
+
+function buildFieldOptionMetaQuestionLookup(): MetaQuestionLookup {
+  return {
+    kind: 'remote_select',
+    endpoint: META_QUESTION_OPTIONS_ENDPOINT,
+    source: 'field_option',
     minKeywordLength: 1,
     pageSize: DEFAULT_META_QUESTION_OPTION_PAGE_SIZE,
     allowFreeText: false,
@@ -5723,11 +6073,13 @@ function buildRecordPreviewGuardResult(input: {
   mode: 'create' | 'update';
   toolCode: string;
   requestInput: ShadowPreviewUpsertInput;
+  partialInput: Record<string, unknown>;
   preview: ShadowPreviewResponse;
   capability: RecordToolCapability;
   fields?: ShadowStandardizedField[];
   toolCall: AgentToolExecutionResult['toolCalls'][number];
   toolCalls: AgentToolExecutionResult['toolCalls'];
+  context: AgentToolExecuteContext;
 }): AgentToolExecutionResult | null {
   const widgetValue = readWidgetValue(input.preview.requestBody);
   const widgetKeys = Object.keys(widgetValue);
@@ -5747,18 +6099,31 @@ function buildRecordPreviewGuardResult(input: {
   finishToolCall(input.toolCall, 'skipped', reason);
 
   const userPreview = buildRecordPreviewView(input);
+  const objectLabel = mapRecordObjectLabel(input.objectKey);
+  const title = '还没有识别到可写入内容';
+  const summary = input.mode === 'update'
+    ? `请告诉我要修改这个${objectLabel}的哪个字段和值，例如“将行业改为电子”。`
+    : `请补充这个${objectLabel}的关键信息后再试。`;
   return {
     status: 'waiting_input',
     currentStepKey: 'execute-tool',
     content: [
-      '## 写入预览被守卫阻断',
-      `- 工具：\`${input.toolCode}\``,
-      `- 原因：${reason}`,
-      `- 已识别字段：${formatRows(userPreview.summaryRows, '无')}`,
+      `## ${title}`,
+      summary,
     ].join('\n'),
-    headline: '写入预览缺少有效写入内容',
-    references: ['meta.clarify_card', input.toolCode],
+    headline: title,
+    references: ['meta.clarify_card'],
     toolCalls: input.toolCalls,
+    pendingInteraction: buildPendingInteraction({
+      runId: input.context.runId,
+      kind: 'input_required',
+      toolCode: input.toolCode,
+      title,
+      summary,
+      partialInput: input.partialInput,
+      userPreview,
+      context: input.context,
+    }),
     policyDecisions: [
       createPolicyDecision({
         policyCode,
@@ -6098,6 +6463,886 @@ function buildUpstreamErrorDiagnostic(error: unknown): string {
   return items.join(', ');
 }
 
+async function resolveUpdateTargetBeforePreview(input: {
+  options: CrmAgentPackOptions;
+  objectKey: ShadowObjectKey;
+  toolCode: string;
+  query: string;
+  requestInput: ShadowPreviewUpsertInput;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  agentControl: RecordAgentControl;
+  context: AgentToolExecuteContext;
+}): Promise<{
+  requestInput?: ShadowPreviewUpsertInput;
+  targetName?: string;
+  targetRecord?: ShadowLiveRecord;
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+  result?: AgentToolExecutionResult;
+}> {
+  const targetName = extractRecordUpdateLookupName({
+    query: input.query,
+    objectKey: input.objectKey,
+    capability: input.capability,
+    fields: input.fields,
+    fallbackName: input.agentControl.subjectName,
+  });
+  if (!targetName) {
+    const toolCall = createToolCall(input.context.runId, input.toolCode, JSON.stringify(input.requestInput));
+    finishToolCall(toolCall, 'skipped', '缺少可更新的记录名称，等待用户补充');
+    return {
+      toolCalls: [toolCall],
+      result: buildUpdateTargetRequiredResult({
+        runId: input.context.runId,
+        objectKey: input.objectKey,
+        toolCode: input.toolCode,
+        requestInput: input.requestInput,
+        agentControl: input.agentControl,
+        toolCall,
+        context: input.context,
+      }),
+    };
+  }
+
+  const searchToolCode = `record.${input.objectKey}.search`;
+  const searchInput: ShadowPreviewSearchInput = {
+    filters: [
+      {
+        field: input.capability.identityFields?.[0] ?? inferRecordNameParam(input.objectKey),
+        value: targetName,
+        operator: 'like',
+      },
+    ],
+    operatorOpenId: input.context.operatorOpenId ?? undefined,
+    pageNumber: 1,
+    pageSize: DEFAULT_RECORD_SEARCH_PAGE_SIZE,
+  };
+  const searchCall = createToolCall(input.context.runId, searchToolCode, JSON.stringify(searchInput));
+  if (!input.context.operatorOpenId) {
+    finishToolCall(searchCall, 'skipped', '缺少 operatorOpenId，无法定位要更新的记录');
+    return {
+      toolCalls: [searchCall],
+      result: buildUpdateTargetSearchUnavailableResult({
+        runId: input.context.runId,
+        objectKey: input.objectKey,
+        targetName,
+        toolCode: input.toolCode,
+        requestInput: input.requestInput,
+        agentControl: input.agentControl,
+        toolCall: searchCall,
+        context: input.context,
+        reason: '当前登录身份不可用，暂时无法查询要更新的记录。',
+      }),
+    };
+  }
+
+  let search: Awaited<ReturnType<ShadowMetadataService['executeSearch']>>;
+  try {
+    search = await executeDuplicateSearchWithRetry({
+      options: input.options,
+      objectKey: input.objectKey,
+      searchInput,
+    });
+  } catch (error) {
+    const message = getErrorMessage(error);
+    finishToolCall(searchCall, 'failed', `更新前定位失败：${message}`, error);
+    return {
+      toolCalls: [searchCall],
+      result: buildUpdateTargetSearchUnavailableResult({
+        runId: input.context.runId,
+        objectKey: input.objectKey,
+        targetName,
+        toolCode: input.toolCode,
+        requestInput: input.requestInput,
+        agentControl: input.agentControl,
+        toolCall: searchCall,
+        context: input.context,
+        reason: `暂时无法查询“${targetName}”，请稍后重试或先查询客户后再更新。`,
+      }),
+    };
+  }
+
+  const records = Array.isArray(search.records) ? search.records : [];
+  finishToolCall(searchCall, 'succeeded', `updateTargetCandidates=${records.length}`);
+  if (records.length === 1) {
+    const displayName = readLiveRecordDisplayName(records[0]!, input.capability) ?? targetName;
+    return {
+      toolCalls: [searchCall],
+      targetName: displayName,
+      targetRecord: records[0],
+      requestInput: {
+        ...input.requestInput,
+        formInstId: records[0]!.formInstId,
+      },
+    };
+  }
+
+  if (records.length === 0) {
+    return {
+      toolCalls: [searchCall],
+      result: buildUpdateTargetNotFoundResult({
+        runId: input.context.runId,
+        objectKey: input.objectKey,
+        targetName,
+        toolCode: input.toolCode,
+        requestInput: input.requestInput,
+        agentControl: input.agentControl,
+        toolCall: searchCall,
+        context: input.context,
+      }),
+    };
+  }
+
+  return {
+    toolCalls: [searchCall],
+    result: buildUpdateTargetSelectionResult({
+      runId: input.context.runId,
+      objectKey: input.objectKey,
+      targetName,
+      records,
+      toolCode: input.toolCode,
+      requestInput: input.requestInput,
+      capability: input.capability,
+      agentControl: input.agentControl,
+      toolCall: searchCall,
+      context: input.context,
+    }),
+  };
+}
+
+function hasWritableUpdateParams(
+  requestInput: ShadowPreviewUpsertInput,
+  capability: RecordToolCapability,
+  agentControl: RecordAgentControl,
+): boolean {
+  const identityFields = new Set(capability.identityFields ?? []);
+  return Object.entries(readRequestParams(requestInput)).some(([paramKey, value]) => {
+    if (!hasMeaningfulValue(value)) {
+      return false;
+    }
+    if (isInternalRecordIdentityParam(paramKey)) {
+      return false;
+    }
+    if (identityFields.has(paramKey) && isEchoOfUpdateTargetName(value, agentControl.subjectName)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function isEchoOfUpdateTargetName(value: unknown, targetName?: string): boolean {
+  if (!targetName?.trim()) {
+    return false;
+  }
+  const displayValue = stringifyPreviewValue(value);
+  if (!displayValue.trim()) {
+    return false;
+  }
+  return normalizeDisplayComparable(displayValue) === normalizeDisplayComparable(targetName);
+}
+
+function stripUpdateTargetIdentityEchoParams(
+  requestInput: ShadowPreviewUpsertInput,
+  capability: RecordToolCapability,
+  agentControl: RecordAgentControl,
+): ShadowPreviewUpsertInput {
+  const identityFields = new Set(capability.identityFields ?? []);
+  const params = readRequestParams(requestInput);
+  let changed = false;
+  const nextParams = { ...params };
+  for (const paramKey of Object.keys(nextParams)) {
+    if (identityFields.has(paramKey) && isEchoOfUpdateTargetName(nextParams[paramKey], agentControl.subjectName)) {
+      delete nextParams[paramKey];
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return requestInput;
+  }
+  return {
+    ...requestInput,
+    params: nextParams,
+  };
+}
+
+async function buildUpdateFieldsRequiredResult(input: {
+  runId: string;
+  objectKey: ShadowObjectKey;
+  toolCode: string;
+  requestInput: ShadowPreviewUpsertInput;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  shadowMetadataService: ShadowMetadataService;
+  agentControl: RecordAgentControl;
+  fallbackCurrentRecord?: ShadowLiveRecord;
+  toolCall: AgentToolExecutionResult['toolCalls'][number];
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+  context: AgentToolExecuteContext;
+}): Promise<AgentToolExecutionResult> {
+  const objectLabel = mapRecordObjectLabel(input.objectKey);
+  const targetName = input.agentControl.subjectName?.trim();
+  const title = `还需要说明要修改什么`;
+  const summary = targetName
+    ? `已找到${objectLabel}“${targetName}”。请继续告诉我要修改的字段和值，例如“将行业改为电子”。`
+    : `已确定要更新的${objectLabel}。请继续告诉我要修改的字段和值，例如“将行业改为电子”。`;
+  const currentRecord = await readUpdateFieldPickerCurrentRecord({
+    objectKey: input.objectKey,
+    requestInput: input.requestInput,
+    shadowMetadataService: input.shadowMetadataService,
+    fallbackRecord: input.fallbackCurrentRecord,
+  });
+  finishToolCall(input.toolCall, 'skipped', '缺少可写入的更新字段，等待用户补充');
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      `## ${title}`,
+      summary,
+    ].join('\n'),
+    headline: title,
+    references: ['meta.clarify_card'],
+    toolCalls: input.toolCalls,
+    pendingInteraction: buildPendingInteraction({
+      runId: input.runId,
+      kind: 'input_required',
+      toolCode: input.toolCode,
+      title,
+      summary,
+      partialInput: attachRecordAgentControl(input.requestInput as unknown as Record<string, unknown>, input.agentControl),
+      questionCard: buildUpdateFieldPickerQuestionCard({
+        objectKey: input.objectKey,
+        toolCode: input.toolCode,
+        title,
+        summary,
+        targetName,
+        capability: input.capability,
+        fields: input.fields,
+        shadowMetadataService: input.shadowMetadataService,
+        currentRecord,
+      }),
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'record.update_fields_required',
+        action: 'clarify',
+        toolCode: input.toolCode,
+        reason: summary,
+      }),
+    ],
+  };
+}
+
+function buildUpdateFieldPickerQuestionCard(input: {
+  objectKey: ShadowObjectKey;
+  toolCode: string;
+  title: string;
+  summary: string;
+  targetName?: string;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  shadowMetadataService: ShadowMetadataService;
+  currentRecord?: ShadowLiveRecord;
+}): MetaQuestionCard {
+  const objectLabel = mapRecordObjectLabel(input.objectKey);
+  const rows = buildUpdateFieldPickerRows({
+    objectKey: input.objectKey,
+    capability: input.capability,
+    fields: input.fields,
+    shadowMetadataService: input.shadowMetadataService,
+  });
+  const currentByParamKey = buildUpdateFieldPickerCurrentValues({
+    objectKey: input.objectKey,
+    rows,
+    fields: input.fields,
+    record: input.currentRecord,
+  });
+  const questions: MetaQuestion[] = rows.map((row) => {
+    const current = row.paramKey ? currentByParamKey[row.paramKey] : undefined;
+    return {
+      questionId: `${input.toolCode}:update_field:${row.paramKey}`,
+      paramKey: row.paramKey!,
+      label: row.label,
+      type: inferQuestionType(row),
+      required: false,
+      placeholder: row.lookup ? `输入关键词搜索并选择${row.label}` : row.options?.length ? '请选择' : `请输入${row.label}`,
+      currentValue: current?.currentValue,
+      options: row.options,
+      lookup: row.lookup,
+      reason: row.reason,
+    };
+  });
+  const currentValues = Object.fromEntries(
+    Object.entries(currentByParamKey)
+      .filter(([, current]) => current.displayValue)
+      .map(([paramKey, current]) => [
+        paramKey,
+        {
+          label: current.label,
+          value: current.displayValue,
+        },
+      ]),
+  );
+
+  return {
+    title: '选择要修改的信息',
+    description: input.summary,
+    layout: 'update_field_picker',
+    targetSummary: input.targetName
+      ? { label: `已找到${objectLabel}`, value: input.targetName }
+      : { label: `已确定${objectLabel}`, value: `当前${objectLabel}` },
+    toolCode: input.toolCode,
+    submitLabel: '生成更新预览',
+    currentValues,
+    questions,
+  };
+}
+
+async function readUpdateFieldPickerCurrentRecord(input: {
+  objectKey: ShadowObjectKey;
+  requestInput: ShadowPreviewUpsertInput;
+  shadowMetadataService: ShadowMetadataService;
+  fallbackRecord?: ShadowLiveRecord;
+}): Promise<ShadowLiveRecord | undefined> {
+  const formInstId = readRecordFormInstId(input.requestInput);
+  if (!formInstId) {
+    return input.fallbackRecord;
+  }
+  try {
+    const detail = await input.shadowMetadataService.executeGet(input.objectKey, {
+      formInstId,
+      operatorOpenId: input.requestInput.operatorOpenId,
+    });
+    return detail.record ?? input.fallbackRecord;
+  } catch {
+    return input.fallbackRecord;
+  }
+}
+
+function buildUpdateFieldPickerCurrentValues(input: {
+  objectKey: ShadowObjectKey;
+  rows: RecordWritePreviewRow[];
+  fields: ShadowStandardizedField[];
+  record?: ShadowLiveRecord;
+}): Record<string, { label: string; displayValue?: string; currentValue?: MetaQuestion['currentValue'] }> {
+  if (!input.record) {
+    return {};
+  }
+  const values: Record<string, { label: string; displayValue?: string; currentValue?: MetaQuestion['currentValue'] }> = {};
+  for (const row of input.rows) {
+    if (!row.paramKey) {
+      continue;
+    }
+    const field = findFieldByParamKey(row.paramKey, input.fields);
+    if (!field) {
+      continue;
+    }
+    const rawValue = readLiveRecordFieldCurrentValue(input.record, field, row.paramKey);
+    if (!hasMeaningfulValue(rawValue)) {
+      continue;
+    }
+    const displayValue = stringifyCurrentFieldValueForDisplay({
+      objectKey: input.objectKey,
+      record: input.record,
+      field,
+      value: rawValue,
+    });
+    const currentValue = normalizeCurrentFieldValueForQuestion(field, rawValue, displayValue);
+    if (!displayValue && currentValue === undefined) {
+      continue;
+    }
+    values[row.paramKey] = {
+      label: row.label,
+      displayValue,
+      currentValue,
+    };
+  }
+  return values;
+}
+
+function readLiveRecordFieldCurrentValue(
+  record: ShadowLiveRecord,
+  field: ShadowStandardizedField,
+  paramKey: string,
+): unknown {
+  const fields = Array.isArray(record.fields) ? record.fields : [];
+  const fieldMap = isRecordLike(record.fieldMap) ? record.fieldMap : {};
+  const mapped = fieldMap[field.fieldCode];
+  if (mapped && typeof mapped === 'object') {
+    const liveField = mapped as ShadowLiveRecord['fields'][number];
+    const value = liveField.value ?? liveField.rawValue;
+    if (hasMeaningfulValue(value)) {
+      return value;
+    }
+  }
+
+  const matched = fields.find((item) => (
+    item.codeId === field.fieldCode
+    || item.title === field.label
+  ));
+  if (matched) {
+    const value = matched.value ?? matched.rawValue;
+    if (hasMeaningfulValue(value)) {
+      return value;
+    }
+  }
+
+  const sources = [
+    record.important,
+    isRecordLike(record.rawRecord?.important) ? record.rawRecord.important : undefined,
+    record.rawRecord,
+  ].filter(isRecordLike);
+  const keys = [
+    field.fieldCode,
+    field.label,
+    field.writeParameterKey,
+    field.searchParameterKey,
+    paramKey,
+  ].filter((item): item is string => Boolean(item?.trim()));
+  for (const source of sources) {
+    for (const key of keys) {
+      const value = source[key];
+      if (hasMeaningfulValue(value)) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function stringifyCurrentFieldValueForDisplay(input: {
+  objectKey: ShadowObjectKey;
+  record: ShadowLiveRecord;
+  field: ShadowStandardizedField;
+  value: unknown;
+}): string {
+  const fieldDisplay = stringifyFieldValueForDisplay(input.field, input.value);
+  const safeFieldDisplay = stringifyRecordFieldDisplayCandidate(
+    fieldDisplay,
+    input.record.formInstId,
+    input.field.label,
+    input.objectKey,
+  );
+  if (safeFieldDisplay) {
+    return safeFieldDisplay;
+  }
+  return stringifyRecordFieldDisplayCandidate(
+    input.value,
+    input.record.formInstId,
+    input.field.label,
+    input.objectKey,
+  );
+}
+
+function normalizeCurrentFieldValueForQuestion(
+  field: ShadowStandardizedField,
+  rawValue: unknown,
+  displayValue: string,
+): MetaQuestion['currentValue'] | undefined {
+  if (!hasMeaningfulValue(rawValue) && !displayValue) {
+    return undefined;
+  }
+  const option = findDisplayOption(field, rawValue) ?? findDisplayOption(field, displayValue);
+  if (option) {
+    return normalizeOptionHintValue(field, option);
+  }
+  if (field.widgetType === 'switchWidget') {
+    const normalized = normalizeSwitchDisplayInput(rawValue);
+    if (normalized === true) {
+      return '1';
+    }
+    if (normalized === false) {
+      return '0';
+    }
+  }
+  if (field.widgetType === 'personSelectWidget' || field.widgetType === 'basicDataWidget') {
+    return displayValue || undefined;
+  }
+  if (typeof rawValue === 'number' || typeof rawValue === 'boolean') {
+    return rawValue;
+  }
+  return displayValue || stringifyPreviewValue(rawValue) || undefined;
+}
+
+function buildUpdateFieldPickerRows(input: {
+  objectKey: ShadowObjectKey;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  shadowMetadataService: ShadowMetadataService;
+}): RecordWritePreviewRow[] {
+  const identityFields = new Set(input.capability.identityFields ?? []);
+  const derivedFields = new Set(input.capability.derivedFieldRefs ?? []);
+  const displayOrder = orderParamKeys(
+    buildWritableFieldEntries(input).map((entry) => entry.paramKey),
+    input.capability,
+  );
+  const displayIndexByParamKey = new Map(displayOrder.map((paramKey, index) => [paramKey, index]));
+  const preferredEntries = buildWritableFieldEntries(input)
+    .filter((entry) => isUpdateFieldPickerWritableEntry({
+      objectKey: input.objectKey,
+      paramKey: entry.paramKey,
+      field: entry.field ?? findFieldByParamKey(entry.paramKey, input.fields),
+      identityFields,
+      derivedFields,
+    }))
+    .sort((left, right) => (
+      getUpdateFieldPickerPriority(input.capability, left.paramKey, left.field?.label) - getUpdateFieldPickerPriority(input.capability, right.paramKey, right.field?.label)
+      || (displayIndexByParamKey.get(left.paramKey) ?? Number.MAX_SAFE_INTEGER) - (displayIndexByParamKey.get(right.paramKey) ?? Number.MAX_SAFE_INTEGER)
+      || left.paramKey.localeCompare(right.paramKey)
+    ));
+
+  return preferredEntries.map(({ paramKey, field }) => ({
+    label: field?.label || getFieldLabel(input.capability, paramKey),
+    paramKey,
+    source: 'system' as const,
+    options: buildFieldOptionHints(paramKey, input.fields),
+    lookup: buildFieldQuestionLookup({
+      paramKey,
+      fields: input.fields,
+      shadowMetadataService: input.shadowMetadataService,
+    }),
+    reason: '可以选择这个字段并填写新值。',
+  }));
+}
+
+function isUpdateFieldPickerWritableEntry(input: {
+  objectKey: ShadowObjectKey;
+  paramKey: string;
+  field?: ShadowStandardizedField;
+  identityFields: Set<string>;
+  derivedFields: Set<string>;
+}): boolean {
+  if (input.derivedFields.has(input.paramKey) || isInternalRecordIdentityParam(input.paramKey)) {
+    return false;
+  }
+  if (input.objectKey !== 'followup' && isIdentityWriteField(input.paramKey, input.field, input.identityFields)) {
+    return false;
+  }
+  if (!input.field) {
+    return true;
+  }
+  return !input.field.readOnly
+    && input.field.edit !== false
+    && !input.field.isSystemField
+    && (input.field.writePolicy === undefined || input.field.writePolicy === 'promptable');
+}
+
+function isIdentityWriteField(
+  paramKey: string,
+  field: ShadowStandardizedField | undefined,
+  identityFields: Set<string>,
+): boolean {
+  if (identityFields.has(paramKey)) {
+    return true;
+  }
+  if (!field) {
+    return false;
+  }
+  return [
+    field.fieldCode,
+    field.writeParameterKey,
+    field.searchParameterKey,
+    field.semanticSlot,
+  ].some((key) => Boolean(key && identityFields.has(key)));
+}
+
+function getUpdateFieldPickerPriority(capability: RecordToolCapability, paramKey: string, labelOverride?: string): number {
+  const label = labelOverride || getFieldLabel(capability, paramKey);
+  const text = `${paramKey} ${label}`.replace(/\s+/g, '');
+  if (/followup_record|跟进记录|拜访记录/.test(text)) {
+    return 5;
+  }
+  if (/status|stage|状态|阶段/.test(text)) {
+    return 10;
+  }
+  if (/method|方式/.test(text)) {
+    return 12;
+  }
+  if (/type|industry|类型|行业/.test(text)) {
+    return 18;
+  }
+  if (/budget|date|time|预算|金额|日期|时间/.test(text)) {
+    return 20;
+  }
+  if (/phone|mobile|电话|手机/.test(text)) {
+    return 24;
+  }
+  if (/owner|负责人|代表|人员/.test(text)) {
+    return 30;
+  }
+  if (/linked_|关联|客户|联系人|商机/.test(text)) {
+    return 35;
+  }
+  if (/province|city|district|省|市|区/.test(text)) {
+    return 45;
+  }
+  return 80;
+}
+
+function buildUpdateTargetRequiredResult(input: {
+  runId: string;
+  objectKey: ShadowObjectKey;
+  toolCode: string;
+  requestInput: ShadowPreviewUpsertInput;
+  agentControl: RecordAgentControl;
+  toolCall: AgentToolExecutionResult['toolCalls'][number];
+  context: AgentToolExecuteContext;
+}): AgentToolExecutionResult {
+  const objectLabel = mapRecordObjectLabel(input.objectKey);
+  const title = `需要先确定要更新的${objectLabel}`;
+  const summary = `请告诉我要更新哪一个${objectLabel}，例如“更新${objectLabel} XXX，将行业改为电子”。`;
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      `## ${title}`,
+      summary,
+    ].join('\n'),
+    headline: title,
+    references: ['meta.clarify_card'],
+    toolCalls: [input.toolCall],
+    pendingInteraction: buildPendingInteraction({
+      runId: input.runId,
+      kind: 'input_required',
+      toolCode: input.toolCode,
+      title,
+      summary,
+      partialInput: attachRecordAgentControl(input.requestInput as unknown as Record<string, unknown>, input.agentControl),
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'record.update_target_required',
+        action: 'clarify',
+        toolCode: input.toolCode,
+        reason: summary,
+      }),
+    ],
+  };
+}
+
+function buildUpdateTargetSearchUnavailableResult(input: {
+  runId: string;
+  objectKey: ShadowObjectKey;
+  targetName: string;
+  toolCode: string;
+  requestInput: ShadowPreviewUpsertInput;
+  agentControl: RecordAgentControl;
+  toolCall: AgentToolExecutionResult['toolCalls'][number];
+  context: AgentToolExecuteContext;
+  reason: string;
+}): AgentToolExecutionResult {
+  const objectLabel = mapRecordObjectLabel(input.objectKey);
+  const title = `暂时无法定位${objectLabel}`;
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      `## ${title}`,
+      input.reason,
+    ].join('\n'),
+    headline: title,
+    references: ['meta.clarify_card'],
+    toolCalls: [input.toolCall],
+    pendingInteraction: buildPendingInteraction({
+      runId: input.runId,
+      kind: 'input_required',
+      toolCode: input.toolCode,
+      title,
+      summary: input.reason,
+      partialInput: attachRecordAgentControl(input.requestInput as unknown as Record<string, unknown>, {
+        ...input.agentControl,
+        subjectName: input.targetName,
+      }),
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'record.update_target_lookup_unavailable',
+        action: 'clarify',
+        toolCode: input.toolCode,
+        reason: input.reason,
+      }),
+    ],
+  };
+}
+
+function buildUpdateTargetNotFoundResult(input: {
+  runId: string;
+  objectKey: ShadowObjectKey;
+  targetName: string;
+  toolCode: string;
+  requestInput: ShadowPreviewUpsertInput;
+  agentControl: RecordAgentControl;
+  toolCall: AgentToolExecutionResult['toolCalls'][number];
+  context: AgentToolExecuteContext;
+}): AgentToolExecutionResult {
+  const objectLabel = mapRecordObjectLabel(input.objectKey);
+  const title = `没有找到这个${objectLabel}`;
+  const summary = `没有找到“${input.targetName}”。请换一个更完整的名称重试，或先查询${objectLabel}确认后再更新。`;
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      `## ${title}`,
+      summary,
+    ].join('\n'),
+    headline: title,
+    references: ['meta.clarify_card'],
+    toolCalls: [input.toolCall],
+    pendingInteraction: buildPendingInteraction({
+      runId: input.runId,
+      kind: 'input_required',
+      toolCode: input.toolCode,
+      title,
+      summary,
+      partialInput: attachRecordAgentControl(input.requestInput as unknown as Record<string, unknown>, {
+        ...input.agentControl,
+        subjectName: input.targetName,
+      }),
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'record.update_target_not_found',
+        action: 'clarify',
+        toolCode: input.toolCode,
+        reason: summary,
+      }),
+    ],
+  };
+}
+
+function buildUpdateTargetSelectionResult(input: {
+  runId: string;
+  objectKey: ShadowObjectKey;
+  targetName: string;
+  records: ShadowLiveRecord[];
+  toolCode: string;
+  requestInput: ShadowPreviewUpsertInput;
+  capability: RecordToolCapability;
+  agentControl: RecordAgentControl;
+  toolCall: AgentToolExecutionResult['toolCalls'][number];
+  context: AgentToolExecuteContext;
+}): AgentToolExecutionResult {
+  const objectLabel = mapRecordObjectLabel(input.objectKey);
+  const candidates = input.records.slice(0, DEFAULT_RECORD_SEARCH_PAGE_SIZE).map((record) => ({
+    formInstId: record.formInstId,
+    name: readLiveRecordDisplayName(record, input.capability) ?? `${objectLabel}记录`,
+    summary: buildUpdateTargetCandidateSummary(record, input.objectKey),
+  }));
+  const title = `找到多个可能的${objectLabel}`;
+  const summary = `“${input.targetName}”匹配到 ${input.records.length} 条${objectLabel}，请先选择要更新的记录。`;
+  return {
+    status: 'waiting_selection',
+    currentStepKey: 'execute-tool',
+    content: [
+      `## ${title}`,
+      '请回复“选择第 1 条”这类指令，系统会继续生成更新预览。',
+      '',
+      ...candidates.map((candidate, index) => (
+        `${index + 1}. ${candidate.name}${candidate.summary ? `（${candidate.summary}）` : ''}`
+      )),
+    ].join('\n'),
+    headline: title,
+    references: ['meta.candidate_selection'],
+    toolCalls: [input.toolCall],
+    pendingInteraction: buildPendingInteraction({
+      runId: input.runId,
+      kind: 'candidate_selection',
+      toolCode: input.toolCode,
+      title,
+      summary,
+      partialInput: attachRecordAgentControl(input.requestInput as unknown as Record<string, unknown>, {
+        ...input.agentControl,
+        subjectName: input.targetName,
+        updateTargetLookup: {
+          objectKey: input.objectKey,
+          targetName: input.targetName,
+          candidates,
+        },
+      }),
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'record.update_target_ambiguous',
+        action: 'clarify',
+        toolCode: input.toolCode,
+        reason: summary,
+      }),
+    ],
+  };
+}
+
+function buildUpdateTargetCandidateSummary(record: ShadowLiveRecord, objectKey: ShadowObjectKey): string {
+  const fields = buildRecordResultFields(record, getPrimaryRecordFieldTitles(objectKey), objectKey)
+    .filter((field) => field.value)
+    .slice(0, 2);
+  return fields.map((field) => `${field.label}：${field.value}`).join('，');
+}
+
+function extractRecordUpdateLookupName(input: {
+  query: string;
+  objectKey: ShadowObjectKey;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  fallbackName?: string;
+}): string {
+  const explicitId = extractFormInstId(input.query);
+  if (explicitId) {
+    return '';
+  }
+  const labels = getRecordObjectLabelPattern(input.objectKey);
+  const operation = '更新|修改|变更|调整|设置|改';
+  let candidate = input.query
+    .replace(/^\/\S+\s*/, '')
+    .replace(new RegExp(`^(?:帮我|请|麻烦)?\\s*(?:${operation})\\s*(?:一个|一条|一位|一名|这?个|该|当前)?\\s*(?:${labels})?\\s*`), '')
+    .replace(new RegExp(`^(?:帮我|请|麻烦)?\\s*(?:把|将)\\s*(?:${labels})?\\s*`), '')
+    .replace(/^[，,、：:\s]+/g, '')
+    .trim();
+
+  if (candidate === input.query.trim() && input.fallbackName?.trim()) {
+    candidate = input.fallbackName.trim();
+  }
+
+  candidate = trimRecordUpdateNameBeforeFieldIntent({
+    value: candidate,
+    capability: input.capability,
+    fields: input.fields,
+  });
+  const cleaned = cleanupRecordNameCandidate(candidate, input.objectKey);
+  return isMeaningfulRecordNameCandidate(cleaned, input.objectKey) ? cleaned : '';
+}
+
+function trimRecordUpdateNameBeforeFieldIntent(input: {
+  value: string;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+}): string {
+  let value = input.value.trim();
+  if (!value) {
+    return '';
+  }
+  const aliases = buildFieldSemanticCatalog({
+    capability: input.capability,
+    fields: input.fields,
+  })
+    .flatMap((entry) => entry.aliases)
+    .filter((alias) => alias.trim().length >= 2)
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp);
+  if (aliases.length) {
+    const aliasPattern = aliases.join('|');
+    value = value
+      .replace(new RegExp(`\\s*(?:的)?\\s*(?:将|把|并将|并把)?\\s*(?:${aliasPattern})\\s*(?:改成|改为|更新为|调整为|设置为|设为|变更为|变为|到|至|成|为|是|=|：|:).*$`), '')
+      .replace(new RegExp(`\\s*(?:将|把|并将|并把)\\s*(?:${aliasPattern}).*$`), '');
+  }
+  return value
+    .replace(/\s*(?:将|把|并将|并把)\s*[^，。；;\n]{0,30}?(?:改成|改为|更新为|调整为|设置为|设为|变更为|变为|到|至|成|为|是|=|：|:).*$/, '')
+    .trim();
+}
+
 async function executeRecordPreviewTool(
   options: CrmAgentPackOptions,
   objectKey: ShadowObjectKey,
@@ -6116,7 +7361,16 @@ async function executeRecordPreviewTool(
     capability,
     fields,
   });
+  const explicitUpdateTargetName = mode === 'update'
+    ? extractRecordUpdateLookupName({
+        query: input.request.query,
+        objectKey,
+        capability,
+        fields,
+      })
+    : '';
   const contextRecordId = mode === 'update'
+    && !explicitUpdateTargetName
     ? resolveContextRecordFormInstId({
         objectKey,
         contextFrame: context.contextFrame ?? null,
@@ -6144,77 +7398,82 @@ async function executeRecordPreviewTool(
   if (archivedRecordingFollowupResult) {
     return archivedRecordingFollowupResult;
   }
-  if (mode === 'update' && !readRecordFormInstId(initialRequestInput)) {
-    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(initialRequestInput));
-    finishToolCall(toolCall, 'skipped', '缺少可更新的记录上下文，等待用户选择记录');
-    return {
-      status: 'waiting_input',
-      currentStepKey: 'execute-tool',
-      content: [
-        '## 需要先确定要修改的记录',
-        `- 工具：\`${input.selectedTool.toolCode}\``,
-        '- 当前对话里没有可直接绑定的记录。',
-        '- 请先查询要修改的记录，或说明更完整的记录名称，系统会帮你选择候选记录。',
-      ].join('\n'),
-      headline: '需要先确定要修改的记录',
-      references: ['meta.clarify_card', input.selectedTool.toolCode],
-      toolCalls: [toolCall],
-      pendingInteraction: buildPendingInteraction({
-        runId: context.runId,
-        kind: 'input_required',
-        toolCode: input.selectedTool.toolCode,
-        title: '需要先确定要修改的记录',
-        summary: '更新记录前需要先绑定一条已存在记录。',
-        partialInput: initialRequestInput as unknown as Record<string, unknown>,
-        context,
-      }),
-      policyDecisions: [
-        createPolicyDecision({
-          policyCode: 'record.update_identity_required',
-          action: 'clarify',
-          toolCode: input.selectedTool.toolCode,
-          reason: '更新记录需要先绑定一条已存在记录，不能要求普通用户输入内部 formInstId。',
-        }),
-      ],
-    };
+  let requestInput = initialRequestInput;
+  let activeAgentControl = agentControl;
+  let updateTargetRecord: ShadowLiveRecord | undefined;
+  let preflightToolCalls: AgentToolExecutionResult['toolCalls'] = [];
+  if (mode === 'update' && !readRecordFormInstId(requestInput)) {
+    const updateTarget = await resolveUpdateTargetBeforePreview({
+      options,
+      objectKey,
+      toolCode: input.selectedTool.toolCode,
+      query: input.request.query,
+      requestInput,
+      capability,
+      fields,
+      agentControl,
+      context,
+    });
+    preflightToolCalls = updateTarget.toolCalls;
+    if (updateTarget.result) {
+      return updateTarget.result;
+    }
+    if (updateTarget.requestInput) {
+      requestInput = updateTarget.requestInput;
+    }
+    if (updateTarget.targetName) {
+      activeAgentControl = {
+        ...activeAgentControl,
+        subjectName: updateTarget.targetName,
+      };
+    }
+    updateTargetRecord = updateTarget.targetRecord;
   }
 
   const missingReferenceIntent = resolveMissingReferenceFieldIntent({
     query: input.request.query,
-    requestInput: initialRequestInput,
+    requestInput,
     capability,
     fields,
     shadowMetadataService: options.shadowMetadataService,
   });
   if (missingReferenceIntent) {
-    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(initialRequestInput));
-    return buildReferenceResolutionWaitingResult({
+    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(requestInput));
+    const result = buildReferenceResolutionWaitingResult({
       runId: context.runId,
       toolCode: input.selectedTool.toolCode,
-      partialInput: attachRecordAgentControl(initialRequestInput as unknown as Record<string, unknown>, agentControl),
+      partialInput: attachRecordAgentControl(requestInput as unknown as Record<string, unknown>, activeAgentControl),
       toolCall,
       issues: [missingReferenceIntent],
       context,
     });
+    return {
+      ...result,
+      toolCalls: [...preflightToolCalls, ...result.toolCalls],
+    };
   }
 
   const personResolution = await resolvePersonSelectParams({
     options,
     context,
-    requestInput: initialRequestInput,
+    requestInput,
     capability,
     fields,
   });
   if (personResolution.issues.length) {
-    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(initialRequestInput));
-    return buildPersonResolutionWaitingResult({
+    const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(requestInput));
+    const result = buildPersonResolutionWaitingResult({
       runId: context.runId,
       toolCode: input.selectedTool.toolCode,
-      partialInput: attachRecordAgentControl(initialRequestInput as unknown as Record<string, unknown>, agentControl),
+      partialInput: attachRecordAgentControl(requestInput as unknown as Record<string, unknown>, activeAgentControl),
       toolCall,
       issues: personResolution.issues,
       context,
     });
+    return {
+      ...result,
+      toolCalls: [...preflightToolCalls, ...result.toolCalls],
+    };
   }
   const referenceResolution = await resolveReferenceSelectParams({
     options,
@@ -6225,38 +7484,61 @@ async function executeRecordPreviewTool(
   });
   if (referenceResolution.issues.length) {
     const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(personResolution.requestInput));
-    return buildReferenceResolutionWaitingResult({
+    const result = buildReferenceResolutionWaitingResult({
       runId: context.runId,
       toolCode: input.selectedTool.toolCode,
-      partialInput: attachRecordAgentControl(personResolution.requestInput as unknown as Record<string, unknown>, agentControl),
+      partialInput: attachRecordAgentControl(personResolution.requestInput as unknown as Record<string, unknown>, activeAgentControl),
       toolCall,
       issues: referenceResolution.issues,
       context,
     });
+    return {
+      ...result,
+      toolCalls: [...preflightToolCalls, ...result.toolCalls],
+    };
   }
-  const requestInput = referenceResolution.requestInput;
+  requestInput = referenceResolution.requestInput;
+  if (mode === 'update') {
+    requestInput = stripUpdateTargetIdentityEchoParams(requestInput, capability, activeAgentControl);
+  }
   const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, JSON.stringify(requestInput));
+  if (mode === 'update' && !hasWritableUpdateParams(requestInput, capability, activeAgentControl)) {
+    return await buildUpdateFieldsRequiredResult({
+      runId: context.runId,
+      objectKey,
+      toolCode: input.selectedTool.toolCode,
+      requestInput,
+      capability,
+      fields,
+      shadowMetadataService: options.shadowMetadataService,
+      agentControl: activeAgentControl,
+      fallbackCurrentRecord: updateTargetRecord,
+      toolCall,
+      toolCalls: [...preflightToolCalls, toolCall],
+      context,
+    });
+  }
 
   const guardToolCalls = await executeDuplicateCheckIfNeeded({
     options,
     objectKey,
     mode,
     context,
-    agentControl,
-    partialInput: attachRecordAgentControl(requestInput as unknown as Record<string, unknown>, agentControl),
+    agentControl: activeAgentControl,
+    partialInput: attachRecordAgentControl(requestInput as unknown as Record<string, unknown>, activeAgentControl),
   });
   const effectiveSelectedInput = guardToolCalls.partialInput
-    ?? attachRecordAgentControl(requestInput as unknown as Record<string, unknown>, agentControl);
+    ?? attachRecordAgentControl(requestInput as unknown as Record<string, unknown>, activeAgentControl);
   if (guardToolCalls.result) {
     finishToolCall(toolCall, 'skipped', '写入预览前发现候选记录、缺少运行输入或查重不可用');
     return {
       ...guardToolCalls.result,
-      toolCalls: [...guardToolCalls.toolCalls, toolCall],
+      toolCalls: [...preflightToolCalls, ...guardToolCalls.toolCalls, toolCall],
     };
   }
 
   const preview = await options.shadowMetadataService.previewUpsert(objectKey, requestInput);
-  const toolCalls = [...guardToolCalls.toolCalls, toolCall];
+  const toolCalls = [...preflightToolCalls, ...guardToolCalls.toolCalls, toolCall];
   const baseUserPreview = buildRecordPreviewView({
     objectKey,
     mode,
@@ -6313,11 +7595,13 @@ async function executeRecordPreviewTool(
     mode,
     toolCode: input.selectedTool.toolCode,
     requestInput,
+    partialInput: effectiveSelectedInput,
     preview,
     capability,
     fields,
     toolCall,
     toolCalls,
+    context,
   });
   if (guardResult) {
     return guardResult;
@@ -6366,7 +7650,7 @@ async function executeRecordPreviewTool(
 	    preview,
 	    userPreview,
 	    debugPayload: preview,
-	    requestInput: buildConfirmationRequestInput(requestInput, agentControl),
+	    requestInput: buildConfirmationRequestInput(requestInput, activeAgentControl),
 	    status: 'pending',
 	    createdAt: new Date().toISOString(),
     decidedAt: null,
@@ -6851,6 +8135,343 @@ function registerCompanyResearchTool(registry: AgentToolRegistry, options: CrmAg
   });
 }
 
+function registerYunzhijiaVisitPrepTool(registry: AgentToolRegistry, options: CrmAgentPackOptions): void {
+  registry.register({
+    code: YUNZHIJIA_VISIT_PREP_TOOL,
+    type: 'external',
+    provider: 'skill-runtime',
+    description: '先解析客户对象，再基于该客户关联公司研究资料生成客户拜访准备 Markdown',
+    whenToUse: '用户要求拜访准备、客户拜访、讲解提纲、客户演示准备或拜访计划时使用。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        customerName: { type: 'string' },
+        customerFormInstId: { type: 'string' },
+        companyName: { type: 'string' },
+        companyResearchArtifactId: { type: 'string' },
+        customerNeed: { type: 'string' },
+        visitAudience: { type: 'string' },
+      },
+    },
+    outputSchema: { type: 'object' },
+    riskLevel: 'medium',
+    confirmationPolicy: 'read_only',
+    displayCardType: 'yunzhijia-visit-prep-result',
+    owner: '云之家销售赋能组',
+    enabled: true,
+    semanticProfile: {
+      subjectTypes: ['company'],
+      intentCodes: ['provide_info', 'external_research'],
+      conflictGroups: ['subject_profile_lookup'],
+      priority: 70,
+      risk: 'medium_cost',
+      clarifyLabel: '生成拜访准备',
+      aliases: ['/拜访准备', '拜访准备', '客户拜访准备', '客户拜访', '讲解提纲', '客户演示准备', '拜访计划'],
+    },
+    execute: (input, context) => executeYunzhijiaVisitPrep(options, input, context),
+  });
+}
+
+async function executeYunzhijiaVisitPrep(
+  options: CrmAgentPackOptions,
+  input: AgentToolExecuteInput,
+  context: AgentToolExecuteContext,
+): Promise<AgentToolExecutionResult> {
+  const selectedInput = readPlainObject(input.selectedTool.input);
+  const commandBody = stripYunzhijiaVisitPrepCommand(input.request.query);
+  const resolvedInput = {
+    customerName: String(
+      selectedInput.customerName
+        || selectedInput.companyName
+        || input.intentFrame.target.name
+        || extractYunzhijiaVisitPrepCompanyName(
+          commandBody,
+          input.resolvedContext?.subject?.name ?? input.contextFrame?.subject?.name,
+        )
+        || '',
+    ).trim(),
+    customerFormInstId: String(selectedInput.customerFormInstId || '').trim(),
+    companyName: String(selectedInput.companyName || selectedInput.customerName || '').trim(),
+    companyResearchArtifactId: String(selectedInput.companyResearchArtifactId || '').trim(),
+    customerNeed: String(
+      selectedInput.customerNeed
+        || extractYunzhijiaVisitPrepCustomerNeed(commandBody, String(selectedInput.customerName || selectedInput.companyName || ''))
+        || '',
+    ).trim(),
+    visitAudience: String(selectedInput.visitAudience || '').trim(),
+  };
+  const targetCustomerName = cleanupCompanyName(resolvedInput.customerName);
+  const customerNeed = cleanupYunzhijiaVisitPrepNeed(resolvedInput.customerNeed);
+  const visitAudience = resolvedInput.visitAudience || undefined;
+
+  if (!resolvedInput.customerFormInstId && !isUsableCompanyName(targetCustomerName)) {
+    return buildYunzhijiaVisitPrepInputRequiredResult({
+      companyName: targetCustomerName,
+      customerNeed,
+      missing: 'customerName',
+      taskPlan: input.taskPlan,
+    });
+  }
+
+  const toolCalls: AgentToolExecutionResult['toolCalls'] = [];
+  let customerContext: YunzhijiaVisitPrepCustomerContext | null = null;
+  if (resolvedInput.customerFormInstId) {
+    const customerName = cleanupCompanyName(resolvedInput.customerName || resolvedInput.companyName || targetCustomerName || resolvedInput.customerFormInstId);
+    customerContext = {
+      customerFormInstId: resolvedInput.customerFormInstId,
+      customerName,
+      companyName: cleanupCompanyName(customerName || resolvedInput.companyName),
+    };
+  } else {
+    const customerSearchCall = createToolCall(context.runId, 'record.customer.search', targetCustomerName);
+    toolCalls.push(customerSearchCall);
+    if (!context.operatorOpenId) {
+      finishToolCall(customerSearchCall, 'failed', '缺少当前操作人身份，无法查询客户对象');
+      return buildYunzhijiaVisitPrepCustomerLookupUnavailableResult(targetCustomerName, '当前登录身份不可用，暂时无法查询客户对象。', toolCalls);
+    }
+
+    let search: ShadowExecuteSearchResponse;
+    try {
+      search = await options.shadowMetadataService.executeSearch('customer', buildYunzhijiaVisitPrepCustomerSearchInput({
+        customerName: targetCustomerName,
+        operatorOpenId: context.operatorOpenId,
+      })) as ShadowExecuteSearchResponse;
+      finishToolCall(customerSearchCall, 'succeeded', `records=${search.records.length}, total=${search.totalElements ?? search.records.length}`);
+    } catch (error) {
+      finishToolCall(customerSearchCall, 'failed', '客户对象查询失败，未触发拜访准备助手', error);
+      return buildYunzhijiaVisitPrepCustomerLookupUnavailableResult(targetCustomerName, error, toolCalls);
+    }
+
+    if (!search.records.length) {
+      return buildYunzhijiaVisitPrepMissingCustomerResult({
+        customerName: targetCustomerName,
+        customerNeed,
+        toolCalls,
+        taskPlan: input.taskPlan,
+        context,
+        selectedInput,
+      });
+    }
+
+    if (search.records.length > 1) {
+      return buildYunzhijiaVisitPrepCustomerChoiceResult({
+        targetCustomerName,
+        customerNeed,
+        visitAudience,
+        records: search.records,
+        toolCalls,
+        taskPlan: input.taskPlan,
+        context,
+        selectedInput,
+      });
+    }
+
+    const record = search.records[0]!;
+    const customerName = readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.customer) || targetCustomerName;
+    customerContext = {
+      customerFormInstId: record.formInstId,
+      customerName,
+      companyName: cleanupCompanyName(customerName),
+      record,
+    };
+  }
+
+  const customerName = customerContext.customerName;
+  const companyName = cleanupCompanyName(customerContext.companyName || customerName);
+  const lookupCall = createToolCall(context.runId, 'artifact.company_research.lookup', `${customerContext.customerFormInstId}:${companyName}`);
+  toolCalls.push(lookupCall);
+  let companyResearchArtifact: ArtifactDetailResponse | null = null;
+  try {
+    if (resolvedInput.companyResearchArtifactId) {
+      companyResearchArtifact = await loadYunzhijiaVisitPrepSelectedResearchArtifact(options, resolvedInput.companyResearchArtifactId);
+    } else {
+      const candidates = await findReusableCompanyResearchArtifactsForVisitPrep(options, {
+        eid: context.eid,
+        appId: context.appId,
+        customerId: customerContext.customerFormInstId,
+        customerName,
+        companyName,
+        lookupTerms: buildYunzhijiaVisitPrepResearchLookupTerms({
+          selectedInput,
+          commandBody,
+          targetCustomerName,
+          customerName,
+          companyName,
+          intentTargetName: input.intentFrame.target.name,
+        }),
+      });
+      if (candidates.length > 1) {
+        finishToolCall(lookupCall, 'succeeded', `matched company research artifacts=${candidates.length}, waiting for selection`);
+        return buildYunzhijiaVisitPrepResearchChoiceResult({
+          customer: customerContext,
+          customerNeed,
+          visitAudience,
+          artifacts: candidates,
+          toolCalls,
+          taskPlan: input.taskPlan,
+          context,
+          selectedInput,
+        });
+      }
+      companyResearchArtifact = candidates[0] ?? null;
+    }
+  } catch (error) {
+    finishToolCall(lookupCall, 'failed', '公司研究资料查询失败，未触发拜访准备助手', error);
+    return buildYunzhijiaVisitPrepLookupUnavailableResult(companyName, error, toolCalls);
+  }
+
+  if (!companyResearchArtifact) {
+    finishToolCall(lookupCall, 'skipped', '未找到有效公司研究资料，未调用拜访准备助手');
+    return buildYunzhijiaVisitPrepMissingResearchResult({
+      customer: customerContext,
+      customerNeed,
+      toolCalls,
+      taskPlan: input.taskPlan,
+    });
+  }
+  finishToolCall(
+    lookupCall,
+    lookupCall.status === 'succeeded' ? lookupCall.status : 'succeeded',
+    `reused company research artifact=${companyResearchArtifact.artifact.artifactId}, version=${companyResearchArtifact.artifact.version}`,
+  );
+
+  const sourcePath = writeYunzhijiaVisitPrepResearchAttachment({
+    options,
+    runId: context.runId,
+    companyName,
+    markdown: companyResearchArtifact.markdown,
+  });
+  const skillCall = createToolCall(context.runId, YUNZHIJIA_VISIT_PREP_RUNTIME_TOOL, companyName);
+  toolCalls.push(skillCall);
+  let markdown: string;
+  let finishedJob: ExternalSkillJobResponse;
+
+  try {
+    const job = await options.externalSkillService.createSkillJob(YUNZHIJIA_VISIT_PREP_RUNTIME_TOOL, {
+      requestText: buildYunzhijiaVisitPrepRequestText({
+        customerName,
+        companyName,
+        customerNeed,
+        visitAudience,
+      }),
+      model: options.config.deepseek.defaultModel,
+      attachments: [sourcePath],
+    });
+    finishedJob = await waitForVisitPrepSkillJob(options, job.jobId);
+    markdown = await resolveMarkdownFromJob(options, finishedJob, '客户拜访准备助手未返回可用 Markdown');
+    finishToolCall(skillCall, 'succeeded', `job=${finishedJob.jobId}, artifacts=${finishedJob.artifacts.length}`);
+  } catch (error) {
+    finishToolCall(skillCall, 'failed', '客户拜访准备助手执行失败，未生成降级资料', error);
+    return buildYunzhijiaVisitPrepUnavailableResult(companyName, error, toolCalls);
+  }
+
+  const assetMaterialization = readYunzhijiaVisitPrepAssetMaterialization(options);
+  const runtimeAttachments = buildRuntimeMarkdownAttachments(finishedJob);
+  const summary = summarizeMarkdown(markdown);
+  if (assetMaterialization.enabled) {
+    const artifactCall = createToolCall(context.runId, 'artifact.analysis_material', companyName);
+    toolCalls.push(artifactCall);
+    const artifact = await options.artifactService.createAnalysisMaterialArtifact({
+      eid: context.eid,
+      appId: context.appId,
+      title: `${companyName} 客户拜访准备`,
+      markdown,
+      sourceToolCode: YUNZHIJIA_VISIT_PREP_RUNTIME_TOOL,
+      anchors: [
+        buildCustomerAnchor(customerContext.customerFormInstId, customerName),
+        buildCompanyAnchor(companyName),
+      ],
+      createdBy: 'agent-runtime',
+      summary,
+      skillCode: YUNZHIJIA_VISIT_PREP_RUNTIME_TOOL,
+      sourceJobId: finishedJob.jobId,
+      sourceFile: {
+        name: `${companyName} 公司研究.md`,
+        mimeType: 'text/markdown',
+      },
+    });
+    finishToolCall(artifactCall, 'succeeded', `拜访准备资料已保存为第 ${artifact.artifact.version} 版`);
+
+    const evidence: AgentEvidenceCard[] = [
+      {
+        artifactId: artifact.artifact.artifactId,
+        versionId: artifact.artifact.versionId,
+        kind: 'analysis_material',
+        title: artifact.artifact.title,
+        version: artifact.artifact.version,
+        sourceToolCode: artifact.artifact.sourceToolCode,
+        anchorLabel: customerName,
+        snippet: summary,
+        vectorStatus: artifact.artifact.vectorStatus,
+      },
+    ];
+
+    return {
+      status: 'completed',
+      content: [
+        '## 客户拜访准备已生成',
+        `- 客户：**${customerName}**`,
+        `- 公司：**${companyName}**`,
+        `- 客户初步需求：${customerNeed || '未提供，已按通用拜访准备生成并标注待销售确认事项。'}`,
+        visitAudience ? `- 拜访对象：${visitAudience}` : '',
+        `- 资料：${artifact.artifact.title} 第 ${artifact.artifact.version} 版`,
+        '',
+        '## 摘要',
+        summary,
+      ].filter(Boolean).join('\n'),
+      headline: '已生成客户拜访准备资料',
+      references: [YUNZHIJIA_VISIT_PREP_MATERIAL_LABEL, COMPANY_RESEARCH_MATERIAL_LABEL, YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
+      evidence,
+      attachments: runtimeAttachments,
+      contextFrame: buildCustomerContextFrame(customerContext, context.runId),
+      toolCalls,
+      policyDecisions: [
+        createPolicyDecision({
+          policyCode: 'external.yunzhijia_visit_prep.company_research_required',
+          action: 'allow',
+          toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+          reason: '已解析客户对象，并读取该客户关联公司研究 Markdown 作为客户拜访准备输入。',
+        }),
+      ],
+    };
+  }
+
+  return {
+    status: 'completed',
+    content: [
+      '## 客户拜访准备已生成',
+      `- 客户：**${customerName}**`,
+      `- 公司：**${companyName}**`,
+      `- 客户初步需求：${customerNeed || '未提供，已按通用拜访准备生成并标注待销售确认事项。'}`,
+      visitAudience ? `- 拜访对象：${visitAudience}` : '',
+      `- 公司研究资料：${companyResearchArtifact.artifact.title} 第 ${companyResearchArtifact.artifact.version} 版`,
+      `- 资料沉淀：${assetMaterialization.label}，未创建资料资产。`,
+      '',
+      markdown,
+    ].filter(Boolean).join('\n'),
+    headline: '客户拜访准备已生成',
+    references: [COMPANY_RESEARCH_MATERIAL_LABEL, YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
+    evidence: [],
+    attachments: runtimeAttachments,
+    contextFrame: buildCustomerContextFrame(customerContext, context.runId),
+    toolCalls,
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.company_research_required',
+        action: 'allow',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: '已解析客户对象，并读取该客户关联公司研究 Markdown 作为客户拜访准备输入。',
+      }),
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.asset_materialization_disabled',
+        action: 'allow',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: assetMaterialization.description ?? '客户拜访准备配置为不沉淀资料资产。',
+      }),
+    ],
+  };
+}
+
 async function executeCompanyResearch(
   options: CrmAgentPackOptions,
   input: AgentToolExecuteInput,
@@ -7114,17 +8735,37 @@ function registerMetaTools(registry: AgentToolRegistry, options: CrmAgentPackOpt
   }
 }
 
-function isContextSummaryQuery(query: string): boolean {
+interface ContextSummarySemanticIntent {
+  shouldRoute: boolean;
+  isComplex: boolean;
+  summaryType: ContextSummaryType;
+  confidence: number;
+  reasons: string[];
+  requiresExternalInfo: boolean;
+}
+
+function isContextSummaryQuery(query: string, intentFrame?: GenericIntentFrame | null): boolean {
+  return analyzeContextSummarySemanticIntent(query, intentFrame).shouldRoute;
+}
+
+function hasLegacyContextSummaryPhrase(query: string): boolean {
   return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下|拜访前摘要|拜访重点|回访重点|沟通重点|会议重点|主要关注点|客户关注点|客户主要关注|商机进展|机会进展|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统|值不值得|重点推进|赢单概率|下次拜访|怎么开场|价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|需求|问题陈述|价值主张)/.test(query);
 }
 
-function isComplexContextSummaryQuery(query: string): boolean {
+function isComplexContextSummaryQuery(query: string, intentFrame?: GenericIntentFrame | null): boolean {
+  return analyzeContextSummarySemanticIntent(query, intentFrame).isComplex;
+}
+
+function hasLegacyComplexContextSummaryPhrase(query: string): boolean {
   return /(结合|综合|融合|同时看|一起看|值不值得|重点推进|拜访重点|回访重点|沟通重点|会议重点|(?:拜访|回访|沟通|会议).*重点|重点.*(?:拜访|回访|沟通|会议)|主要关注点|客户关注点|客户主要关注|赢单概率|下次拜访|怎么开场|问哪些问题|推什么价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|问题陈述|价值主张|价值定位|行动建议|主要提了什么需求|需求.*待办)/.test(query);
 }
 
 function isSimpleCustomerRecordLookupQuery(query: string): boolean {
   const normalized = stripDataSourceScopePhrases(query).trim();
   if (isComplexContextSummaryQuery(normalized)) {
+    return false;
+  }
+  if (isRecordLookupContextSummaryOverride(normalized)) {
     return false;
   }
   if (/(公司研究|录音资料|录音资料包|拜访录音|录音分析|最近拜访|这次拜访|上次拜访|需求待办|问题陈述|价值定位|价值主张|分析结果)/.test(normalized)) {
@@ -7134,22 +8775,185 @@ function isSimpleCustomerRecordLookupQuery(query: string): boolean {
     || /(?:客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|客户资料|客户信息|客户详情)\s*[？?。！!]*$/.test(normalized);
 }
 
-type ContextSummaryType = 'journey' | 'next_step' | 'visit_needs';
-
-function inferContextSummaryType(query: string): ContextSummaryType {
-  if (isVisitNeedsSummaryQuery(query)) {
-    return 'visit_needs';
-  }
-  return /(下一步|怎么推进|推进建议|下次拜访|怎么开场|问哪些问题|推什么价值点)/.test(query) ? 'next_step' : 'journey';
+function isRecordLookupContextSummaryOverride(query: string): boolean {
+  return /(客户旅程|旅程|进展概览|拜访前摘要|商机进展|机会进展|怎么推进|推进建议|下一步建议)/.test(query);
 }
 
-function isVisitNeedsSummaryQuery(query: string): boolean {
-  return /(?:上次|最近|这次|本次)?(?:拜访|回访|沟通|会议).*(?:需求|诉求|痛点|问题|关注|要什么|提了什么)/.test(query)
-    || /(?:需求|诉求|痛点|问题|关注).*(?:上次|最近|这次|本次)?(?:拜访|回访|沟通|会议)/.test(query)
-    || /(?:上次|最近|这次|本次|上回|近期)?(?:拜访|回访|沟通|会议).*(?:重点|关注点)/.test(query)
-    || /(?:重点|关注点).*(?:上次|最近|这次|本次|上回|近期)?(?:拜访|回访|沟通|会议)/.test(query)
-    || /(?:客户)?(?:主要)?关注点/.test(query)
-    || /主要提了什么需求/.test(query);
+type ContextSummaryType = 'journey' | 'next_step' | 'visit_needs';
+
+function inferContextSummaryType(query: string, intentFrame?: GenericIntentFrame | null): ContextSummaryType {
+  return analyzeContextSummarySemanticIntent(query, intentFrame).summaryType;
+}
+
+function isVisitNeedsSummaryQuery(query: string, intentFrame?: GenericIntentFrame | null): boolean {
+  return analyzeContextSummarySemanticIntent(query, intentFrame).summaryType === 'visit_needs';
+}
+
+function analyzeContextSummarySemanticIntent(
+  query: string,
+  intentFrame?: GenericIntentFrame | null,
+): ContextSummarySemanticIntent {
+  const normalizedQuery = query.replace(/\s+/g, '');
+  const semanticText = buildContextSummarySemanticText(query, intentFrame);
+  const legacyTargetType = intentFrame?.legacyIntentFrame.targetType ?? '';
+  const targetType = intentFrame?.target.objectType || intentFrame?.target.kind || legacyTargetType;
+  const hasInteraction = hasAnySemanticTerm(semanticText, ['拜访', '回访', '沟通', '会议', '交流', '跟进', '录音', '客户会']);
+  const hasRecentTime = hasAnySemanticTerm(semanticText, ['上次', '上回', '最近', '这次', '本次', '近期', '之前', '刚才']);
+  const asksCustomerNeed = hasAnySemanticTerm(semanticText, [
+    '客户需求',
+    '主要需求',
+    '需求',
+    '诉求',
+    '痛点',
+    '关注点',
+    '主要关注',
+    '客户关注',
+    '提出',
+    '提到',
+    '要什么',
+    '客户问题',
+  ]);
+  const asksVisitFocus = hasInteraction && hasAnySemanticTerm(semanticText, ['重点', '关注', '关注点', '最在意', '在意', '关心']);
+  const asksVisitNeedsOrFocus = asksCustomerNeed || asksVisitFocus;
+  const asksNextStep = hasAnySemanticTerm(semanticText, [
+    '下一步',
+    '怎么推进',
+    '推进建议',
+    '下次拜访',
+    '怎么开场',
+    '问哪些问题',
+    '价值点',
+    '行动建议',
+    '待办',
+  ]);
+  const asksBusinessJudgement = hasAnySemanticTerm(semanticText, [
+    '值不值得',
+    '重点推进',
+    '赢单概率',
+    '推进阻塞',
+    '阻塞',
+    '经营简报',
+    '给老板看',
+    '风险',
+    '为什么',
+  ]);
+  const asksSummary = hasAnySemanticTerm(semanticText, [
+    '总结',
+    '整理',
+    '盘点',
+    '概览',
+    '摘要',
+    '客户情况',
+    '客户状态',
+    '客户档案',
+    '商机进展',
+    '系统内记录',
+    '内部记录',
+    '记录系统',
+  ]);
+  const mentionsEvidenceMaterials = hasAnySemanticTerm(semanticText, [
+    '公司研究',
+    '录音',
+    '录音资料',
+    '录音资料包',
+    '拜访录音',
+    '分析结果',
+    '问题陈述',
+    '价值定位',
+    '价值主张',
+  ]);
+  const hasRecordSubject = intentFrame?.target.kind === 'record'
+    && (targetType === 'customer' || targetType === 'followup' || targetType === 'opportunity');
+  const interactionSubjectName = extractInteractionSubjectName(query);
+  const hasCustomerSubject = hasRecordSubject
+    || targetType === 'followup'
+    || (hasInteraction && (asksVisitNeedsOrFocus || asksNextStep) && Boolean(interactionSubjectName || extractCompanyName(query) || intentFrame?.target.name));
+
+  const visitNeedsScore = [
+    hasInteraction && asksVisitNeedsOrFocus ? 0.24 : 0,
+    hasRecentTime && asksVisitNeedsOrFocus ? 0.1 : 0,
+    asksVisitNeedsOrFocus ? 0.38 : 0,
+    targetType === 'followup' && asksVisitNeedsOrFocus ? 0.12 : 0,
+    (targetType === 'customer' || targetType === 'company') && asksVisitNeedsOrFocus ? 0.08 : 0,
+    asksNextStep ? -0.36 : 0,
+    asksBusinessJudgement ? -0.22 : 0,
+  ].reduce((sum, item) => sum + item, 0);
+  const nextStepScore = [
+    asksNextStep ? 0.46 : 0,
+    hasInteraction ? 0.12 : 0,
+    targetType === 'customer' || targetType === 'opportunity' ? 0.1 : 0,
+    asksBusinessJudgement ? -0.08 : 0,
+  ].reduce((sum, item) => sum + item, 0);
+  const journeyScore = [
+    asksBusinessJudgement ? 0.36 : 0,
+    asksSummary ? 0.28 : 0,
+    hasLegacyContextSummaryPhrase(normalizedQuery) ? 0.18 : 0,
+    hasCustomerSubject ? 0.08 : 0,
+  ].reduce((sum, item) => sum + item, 0);
+
+  const summaryType: ContextSummaryType = nextStepScore >= 0.5 && nextStepScore > visitNeedsScore + 0.05
+    ? 'next_step'
+    : visitNeedsScore >= 0.45 && asksVisitNeedsOrFocus
+      ? 'visit_needs'
+      : 'journey';
+  const selectedScore = summaryType === 'next_step'
+    ? nextStepScore
+    : summaryType === 'visit_needs'
+      ? visitNeedsScore
+      : journeyScore;
+  const shouldRoute = hasCustomerSubject
+    && (
+      selectedScore >= 0.42
+      || hasLegacyContextSummaryPhrase(normalizedQuery)
+      || hasLegacyComplexContextSummaryPhrase(normalizedQuery)
+    );
+  const isComplex = shouldRoute
+    && (
+      selectedScore >= 0.5
+      || hasLegacyComplexContextSummaryPhrase(normalizedQuery)
+      || mentionsEvidenceMaterials
+      || (hasInteraction && (asksCustomerNeed || asksNextStep || asksBusinessJudgement))
+    );
+  const reasons = [
+    hasInteraction ? '识别到拜访/沟通场景' : '',
+    asksVisitNeedsOrFocus ? '识别到客户诉求目标' : '',
+    asksNextStep ? '识别到推进建议目标' : '',
+    asksBusinessJudgement ? '识别到经营判断目标' : '',
+    mentionsEvidenceMaterials ? '识别到资料证据消费' : '',
+  ].filter(Boolean);
+
+  return {
+    shouldRoute,
+    isComplex,
+    summaryType,
+    confidence: Math.max(0.58, Math.min(0.92, selectedScore + 0.35)),
+    reasons,
+    requiresExternalInfo: mentionsEvidenceMaterials || hasInteraction || asksBusinessJudgement || summaryType === 'visit_needs',
+  };
+}
+
+function buildContextSummarySemanticText(query: string, intentFrame?: GenericIntentFrame | null): string {
+  return [
+    query,
+    intentFrame?.goal ?? '',
+    intentFrame?.legacyIntentFrame.goal ?? '',
+    intentFrame?.target.objectType ?? '',
+    intentFrame?.legacyIntentFrame.targetType ?? '',
+    ...(intentFrame?.inputMaterials ?? []),
+    ...(intentFrame?.constraints ?? []),
+    ...(intentFrame?.missingSlots ?? []),
+  ].join('\n').replace(/\s+/g, '').trim();
+}
+
+function hasAnySemanticTerm(text: string, terms: string[]): boolean {
+  return terms.some((term) => text.includes(term));
+}
+
+function extractInteractionSubjectName(query: string): string {
+  const normalized = stripDataSourceScopePhrases(query);
+  const match = normalized.match(/^([^，。！？\n]+?)(?:上次|最近|这次|本次|上回|近期)?(?:拜访|回访|沟通|会议|交流|跟进)/);
+  const candidate = cleanupCustomerRecordLookupName(match?.[1] ?? '');
+  return isUsableCompanyName(candidate) ? candidate : '';
 }
 
 function hasContextSummarySubject(input: AgentPlannerInput): boolean {
@@ -7238,6 +9042,7 @@ async function executeContextSummaryTool(
 	        options,
 	        context,
 	        query,
+	        summaryType,
 	        anchorName: summarySubject.name,
 	        resolvedSubject: summarySubject,
 	        rootSubject,
@@ -7283,7 +9088,7 @@ async function executeContextSummaryTool(
     content,
     headline: dataSourceScope === 'combined'
       ? '已融合外部信息与系统内记录'
-      : summaryType === 'journey' ? '客户旅程摘要已生成' : summaryType === 'visit_needs' ? `${RECORDING_NEEDS_SUMMARY_LABEL}已生成` : '推进建议已生成',
+      : summaryType === 'journey' ? '客户旅程摘要已生成' : summaryType === 'visit_needs' ? '客户主要需求已生成' : '推进建议已生成',
     references: dataSourceScope === 'combined'
       ? [
           INTERNAL_RECORDS_SOURCE_LABEL,
@@ -7404,13 +9209,14 @@ async function loadExternalInfoEvidenceForSummary(input: {
   options: CrmAgentPackOptions;
   context: AgentToolExecuteContext;
   query: string;
+  summaryType?: ContextSummaryType;
   anchorName: string;
   resolvedSubject?: { id: string; name: string };
   rootSubject: ContextFrame['subject'] | null;
   toolCalls: AgentToolExecutionResult['toolCalls'];
 }): Promise<{ anchorName: string; evidence: AgentEvidenceCard[] }> {
   const anchorName = input.anchorName || input.rootSubject?.name || extractExternalInfoSubjectName(input.query);
-  const summaryType = inferContextSummaryType(input.query);
+  const summaryType = input.summaryType ?? inferContextSummaryType(input.query);
   const queryAnchorName = extractContextSummaryQueryAnchorName(input.query);
   const companyAnchors = [anchorName, queryAnchorName]
     .filter((item): item is string => Boolean(item?.trim()) && !isLikelyInternalRecordIdentifier(item))
@@ -7653,7 +9459,6 @@ function buildVisitNeedsSummaryContent(input: {
 }): string {
   const analysisEvidence = input.externalEvidence.filter((item) => item.kind === 'analysis_material');
   const recordingEvidence = input.externalEvidence.filter((item) => item.kind === 'recording_material');
-  const researchEvidence = input.externalEvidence.filter((item) => item.kind === 'company_research');
   const followupPreview = summarizeRelationRecords('followup', input.relations.followup.records as Array<{
     fields: Array<{ title?: string | null; value?: unknown; rawValue?: unknown }>;
     rawRecord?: Record<string, unknown>;
@@ -7661,6 +9466,9 @@ function buildVisitNeedsSummaryContent(input: {
   }>);
   const selectedAnalysisEvidence = selectVisitNeedsAnalysisEvidence(analysisEvidence);
   const structuredNeeds = extractStructuredVisitNeeds(input.fullMarkdownByArtifactId, selectedAnalysisEvidence);
+  const fullMarkdownDemandSignals = structuredNeeds.length
+    ? []
+    : extractDemandSignalsFromTextBlocks(Array.from(input.fullMarkdownByArtifactId?.values() ?? []));
   const primaryAnalysisEvidence = selectedAnalysisEvidence.filter((item) => !isCustomerValuePositioningEvidence(item));
   const selectedRecordingEvidence = selectVisitNeedsRecordingEvidence(recordingEvidence);
   const primaryEvidence = [
@@ -7669,40 +9477,39 @@ function buildVisitNeedsSummaryContent(input: {
   ].slice(0, VISIT_NEEDS_EVIDENCE_SOURCE_LIMIT);
   const fallbackDemandEvidence = primaryEvidence.filter((item) => !isCustomerValuePositioningEvidence(item));
   const demandSignals = structuredNeeds.length ? [] : extractDemandSignals(fallbackDemandEvidence);
-  const lines = [
-    `## ${RECORDING_NEEDS_SUMMARY_LABEL}`,
-    `- 客户：${input.externalAnchorName || '当前客户'}`,
-    `- 取材优先级：完整客户需求工作待办分析 > 问题陈述 > 拜访会话理解 > 拜访录音 > 跟进记录；客户价值定位和公司研究仅作辅助背景。`,
-  ];
+  const relationDemandSignals = structuredNeeds.length || fullMarkdownDemandSignals.length || demandSignals.length
+    ? []
+    : extractDemandSignalsFromTextBlocks([input.internalContent, ...followupPreview]);
+  const relaxedDemandSignals = structuredNeeds.length || fullMarkdownDemandSignals.length || demandSignals.length || relationDemandSignals.length
+    ? []
+    : extractDemandSignalsFromTextBlocks(
+        [
+          ...fallbackDemandEvidence.map((item) => item.snippet),
+          input.internalContent,
+          ...followupPreview,
+        ],
+        { relaxed: true },
+      );
+  const fallbackSignals = fullMarkdownDemandSignals.length
+    ? fullMarkdownDemandSignals
+    : demandSignals.length
+      ? demandSignals
+      : relationDemandSignals.length
+        ? relationDemandSignals
+        : relaxedDemandSignals;
+  const lines = ['## 客户主要需求'];
 
   if (structuredNeeds.length) {
-    lines.push('', '### 客户主要需求');
     for (const need of structuredNeeds) {
       lines.push(`- ${need.title}`);
       for (const detail of need.details) {
         lines.push(`  - ${detail}`);
       }
     }
-  } else if (demandSignals.length) {
-    lines.push('', '### 客户主要需求', ...demandSignals.map((item) => `- ${item}`));
+  } else if (fallbackSignals.length) {
+    lines.push(...fallbackSignals.map((item) => `- ${item}`));
   } else {
-    lines.push('', '### 客户主要需求', '- 当前已归档资料中没有抽到明确需求条目，建议打开录音资料或补跑“客户需求工作待办分析”后再确认。');
-  }
-
-  if (!analysisEvidence.length && recordingEvidence.length) {
-    lines.push('', '### 分析资料状态', '- 当前未检索到正式拜访分析结果；已先基于拜访录音资料包提炼，建议补跑“拜访会话理解”和“客户需求工作待办分析”后沉淀为分析资料。');
-  }
-
-  if (primaryEvidence.length) {
-    lines.push('', '### 证据来源', ...primaryEvidence.slice(0, VISIT_NEEDS_EVIDENCE_SOURCE_LIMIT).map((item) => (
-      `- ${artifactKindBusinessLabel(item.kind)}：${item.title}，片段：${formatVisitNeedsEvidenceSnippet(item)}`
-    )));
-  }
-  if (followupPreview.length) {
-    lines.push('', '### 记录系统补充', ...followupPreview.map((item) => `- ${item}`));
-  }
-  if (researchEvidence.length) {
-    lines.push('', '### 公司研究背景', ...researchEvidence.slice(0, 2).map((item) => `- ${trimEvidenceSnippet(item.snippet, 180)}`));
+    lines.push('- 暂未抽到明确需求条目，可打开下方资料查看完整上下文。');
   }
 
   return lines.join('\n');
@@ -7822,6 +9629,11 @@ function parseVisitNeedSections(markdown: string): StructuredVisitNeed[] {
       pushNeedDetail(current, `${labeled[1]}：${labeled[2]}`);
       continue;
     }
+    const labelOnly = cleaned.match(/^(背景|目标|关注点|客户关注|业务目标|核心诉求|现状|原因|需求描述)[：:]$/);
+    if (labelOnly) {
+      currentLabel = labelOnly[1];
+      continue;
+    }
     if (/^(背景|目标|关注点|客户关注|业务目标|核心诉求|现状|原因|需求描述)$/.test(cleaned)) {
       currentLabel = cleaned;
       continue;
@@ -7849,6 +9661,7 @@ function normalizeNeedDetailLine(value: string): string {
       .replace(/^[-*]\s*(?:\[[ xX]\]\s*)?/, '')
       .replace(/^\d+[.、]\s*/, '')
       .replace(/^\*\*([^*：:]+)[：:]\*\*\s*/, '$1：')
+      .replace(/^\*\*([^*]+)\*\*\s*[：:]\s*/, '$1：')
       .replace(/^\*\*([^*]+)\*\*\s*$/, '$1')
       .trim(),
     180,
@@ -7955,29 +9768,26 @@ function buildEvidenceDedupeKey(evidence: AgentEvidenceCard): string {
   return evidence.artifactId || `${evidence.kind ?? 'artifact'}:${evidence.title}:${evidence.sourceToolCode}`;
 }
 
-function formatVisitNeedsEvidenceSnippet(evidence: AgentEvidenceCard): string {
-  const signals = extractDemandSignals([evidence]);
-  if (signals.length) {
-    return trimEvidenceSnippet(signals.slice(0, 2).join('；'), 180);
-  }
-  const cleanedLines = evidence.snippet
-    .split(/\n+/)
-    .map((line) => normalizeDemandSignalLine(line))
-    .filter((line) => line && !isDemandSignalHeading(line) && !VISIT_NEEDS_SIGNAL_NOISE_KEYWORDS.test(line));
-  return trimEvidenceSnippet(cleanedLines.join(' '), 180);
+function extractDemandSignals(evidence: AgentEvidenceCard[]): string[] {
+  return extractDemandSignalsFromTextBlocks(evidence.map((item) => item.snippet));
 }
 
-function extractDemandSignals(evidence: AgentEvidenceCard[]): string[] {
+function extractDemandSignalsFromTextBlocks(
+  blocks: string[],
+  options: { relaxed?: boolean; limit?: number } = {},
+): string[] {
   const seen = new Set<string>();
   const signals: string[] = [];
-  for (const item of evidence) {
-    for (const rawLine of item.snippet.split(/\n+/)) {
+  const limit = options.limit ?? 6;
+  for (const block of blocks) {
+    for (const rawLine of block.split(/[\n。；;]+/)) {
       const line = normalizeDemandSignalLine(rawLine);
+      const demandSignal = evaluateVisitDemandSignalLine(line, options);
       if (!line
         || isDemandSignalHeading(line)
         || VISIT_NEEDS_SIGNAL_NOISE_KEYWORDS.test(line)
         || /^(?:价值定位|定位声明|价值主张)[：:]/.test(line)
-        || !VISIT_NEEDS_DEMAND_KEYWORDS.test(line)) {
+        || !demandSignal.accept) {
         continue;
       }
       const normalized = line.replace(/\s+/g, '');
@@ -7986,12 +9796,39 @@ function extractDemandSignals(evidence: AgentEvidenceCard[]): string[] {
       }
       seen.add(normalized);
       signals.push(line);
-      if (signals.length >= 6) {
+      if (signals.length >= limit) {
         return signals;
       }
     }
   }
   return signals;
+}
+
+function evaluateVisitDemandSignalLine(
+  line: string,
+  options: { relaxed?: boolean } = {},
+): { accept: boolean; reason: 'customer_voice' | 'concrete_need' | 'rejected' } {
+  if (!line || line.length < 4) {
+    return { accept: false, reason: 'rejected' };
+  }
+  if (VISIT_NEEDS_INTERNAL_MAINTENANCE_KEYWORDS.test(line)
+    && (VISIT_NEEDS_INTERNAL_ACTION_KEYWORDS.test(line) || /建议|后续|下一步|补充|补齐|确认|核对/.test(line))) {
+    return { accept: false, reason: 'rejected' };
+  }
+  if (VISIT_NEEDS_CUSTOMER_VOICE_KEYWORDS.test(line) && VISIT_NEEDS_DEMAND_KEYWORDS.test(line)) {
+    return { accept: true, reason: 'customer_voice' };
+  }
+  if (VISIT_NEEDS_CONCRETE_NEED_KEYWORDS.test(line)
+    && VISIT_NEEDS_DEMAND_KEYWORDS.test(line)
+    && !VISIT_NEEDS_INTERNAL_ACTION_KEYWORDS.test(line)) {
+    return { accept: true, reason: 'concrete_need' };
+  }
+  if (options.relaxed
+    && VISIT_NEEDS_CONCRETE_NEED_KEYWORDS.test(line)
+    && !VISIT_NEEDS_INTERNAL_MAINTENANCE_KEYWORDS.test(line)) {
+    return { accept: true, reason: 'concrete_need' };
+  }
+  return { accept: false, reason: 'rejected' };
 }
 
 function normalizeDemandSignalLine(value: string): string {
@@ -8012,7 +9849,7 @@ function isDemandSignalHeading(line: string): boolean {
     .replace(/[：:]\s*$/g, '')
     .replace(/\s+/g, '')
     .trim();
-  return /^(客户需求工作待办分析|拜访会话理解|问题陈述|客户价值定位|分析依据|注意|项目\/场景背景|待补充的材料\/证据|定位声明|来源文件|录音任务|关联状态|生成日期|技能|客户主要需求|已确认的需求|待办清单|总结|摘要)$/.test(normalized);
+  return /^(客户需求工作待办分析|拜访会话理解|问题陈述|客户价值定位|分析依据|注意|项目\/场景背景|待补充的材料\/证据|定位声明|来源文件|录音任务|关联状态|生成日期|技能|客户主要需求|已确认的需求|待办清单|建议下一步|下一步建议|总结|摘要)$/.test(normalized);
 }
 
 function trimEvidenceSnippet(value: string, maxLength: number): string {
@@ -8196,6 +10033,7 @@ function readFieldByTitles(
     rawRecord?: Record<string, unknown>;
   },
   titles: string[],
+  objectKey?: ShadowObjectKey,
 ): string {
   const fields = record.fields ?? [];
   const lookupKeys = new Set(titles.flatMap((title) => IMPORTANT_FIELD_ALIASES[title] ?? [title]));
@@ -8205,12 +10043,19 @@ function readFieldByTitles(
       || Boolean(item.title && lookupKeys.has(item.title))
       || Boolean(item.codeId && lookupKeys.has(item.codeId))
     );
-    const value = field ? stringifyRecordDisplayCandidate(field.value ?? field.rawValue, record.formInstId) : '';
+    const value = field
+      ? stringifyRecordFieldDisplayCandidate(
+          field.value ?? field.rawValue,
+          record.formInstId,
+          field.title ?? field.codeId ?? title,
+          objectKey,
+        )
+      : '';
     if (value) {
       return value;
     }
   }
-  return readImportantValueByTitles(record, titles);
+  return readImportantValueByTitles(record, titles, objectKey);
 }
 
 async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Promise<SkillJobWaitResult> {
@@ -8219,6 +10064,20 @@ async function waitForSkillJob(options: CrmAgentPackOptions, jobId: string): Pro
     maxWaitMs: options.companyResearchMaxWaitMs ?? COMPANY_RESEARCH_MAX_WAIT_MS,
     keepProcessAlive: true,
   });
+}
+
+async function waitForVisitPrepSkillJob(options: CrmAgentPackOptions, jobId: string): Promise<ExternalSkillJobResponse> {
+  let job = await options.externalSkillService.getSkillJob(jobId);
+  while (true) {
+    if (job.status === 'succeeded') {
+      return job;
+    }
+    if (job.status === 'failed') {
+      throw new Error(job.error?.message ?? '客户拜访准备助手执行失败');
+    }
+    await delay(COMPANY_RESEARCH_POLL_INTERVAL_MS, true);
+    job = await options.externalSkillService.getSkillJob(jobId);
+  }
 }
 
 async function waitForSkillJobWithin(
@@ -8257,6 +10116,663 @@ function delay(ms: number, keepProcessAlive: boolean): Promise<void> {
       timer.unref();
     }
   });
+}
+
+function buildYunzhijiaVisitPrepCustomerSearchInput(input: {
+  customerName: string;
+  operatorOpenId?: string | null;
+}): Record<string, unknown> {
+  const identityField = CRM_RECORD_CAPABILITIES.customer.identityFields?.[0] ?? 'customer_name';
+  return {
+    filters: [
+      {
+        field: identityField,
+        value: input.customerName,
+        operator: 'like',
+      },
+    ],
+    operatorOpenId: input.operatorOpenId ?? undefined,
+    pageNumber: 1,
+    pageSize: 5,
+  };
+}
+
+function buildYunzhijiaVisitPrepResearchLookupTerms(input: {
+  selectedInput: Record<string, unknown>;
+  commandBody: string;
+  targetCustomerName: string;
+  customerName: string;
+  companyName: string;
+  intentTargetName?: string;
+}): string[] {
+  const commandSubject = extractYunzhijiaVisitPrepCompanyName(input.commandBody, '');
+  return [
+    input.targetCustomerName,
+    input.customerName,
+    input.companyName,
+    commandSubject,
+    typeof input.selectedInput.companyResearchLookupTerms === 'string' ? input.selectedInput.companyResearchLookupTerms : '',
+    ...(Array.isArray(input.selectedInput.companyResearchLookupTerms)
+      ? input.selectedInput.companyResearchLookupTerms.map((item) => String(item))
+      : []),
+    typeof input.selectedInput.companyName === 'string' ? input.selectedInput.companyName : '',
+    typeof input.selectedInput.customerName === 'string' ? input.selectedInput.customerName : '',
+    input.intentTargetName ?? '',
+  ];
+}
+
+function buildYunzhijiaVisitPrepMissingCustomerResult(input: {
+  customerName: string;
+  customerNeed: string;
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+  taskPlan?: TaskPlan;
+  context: AgentToolExecuteContext;
+  selectedInput: Record<string, unknown>;
+}): AgentToolExecutionResult {
+  const questionCard: MetaQuestionCard = {
+    title: '请确认客户名称',
+    description: `系统中没有查到「${input.customerName}」对应的客户对象。`,
+    toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+    submitLabel: '继续查找客户',
+    currentValues: {
+      requested_customer: {
+        label: '原输入',
+        value: input.customerName,
+      },
+    },
+    questions: [
+      {
+        questionId: `${YUNZHIJIA_VISIT_PREP_TOOL}:customer_name`,
+        paramKey: 'customerName',
+        label: '客户名称',
+        type: 'text',
+        required: true,
+        placeholder: '输入客户名称，客户关注点可选',
+        reason: '拜访准备必须先绑定系统内客户对象。',
+      },
+    ],
+  };
+
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 需要先确认客户对象',
+      `- 查询客户：**${input.customerName}**`,
+      '',
+      '## 当前处理',
+      '- 未查到对应客户对象。',
+      '- 未调用客户拜访准备助手。',
+      '- 未生成或保存拜访准备资料。',
+    ].join('\n'),
+    headline: '请确认客户对象',
+    references: [YUNZHIJIA_VISIT_PREP_SERVICE_LABEL, 'record.customer.search'],
+    evidence: [],
+    attachments: [],
+    toolCalls: input.toolCalls,
+    taskPlan: markYunzhijiaVisitPrepBlockedPlan(input.taskPlan),
+    pendingInteraction: buildPendingInteraction({
+      runId: input.context.runId,
+      kind: 'input_required',
+      toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+      title: '请确认客户对象',
+      summary: '拜访准备需要先解析客户对象，当前没有查到匹配客户。',
+      partialInput: {
+        ...input.selectedInput,
+        customerNeed: input.customerNeed,
+      },
+      questionCard,
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.customer_required',
+        action: 'block',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: '客户拜访准备必须先绑定客户对象；当前未查到客户，已阻止外部技能调用。',
+      }),
+    ],
+  };
+}
+
+function buildYunzhijiaVisitPrepCustomerChoiceResult(input: {
+  targetCustomerName: string;
+  customerNeed: string;
+  visitAudience?: string;
+  records: ShadowLiveRecord[];
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+  taskPlan?: TaskPlan;
+  context: AgentToolExecuteContext;
+  selectedInput: Record<string, unknown>;
+}): AgentToolExecutionResult {
+  const choiceParamKey = 'customerChoice';
+  const choices: Record<string, {
+    toolCode: string;
+    input: Record<string, unknown>;
+    reason: string;
+    aliases: string[];
+  }> = {};
+  const options = input.records.slice(0, 5).map((record, index) => {
+    const customerName = readLiveRecordDisplayName(record, CRM_RECORD_CAPABILITIES.customer) || `客户 ${index + 1}`;
+    const summary = buildUpdateTargetCandidateSummary(record, 'customer') || `客户ID：${record.formInstId}`;
+    const value = `customer:${record.formInstId}`;
+    choices[value] = {
+      toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+      input: {
+        ...input.selectedInput,
+        customerName,
+        companyName: customerName,
+        customerFormInstId: record.formInstId,
+        companyResearchLookupTerms: [input.targetCustomerName, customerName],
+        customerNeed: input.customerNeed,
+        ...(input.visitAudience ? { visitAudience: input.visitAudience } : {}),
+      },
+      reason: `用户选择客户「${customerName}」继续生成拜访准备。`,
+      aliases: [customerName, `第${index + 1}个`, `第${index + 1}条`, String(index + 1)],
+    };
+    return {
+      label: customerName,
+      value,
+      key: value,
+      description: summary,
+      source: 'record' as const,
+    };
+  });
+
+  const questionCard: MetaQuestionCard = {
+    title: '请选择客户',
+    description: `系统中找到多个与「${input.targetCustomerName}」相关的客户。`,
+    toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+    submitLabel: '使用该客户生成',
+    currentValues: {
+      requested_customer: {
+        label: '查询客户',
+        value: input.targetCustomerName,
+      },
+    },
+    questions: [
+      {
+        questionId: `${YUNZHIJIA_VISIT_PREP_TOOL}:customer_choice`,
+        paramKey: choiceParamKey,
+        label: '客户',
+        type: 'single_select',
+        required: true,
+        placeholder: '请选择客户',
+        options,
+        reason: '多个客户名称相近，需要先明确拜访准备绑定的客户对象。',
+      },
+    ],
+  };
+
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 找到多个客户',
+      `- 查询客户：**${input.targetCustomerName}**`,
+      `- 命中数量：${input.records.length}`,
+      '',
+      '请选择本次拜访准备要绑定的客户对象。',
+    ].join('\n'),
+    headline: '请选择客户对象',
+    references: [YUNZHIJIA_VISIT_PREP_SERVICE_LABEL, 'record.customer.search'],
+    evidence: [],
+    attachments: [],
+    toolCalls: input.toolCalls,
+    taskPlan: markYunzhijiaVisitPrepBlockedPlan(input.taskPlan),
+    pendingInteraction: buildPendingInteraction({
+      runId: input.context.runId,
+      kind: 'input_required',
+      toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+      title: '请选择客户对象',
+      summary: '客户名称存在多个匹配项，等待用户从单选卡片中选择客户。',
+      partialInput: {
+        agentControl: {
+          choiceRouting: {
+            answerParamKey: choiceParamKey,
+            choices,
+          },
+        },
+      },
+      questionCard,
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.customer_ambiguous',
+        action: 'clarify',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: '客户名称命中多个客户对象，已返回单选澄清卡片。',
+      }),
+    ],
+  };
+}
+
+function buildYunzhijiaVisitPrepResearchChoiceResult(input: {
+  customer: YunzhijiaVisitPrepCustomerContext;
+  customerNeed: string;
+  visitAudience?: string;
+  artifacts: ArtifactDetailResponse[];
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+  taskPlan?: TaskPlan;
+  context: AgentToolExecuteContext;
+  selectedInput: Record<string, unknown>;
+}): AgentToolExecutionResult {
+  const choiceParamKey = 'companyResearchArtifactId';
+  const choices: Record<string, {
+    toolCode: string;
+    input: Record<string, unknown>;
+    reason: string;
+    aliases: string[];
+  }> = {};
+  const options = input.artifacts.slice(0, 5).map((detail, index) => {
+    const value = `research:${detail.artifact.artifactId}`;
+    const summary = detail.summary?.trim() || summarizeMarkdown(detail.markdown);
+    choices[value] = {
+      toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+      input: {
+        ...input.selectedInput,
+        customerName: input.customer.customerName,
+        companyName: input.customer.companyName,
+        customerFormInstId: input.customer.customerFormInstId,
+        companyResearchArtifactId: detail.artifact.artifactId,
+        customerNeed: input.customerNeed,
+        ...(input.visitAudience ? { visitAudience: input.visitAudience } : {}),
+      },
+      reason: `用户选择公司研究资料「${detail.artifact.title}」继续生成拜访准备。`,
+      aliases: [detail.artifact.title, `第${index + 1}个`, `第${index + 1}条`, String(index + 1)],
+    };
+    return {
+      label: detail.artifact.title,
+      value,
+      key: value,
+      description: `第 ${detail.artifact.version} 版${summary ? ` / ${summary}` : ''}`,
+      source: 'field_option' as const,
+    };
+  });
+
+  const questionCard: MetaQuestionCard = {
+    title: '请选择公司研究资料',
+    description: `客户「${input.customer.customerName}」命中多份有效公司研究资料。`,
+    toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+    submitLabel: '使用该资料生成',
+    currentValues: {
+      customer: {
+        label: '客户',
+        value: input.customer.customerName,
+      },
+    },
+    questions: [
+      {
+        questionId: `${YUNZHIJIA_VISIT_PREP_TOOL}:research_choice`,
+        paramKey: choiceParamKey,
+        label: '公司研究资料',
+        type: 'single_select',
+        required: true,
+        placeholder: '请选择公司研究资料',
+        options,
+        reason: '同一客户命中多份公司研究资料，需要明确本次拜访准备使用哪一份。',
+      },
+    ],
+  };
+
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 找到多份公司研究资料',
+      `- 客户：**${input.customer.customerName}**`,
+      `- 公司：**${input.customer.companyName}**`,
+      `- 命中资料：${input.artifacts.length} 份`,
+      '',
+      '请选择本次拜访准备使用的公司研究资料。',
+    ].join('\n'),
+    headline: '请选择公司研究资料',
+    references: [COMPANY_RESEARCH_MATERIAL_LABEL, YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    contextFrame: buildCustomerContextFrame(input.customer, input.context.runId),
+    toolCalls: input.toolCalls,
+    taskPlan: markYunzhijiaVisitPrepBlockedPlan(input.taskPlan),
+    pendingInteraction: buildPendingInteraction({
+      runId: input.context.runId,
+      kind: 'input_required',
+      toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+      title: '请选择公司研究资料',
+      summary: '客户已明确，但命中多份公司研究资料，等待用户从单选卡片中选择资料。',
+      partialInput: {
+        agentControl: {
+          choiceRouting: {
+            answerParamKey: choiceParamKey,
+            choices,
+          },
+        },
+      },
+      questionCard,
+      context: input.context,
+    }),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.company_research_ambiguous',
+        action: 'clarify',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: '已选客户命中多份有效公司研究资料，已返回单选澄清卡片。',
+      }),
+    ],
+  };
+}
+
+function buildYunzhijiaVisitPrepCustomerLookupUnavailableResult(
+  customerName: string,
+  error: unknown,
+  toolCalls: AgentToolExecutionResult['toolCalls'],
+): AgentToolExecutionResult {
+  const message = getErrorMessage(error);
+  return {
+    status: 'tool_unavailable',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 客户对象查询失败',
+      `- 客户：**${customerName}**`,
+      `- 失败原因：${message}`,
+      '',
+      '## 当前处理',
+      '- 未调用客户拜访准备助手。',
+      '- 未生成降级拜访材料。',
+    ].join('\n'),
+    headline: '客户对象查询失败，未触发拜访准备',
+    references: ['record.customer.search', YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    toolCalls,
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.customer_lookup_required',
+        action: 'block',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: `客户拜访准备必须先查询客户对象；当前查询失败，已阻止外部技能调用：${message}`,
+      }),
+    ],
+  };
+}
+
+async function loadYunzhijiaVisitPrepSelectedResearchArtifact(
+  options: CrmAgentPackOptions,
+  artifactId: string,
+): Promise<ArtifactDetailResponse | null> {
+  const artifactService = options.artifactService as ArtifactService & {
+    getArtifact?: ArtifactService['getArtifact'];
+  };
+  if (typeof artifactService.getArtifact !== 'function') {
+    return null;
+  }
+  const detail = await artifactService.getArtifact(artifactId);
+  if (detail.artifact.kind !== 'company_research' || !detail.markdown.trim()) {
+    return null;
+  }
+  return detail;
+}
+
+async function findReusableCompanyResearchArtifactsForVisitPrep(
+  options: CrmAgentPackOptions,
+  input: {
+    eid: string;
+    appId: string;
+    customerId: string;
+    customerName: string;
+    companyName: string;
+    lookupTerms?: string[];
+  },
+): Promise<ArtifactDetailResponse[]> {
+  const artifactService = options.artifactService as ArtifactService & {
+    findCompanyResearchArtifactsForVisitPrep?: ArtifactService['findCompanyResearchArtifactsForVisitPrep'];
+    findLatestCompanyResearchArtifact?: ArtifactService['findLatestCompanyResearchArtifact'];
+  };
+  if (typeof artifactService.findCompanyResearchArtifactsForVisitPrep === 'function') {
+    return artifactService.findCompanyResearchArtifactsForVisitPrep({
+      eid: input.eid,
+      appId: input.appId,
+      customerId: input.customerId,
+      customerName: input.customerName,
+      companyName: input.companyName,
+      lookupTerms: input.lookupTerms,
+      limit: 5,
+    });
+  }
+  if (typeof artifactService.findLatestCompanyResearchArtifact === 'function') {
+    const detail = await artifactService.findLatestCompanyResearchArtifact({
+      eid: input.eid,
+      appId: input.appId,
+      companyName: input.companyName,
+    });
+    return detail ? [detail] : [];
+  }
+  return [];
+}
+
+function readYunzhijiaVisitPrepAssetMaterialization(
+  options: CrmAgentPackOptions,
+): ExternalSkillAssetMaterializationConfig {
+  const externalSkillService = options.externalSkillService as ExternalSkillService & {
+    getSkillAssetMaterialization?: ExternalSkillService['getSkillAssetMaterialization'];
+  };
+  return externalSkillService.getSkillAssetMaterialization?.(YUNZHIJIA_VISIT_PREP_RUNTIME_TOOL) ?? {
+    enabled: false,
+    label: '本轮对话结果',
+    description: '客户拜访准备仅返回本轮对话 Markdown，不沉淀为资料资产。',
+  };
+}
+
+function buildYunzhijiaVisitPrepRequestText(input: {
+  customerName: string;
+  companyName: string;
+  customerNeed: string;
+  visitAudience?: string;
+}): string {
+  return [
+    `请为客户 ${input.customerName} 生成客户拜访讲解准备 Markdown。`,
+    input.companyName && input.companyName !== input.customerName ? `客户关联公司：${input.companyName}` : '',
+    input.customerNeed
+      ? `客户初步需求：${input.customerNeed}`
+      : '客户初步需求：未提供。请基于客户关联公司研究生成通用拜访准备，并在正文标注待销售确认的问题。',
+    input.visitAudience ? `拜访对象：${input.visitAudience}` : '',
+    '请优先读取附件中的公司研究 Markdown，结合 Skill 自带 product-knowledge.md 与 output-template.md 输出。',
+    '不得编造附件中不存在的客户研究背景；缺少事实时请标注需销售确认。',
+  ].filter(Boolean).join('\n');
+}
+
+function writeYunzhijiaVisitPrepResearchAttachment(input: {
+  options: CrmAgentPackOptions;
+  runId: string;
+  companyName: string;
+  markdown: string;
+}): string {
+  const rootDir = resolve(dirname(input.options.config.meta.envFilePath));
+  const outputDir = resolve(rootDir, '.local/agent-runtime-attachments', input.runId);
+  mkdirSync(outputDir, { recursive: true });
+  const filePath = resolve(outputDir, `${sanitizeFileName(input.companyName)}-company-research.md`);
+  writeFileSync(filePath, input.markdown, 'utf8');
+  return filePath;
+}
+
+function sanitizeFileName(value: string): string {
+  return value
+    .replace(/[\\/:"*?<>|]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'company-research';
+}
+
+function buildYunzhijiaVisitPrepInputRequiredResult(input: {
+  companyName: string;
+  customerNeed: string;
+  missing: 'customerName';
+  taskPlan?: TaskPlan;
+}): AgentToolExecutionResult {
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 需要客户名称',
+      '请在 `/拜访准备` 后输入客户名称，客户关注点可选。',
+      '',
+      '## 输入示例',
+      '`/拜访准备 贝斯美`',
+      '',
+      '## 当前处理',
+      '- 未调用客户拜访准备助手。',
+      '- 未生成或保存拜访准备资料。',
+    ].join('\n'),
+    headline: '请补充客户名称',
+    references: [YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    toolCalls: [],
+    taskPlan: markYunzhijiaVisitPrepBlockedPlan(input.taskPlan),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.input_required',
+        action: 'block',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: '缺少有效客户名称，已阻止外部技能调用。',
+      }),
+    ],
+  };
+}
+
+function buildYunzhijiaVisitPrepMissingResearchResult(input: {
+  customer: YunzhijiaVisitPrepCustomerContext;
+  customerNeed: string;
+  toolCalls: AgentToolExecutionResult['toolCalls'];
+  taskPlan?: TaskPlan;
+}): AgentToolExecutionResult {
+  return {
+    status: 'waiting_input',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 需要先生成公司研究资料',
+      `- 客户：**${input.customer.customerName}**`,
+      `- 公司：**${input.customer.companyName}**`,
+      input.customerNeed ? `- 已收到客户初步需求：${input.customerNeed}` : '- 客户初步需求：未提供，可后续补充。',
+      '',
+      '## 当前处理',
+      '- 未找到有效公司研究 Markdown。',
+      '- 未调用客户拜访准备助手。',
+      '- 未编造客户研究背景，也未保存拜访准备资料。',
+      '',
+      '## 建议下一步',
+      `请先执行 \`/公司研究 ${input.customer.companyName}\`，研究资料生成或关联到该客户后再执行 \`/拜访准备 ${input.customer.customerName}\`。`,
+    ].filter(Boolean).join('\n'),
+    headline: '需要先生成公司研究资料',
+    references: [COMPANY_RESEARCH_MATERIAL_LABEL, YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    contextFrame: buildCustomerContextFrame(input.customer),
+    toolCalls: input.toolCalls,
+    taskPlan: markYunzhijiaVisitPrepBlockedPlan(input.taskPlan),
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.company_research_required',
+        action: 'block',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: '客户拜访准备必须消费已选客户关联或兼容命中的公司研究 Markdown；当前未找到有效资料，已阻止外部技能调用。',
+      }),
+    ],
+  };
+}
+
+function buildYunzhijiaVisitPrepLookupUnavailableResult(
+  companyName: string,
+  error: unknown,
+  toolCalls: AgentToolExecutionResult['toolCalls'],
+): AgentToolExecutionResult {
+  const message = getErrorMessage(error);
+  return {
+    status: 'tool_unavailable',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 公司研究资料查询失败',
+      `- 公司：**${companyName}**`,
+      `- 失败原因：${message}`,
+      '',
+      '## 当前处理',
+      '- 未调用客户拜访准备助手。',
+      '- 未生成降级拜访材料。',
+    ].join('\n'),
+    headline: '公司研究资料查询失败，未触发拜访准备',
+    references: [COMPANY_RESEARCH_MATERIAL_LABEL, YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    contextFrame: buildCompanyContextFrame(companyName),
+    toolCalls,
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.lookup_required',
+        action: 'block',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: `公司研究资料查询失败，为避免伪资料已阻止外部技能调用：${message}`,
+      }),
+    ],
+  };
+}
+
+function buildYunzhijiaVisitPrepUnavailableResult(
+  companyName: string,
+  error: unknown,
+  toolCalls: AgentToolExecutionResult['toolCalls'],
+): AgentToolExecutionResult {
+  const message = getErrorMessage(error);
+  return {
+    status: 'tool_unavailable',
+    currentStepKey: 'execute-tool',
+    content: [
+      '## 客户拜访准备执行失败',
+      `- 公司：**${companyName}**`,
+      `- 服务：${YUNZHIJIA_VISIT_PREP_SERVICE_LABEL}`,
+      `- 失败原因：${message}`,
+      '',
+      '## 当前处理',
+      '- 未生成降级拜访材料。',
+      '- 未写入客户、联系人、商机或跟进记录。',
+    ].join('\n'),
+    headline: '客户拜访准备执行失败，未生成资料',
+    references: [YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
+    evidence: [],
+    attachments: [],
+    contextFrame: buildCompanyContextFrame(companyName),
+    toolCalls,
+    policyDecisions: [
+      createPolicyDecision({
+        policyCode: 'external.yunzhijia_visit_prep.no_degraded_artifact',
+        action: 'block',
+        toolCode: YUNZHIJIA_VISIT_PREP_TOOL,
+        reason: `客户拜访准备失败时不得生成降级资料：${message}`,
+      }),
+    ],
+  };
+}
+
+function buildRuntimeMarkdownAttachments(job: ExternalSkillJobResponse): AgentAttachment[] {
+  return job.artifacts
+    .filter((artifact) => artifact.mimeType.includes('markdown') || artifact.fileName.toLowerCase().endsWith('.md'))
+    .map((artifact) => ({
+      name: artifact.fileName,
+      url: artifact.downloadPath,
+      type: artifact.mimeType || 'text/markdown',
+      size: artifact.byteSize,
+    }));
+}
+
+function markYunzhijiaVisitPrepBlockedPlan(taskPlan?: TaskPlan): TaskPlan | undefined {
+  if (!taskPlan) {
+    return undefined;
+  }
+
+  return {
+    ...taskPlan,
+    status: 'waiting_input',
+    steps: taskPlan.steps.map((item) => item.key === 'execute-tool' ? { ...item, status: 'skipped' } : item),
+  };
 }
 
 function scheduleCompanyResearchArtifactBackfill(input: {
@@ -8326,7 +10842,11 @@ async function backfillCompanyResearchArtifact(
   });
 }
 
-async function resolveMarkdownFromJob(options: CrmAgentPackOptions, job: ExternalSkillJobResponse): Promise<string> {
+async function resolveMarkdownFromJob(
+  options: CrmAgentPackOptions,
+  job: ExternalSkillJobResponse,
+  emptyMessage = '公司研究服务未返回可用研究资料',
+): Promise<string> {
   const markdownArtifact = job.artifacts.find((item) => item.mimeType.includes('markdown')) ?? job.artifacts[0];
   if (markdownArtifact) {
     const { content } = await options.externalSkillService.getSkillJobArtifact(job.jobId, markdownArtifact.artifactId);
@@ -8340,7 +10860,7 @@ async function resolveMarkdownFromJob(options: CrmAgentPackOptions, job: Externa
     return job.finalText.trim();
   }
 
-  throw new Error('公司研究服务未返回可用研究资料');
+  throw new Error(emptyMessage);
 }
 
 async function findReusableCompanyResearchArtifact(
@@ -8648,6 +11168,21 @@ function buildCompanyContextFrame(companyName: string, sourceRunId?: string): Co
   };
 }
 
+function buildCustomerContextFrame(customer: YunzhijiaVisitPrepCustomerContext, sourceRunId?: string): ContextFrame {
+  return {
+    subject: {
+      kind: 'record',
+      type: 'customer',
+      id: customer.customerFormInstId,
+      name: customer.customerName,
+    },
+    sourceRunId,
+    evidenceRefs: [],
+    confidence: 0.95,
+    resolvedBy: YUNZHIJIA_VISIT_PREP_TOOL,
+  };
+}
+
 function buildCompanyAnchor(companyName: string): ArtifactAnchor {
   return {
     type: 'company',
@@ -8656,6 +11191,17 @@ function buildCompanyAnchor(companyName: string): ArtifactAnchor {
     role: 'primary',
     confidence: 0.86,
     bindingStatus: 'unbound',
+  };
+}
+
+function buildCustomerAnchor(customerId: string, customerName: string): ArtifactAnchor {
+  return {
+    type: 'customer',
+    id: customerId,
+    name: customerName,
+    role: 'primary',
+    confidence: 0.96,
+    bindingStatus: 'bound',
   };
 }
 

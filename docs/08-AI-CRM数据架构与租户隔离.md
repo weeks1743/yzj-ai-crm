@@ -262,6 +262,7 @@ MVP 的强隔离边界：
 - Mongo 文档必须写入 `eid + appId`。
 - Qdrant payload 必须写入 `eid + appId`。
 - 查询与检索必须用同一组 `eid + appId` 过滤。
+- `0.10.4` 起，Agent 资料空间中的 `appId` 明确取 `config.yzj.lightCloud.appId`，也就是轻云 `AI销售助手_记录系统` APPID；AI 轻应用 `config.yzj.appId` 仅用于 SSO/ticket 鉴权，不参与资料资产和向量隔离。
 
 Artifact 支持多个锚点：
 

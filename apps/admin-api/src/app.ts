@@ -18,6 +18,7 @@ import type {
   ExternalSkillPresentationSessionHeartbeatRequest,
   ExternalSkillPresentationSessionOpenRequest,
   ImageGenerationRequest,
+  MarkdownImageGenerationRequest,
   RecordingTaskCreateRequest,
   RecordingTaskMaterializeRequest,
   ShadowObjectKey,
@@ -46,6 +47,7 @@ import { ShadowMetadataService } from './shadow-metadata-service.js';
 import { buildMetaQuestionOptionsResponse, buildRecordSearchPageResponse } from './crm-agent-pack.js';
 import type { RecordingTaskService } from './recording-task-service.js';
 import type { YzjClient } from './yzj-client.js';
+import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 interface CreateAdminApiServerOptions {
   config: AppConfig;
@@ -227,10 +229,11 @@ function parseJsonField<T>(value: string | undefined, fallbackValue: T): T {
 }
 
 function buildLocalFixedIdentity(config: AppConfig): YzjAuthIdentityResponse {
+  const tenant = resolveAgentIsolationTenant(config);
   return {
     source: 'local_fixed',
-    eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    eid: tenant.eid,
+    appId: tenant.appId,
     operatorOpenId: LOCAL_FIXED_OPERATOR_OPEN_ID,
     userId: null,
     userName: '陈伟棠',
@@ -244,11 +247,14 @@ function withDefaultTenantContext(
   request: AgentChatRequest,
 ): AgentChatRequest {
   const localIdentity = buildLocalFixedIdentity(config);
+  const tenant = resolveAgentIsolationTenant(config, {
+    eid: request.tenantContext?.eid ?? localIdentity.eid,
+  });
   return {
     ...request,
     tenantContext: {
-      eid: request.tenantContext?.eid?.trim() || localIdentity.eid,
-      appId: request.tenantContext?.appId?.trim() || localIdentity.appId,
+      eid: tenant.eid,
+      appId: tenant.appId,
       operatorOpenId: request.tenantContext?.operatorOpenId?.trim() || localIdentity.operatorOpenId,
     },
   };
@@ -279,11 +285,12 @@ async function resolveYzjTicketIdentity(
   if (eid !== options.config.yzj.eid) {
     throw new BadRequestError(`当前工作圈 ${eid} 未接入 AI销售助手`);
   }
+  const tenant = resolveAgentIsolationTenant(options.config, { eid });
 
   return {
     source: 'ticket',
-    eid,
-    appId: context.appid?.trim() || options.config.yzj.appId,
+    eid: tenant.eid,
+    appId: tenant.appId,
     operatorOpenId: context.openid.trim(),
     userId: context.userid?.trim() || null,
     userName: context.username?.trim() || '云之家用户',
@@ -655,6 +662,15 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
       if (method === 'POST' && url.pathname === '/api/external-skills/image-generate') {
         const payload = await readJsonBody<ImageGenerationRequest>(request);
         writeJson(response, 200, await options.externalSkillService.generateImage(payload));
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/markdown/image') {
+        if (!options.artifactImageService) {
+          throw new ServiceUnavailableError('Markdown 图片生成服务未启用');
+        }
+        const payload = await readJsonBody<MarkdownImageGenerationRequest>(request);
+        writeJson(response, 200, await options.artifactImageService.generateMarkdownImage(payload));
         return;
       }
 

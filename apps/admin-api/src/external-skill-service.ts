@@ -1,6 +1,7 @@
 import type {
   AppConfig,
   EnterprisePptTemplateItem,
+  ExternalSkillAssetMaterializationConfig,
   ExternalSkillCatalogItem,
   ExternalSkillDebugConfig,
   ExternalSkillJobArtifact,
@@ -38,6 +39,39 @@ const FALLBACK_SKILL_RUNTIME_MODELS: SkillRuntimeModelName[] = [
   'deepseek-v4-flash',
   'deepseek-v4-pro',
 ];
+
+const COMPANY_RESEARCH_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializationConfig = {
+  enabled: true,
+  artifactKind: 'company_research',
+  label: '公司研究资料',
+  description: '生成后沉淀为可复用公司研究资料，可被拜访准备和问答检索复用。',
+};
+
+const RECORDING_MATERIAL_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializationConfig = {
+  enabled: true,
+  artifactKind: 'recording_material',
+  label: '录音资料包',
+  description: '录音处理完成后沉淀为录音资料包，供后续分析技能消费。',
+};
+
+const RECORDING_ANALYSIS_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializationConfig = {
+  enabled: true,
+  artifactKind: 'analysis_material',
+  label: '录音分析资料',
+  description: '基于录音资料包生成的分析结果会沉淀为可复用分析资料。',
+};
+
+const VISIT_PREP_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializationConfig = {
+  enabled: false,
+  label: '本轮对话结果',
+  description: '客户拜访准备仅返回本轮对话 Markdown，不沉淀为资料资产，也不进入向量检索。',
+};
+
+const NON_MATERIALIZED_ASSET_STRATEGY: ExternalSkillAssetMaterializationConfig = {
+  enabled: false,
+  label: '不沉淀资料资产',
+  description: '该能力的输出不写入资料资产库。',
+};
 
 const ALLOWED_SIZES = new Set<ImageGenerationSize>([
   'auto',
@@ -77,6 +111,7 @@ interface RuntimeBackedSkillDefinition {
   provider: string;
   requiredDependencies: string[];
   artifactKind: ExternalSkillDebugConfig['artifactKind'];
+  assetMaterialization: ExternalSkillAssetMaterializationConfig;
   requiresModel?: boolean;
   trigger: string;
   route?: string;
@@ -101,6 +136,7 @@ type StaticExternalSkillDefinition =
       debugMode: 'image_generate';
       supportsInvoke: true;
       implementationType: 'http_request';
+      assetMaterialization?: ExternalSkillAssetMaterializationConfig;
     }
   | {
       id: string;
@@ -116,6 +152,7 @@ type StaticExternalSkillDefinition =
       debugMode: 'none';
       supportsInvoke: false;
       implementationType: 'placeholder';
+      assetMaterialization?: ExternalSkillAssetMaterializationConfig;
     }
   | RuntimeBackedSkillDefinition;
 
@@ -128,6 +165,7 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     provider: SKILL_RUNTIME_PROVIDER_CODE,
     requiredDependencies: ['env:DEEPSEEK_API_KEY', 'env:ARK_API_KEY'],
     artifactKind: 'markdown',
+    assetMaterialization: COMPANY_RESEARCH_ASSET_MATERIALIZATION,
     trigger: '客户分析 / 公司研究',
     route: '/chat/customer-analysis',
     owner: '研究能力组',
@@ -144,6 +182,7 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     provider: SKILL_RUNTIME_PROVIDER_CODE,
     requiredDependencies: ['env:DEEPSEEK_API_KEY'],
     artifactKind: 'markdown',
+    assetMaterialization: RECORDING_ANALYSIS_ASSET_MATERIALIZATION,
     trigger: '拜访录音 / 会议纪要理解',
     route: '/chat/conversation-understanding',
     owner: '销售分析能力组',
@@ -160,6 +199,7 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     provider: SKILL_RUNTIME_PROVIDER_CODE,
     requiredDependencies: ['env:DEEPSEEK_API_KEY'],
     artifactKind: 'markdown',
+    assetMaterialization: RECORDING_ANALYSIS_ASSET_MATERIALIZATION,
     trigger: '需求澄清 / 待办拆解',
     route: '/chat/needs-todo-analysis',
     owner: '销售分析能力组',
@@ -176,6 +216,7 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     provider: SKILL_RUNTIME_PROVIDER_CODE,
     requiredDependencies: ['env:DEEPSEEK_API_KEY'],
     artifactKind: 'markdown',
+    assetMaterialization: RECORDING_ANALYSIS_ASSET_MATERIALIZATION,
     trigger: '问题定义 / PRD 前置澄清',
     route: '/chat/problem-statement',
     owner: '销售分析能力组',
@@ -192,6 +233,7 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     provider: SKILL_RUNTIME_PROVIDER_CODE,
     requiredDependencies: ['env:DEEPSEEK_API_KEY'],
     artifactKind: 'markdown',
+    assetMaterialization: RECORDING_ANALYSIS_ASSET_MATERIALIZATION,
     trigger: '价值主张梳理 / 方案推进',
     route: '/chat/value-positioning',
     owner: '销售分析能力组',
@@ -201,6 +243,23 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
       '例如：基于客户问题陈述，输出金蝶可交付的价值主张、推进话术和下一步建议。',
   },
   {
+    id: 'ext-009',
+    label: '客户拜访准备助手',
+    skillCode: 'ext.yunzhijia_visit_prep',
+    runtimeSkillName: 'yunzhijia-visit-prep',
+    provider: SKILL_RUNTIME_PROVIDER_CODE,
+    requiredDependencies: ['env:DEEPSEEK_API_KEY', '有效公司研究 md'],
+    artifactKind: 'markdown',
+    assetMaterialization: VISIT_PREP_ASSET_MATERIALIZATION,
+    trigger: '拜访准备 / 客户拜访 / 讲解提纲 / 客户演示准备',
+    route: '/chat',
+    owner: '云之家销售赋能组',
+    sla: 'P95 < 20 秒',
+    summary: '基于已沉淀的公司研究资料和客户初步需求，生成云之家销售拜访讲解提纲、话术要点与竞品应对。',
+    requestPlaceholder:
+      '例如：基于公司研究 md，为绍兴贝斯美化工股份有限公司准备拜访材料，客户关注统一门户和流程审批。',
+  },
+  {
     id: 'ext-008',
     label: 'super-ppt',
     skillCode: 'ext.super_ppt',
@@ -208,6 +267,7 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     provider: 'docmee-v2',
     requiredDependencies: ['env:DOCMEE_API_KEY'],
     artifactKind: 'presentation',
+    assetMaterialization: NON_MATERIALIZED_ASSET_STRATEGY,
     requiresModel: false,
     trigger: 'Markdown 报告 / 企业研究 PPT 生成',
     route: '/skills/external-skills/super-ppt/editor',
@@ -234,6 +294,7 @@ const STATIC_EXTERNAL_SKILLS: StaticExternalSkillDefinition[] = [
     debugMode: 'image_generate',
     supportsInvoke: true,
     implementationType: 'http_request',
+    assetMaterialization: NON_MATERIALIZED_ASSET_STRATEGY,
   },
   ...RUNTIME_SKILL_DEFINITIONS,
   {
@@ -250,6 +311,7 @@ const STATIC_EXTERNAL_SKILLS: StaticExternalSkillDefinition[] = [
     debugMode: 'none',
     supportsInvoke: false,
     implementationType: 'placeholder',
+    assetMaterialization: RECORDING_MATERIAL_ASSET_MATERIALIZATION,
   },
 ];
 
@@ -337,6 +399,7 @@ export class ExternalSkillService {
       debugConfig: {
         artifactKind: 'image',
       },
+      assetMaterialization: NON_MATERIALIZED_ASSET_STRATEGY,
       provider: IMAGE_PROVIDER_CODE,
       model: this.options.config.external.image.model,
       owner: '平台集成组',
@@ -360,6 +423,7 @@ export class ExternalSkillService {
       implementationType: 'placeholder',
       supportsInvoke: false,
       debugMode: 'none',
+      assetMaterialization: definition.assetMaterialization,
       provider: definition.provider,
       model: null,
       owner: definition.owner,
@@ -395,6 +459,7 @@ export class ExternalSkillService {
         runtimeSkillName: definition.runtimeSkillName,
         debugMode: 'skill_job',
         debugConfig,
+        assetMaterialization: definition.assetMaterialization,
         provider: definition.provider,
         model: displayModel,
         owner: definition.owner,
@@ -418,6 +483,7 @@ export class ExternalSkillService {
         runtimeSkillName: definition.runtimeSkillName,
         debugMode: 'skill_job',
         debugConfig,
+        assetMaterialization: definition.assetMaterialization,
         provider: definition.provider,
         model: displayModel,
         owner: definition.owner,
@@ -449,6 +515,7 @@ export class ExternalSkillService {
       runtimeSkillName: definition.runtimeSkillName,
       debugMode: 'skill_job',
       debugConfig,
+      assetMaterialization: definition.assetMaterialization,
       provider: definition.provider,
       model: displayModel,
       missingDependencies: runtimeEntry.missingDependencies,
@@ -494,6 +561,11 @@ export class ExternalSkillService {
     return skillDefinition;
   }
 
+  getSkillAssetMaterialization(skillCode: string): ExternalSkillAssetMaterializationConfig | null {
+    const skillDefinition = STATIC_EXTERNAL_SKILLS.find((item) => item.skillCode === skillCode);
+    return skillDefinition?.assetMaterialization ?? null;
+  }
+
   async listSkills(): Promise<ExternalSkillCatalogItem[]> {
     let runtimeCatalog = new Map<string, SkillRuntimeCatalogEntry>();
     let runtimeModels: SkillRuntimeModelDescriptor[] = [];
@@ -525,9 +597,6 @@ export class ExternalSkillService {
 
   async createSkillJob(skillCode: string, input: ExternalSkillJobRequest): Promise<ExternalSkillJobResponse> {
     const runtimeSkill = this.getRuntimeSkillDefinition(skillCode);
-    const activeTemplate = skillCode === 'ext.super_ppt'
-      ? await this.options.enterprisePptTemplateResolver?.getActiveTemplate()
-      : null;
     const effectivePrompt = skillCode === 'ext.super_ppt'
       ? (
           this.options.enterprisePptTemplateResolver?.getEffectivePrompt
@@ -539,7 +608,6 @@ export class ExternalSkillService {
       ...input,
       ...(skillCode === 'ext.super_ppt'
         ? {
-            templateId: activeTemplate?.templateId,
             presentationPrompt: effectivePrompt ?? undefined,
           }
         : {}),

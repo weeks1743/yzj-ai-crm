@@ -902,7 +902,7 @@ const scenarios: AgentScenario[] = [
           status: 'waiting_input',
           selectedTool: 'record.customer.preview_create',
           policyCode: 'record.preview_empty_payload_guard',
-          contentIncludes: ['写入预览被守卫阻断'],
+          contentIncludes: ['还没有识别到可写入内容'],
         },
       },
     ],
@@ -2404,7 +2404,7 @@ const qaRecoveryScenarios: AgentScenario[] = [
     title: '恢复补槽：空 payload 守卫可见但不吞掉上下文',
     turns: [
       { query: '查询联系人 李玲玲', mock: { searchRecords: [recordFixture('contact', 'contact-empty-001', '李玲玲')] }, expect: { status: 'completed', selectedTool: 'record.contact.search' } },
-      { query: '更新这个联系人', mock: { previewEmptyPayload: true }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', policyCode: 'record.preview_empty_payload_guard' } },
+      { query: '更新这个联系人', mock: { previewEmptyPayload: true }, expect: { status: 'waiting_input', selectedTool: 'record.contact.preview_update', policyCode: 'record.update_fields_required', contentIncludes: ['还需要说明要修改什么'] } },
       { query: '备注：喜欢喝茶', mock: { previewReady: true }, expect: { status: 'waiting_confirmation', selectedTool: 'record.contact.preview_update', continuationAction: 'resume_pending_interaction', assert: assertLatestPreviewParam('record.contact.preview_update', 'Ta_1', '喜欢喝茶') } },
       { query: '确认写回', resumeDecision: 'approve', expect: { status: 'completed', selectedTool: 'record.contact.commit_update' } },
     ],

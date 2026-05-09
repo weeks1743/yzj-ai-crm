@@ -12,6 +12,7 @@ const EXECUTABLE_SKILLS = new Set([
   'customer-needs-todo-analysis',
   'problem-statement',
   'customer-value-positioning',
+  'yunzhijia-visit-prep',
   'super-ppt',
   'pptx',
 ]);
@@ -31,6 +32,9 @@ const SKILL_DEPENDENCIES: Record<string, string[]> = {
     'env:DEEPSEEK_API_KEY',
   ],
   'customer-value-positioning': [
+    'env:DEEPSEEK_API_KEY',
+  ],
+  'yunzhijia-visit-prep': [
     'env:DEEPSEEK_API_KEY',
   ],
   'super-ppt': [
@@ -95,6 +99,7 @@ function resolveAllowedTools(skill: LoadedSkill): string[] {
     || skill.skillName === 'customer-needs-todo-analysis'
     || skill.skillName === 'problem-statement'
     || skill.skillName === 'customer-value-positioning'
+    || skill.skillName === 'yunzhijia-visit-prep'
   ) {
     return ['read_skill_file', 'read_source_file', 'write_text_artifact'];
   }

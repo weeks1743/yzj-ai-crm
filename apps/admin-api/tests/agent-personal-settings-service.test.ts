@@ -27,7 +27,7 @@ test('AgentPersonalSettingsService reads default SOUL and resolves employee disp
     `,
     [
       config.yzj.eid,
-      config.yzj.appId,
+      config.yzj.lightCloud.appId,
       '69e75eb5e4b0e65b61c014da',
       '陈伟棠',
       new Date().toISOString(),

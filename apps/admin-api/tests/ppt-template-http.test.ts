@@ -164,8 +164,8 @@ test('HTTP ppt-template endpoints support upload, activate, download, and delete
     };
     assert.equal(listPayload.items.length, 1);
     assert.equal(listPayload.activeTemplate, null);
-    assert.equal(listPayload.defaultPrompt, '请基于完整材料生成专业、清晰、适合管理层汇报的科技行业PPT');
-    assert.equal(listPayload.effectivePrompt, '请基于完整材料生成专业、清晰、适合管理层汇报的科技行业PPT');
+    assert.equal(listPayload.defaultPrompt, '请生成8页以内管理层汇报PPT');
+    assert.equal(listPayload.effectivePrompt, '请生成8页以内管理层汇报PPT');
     assert.equal(listPayload.isFallbackApplied, false);
 
     const promptResponse = await fetch(`${baseUrl}/api/settings/ppt-templates/default-prompt`, {

@@ -8,6 +8,7 @@ export const GENERIC_TOOL_CONTRACTS = [
   'record.object.commit_create',
   'record.object.commit_update',
   'external.company_research',
+  'external.yunzhijia_visit_prep',
   'artifact.search',
   'artifact.recording_material.prepare',
   'meta.clarify_card',

@@ -157,6 +157,12 @@ const CUSTOMER_WIDGET_MAP = {
     type: 'personSelectWidget',
     required: false,
   },
+  De_0: {
+    codeId: 'De_0',
+    title: '所属部门',
+    type: 'departmentSelectWidget',
+    required: false,
+  },
   Ra_3: {
     codeId: 'Ra_3',
     title: '客户类型',
@@ -1550,6 +1556,7 @@ class StubWidgetValueOnlyLightCloudClient extends StubLightCloudClient {
               Pw_1: [{ dicId: 'd-city-nt', title: '南通市' }],
               Ra_0: 'customer-active',
               Ra_3: 'EeFfGgHh',
+              De_0: ['69faf11ad03e580001fd4508'],
               Te_5: '陈晨',
               _S_NAME: '联系人姓名：陈晨联系人手机：13612952103启用状态：启用客户类型：普通客户客户状态：销售线索阶段客户是否分配：已分配负责人：69e75eb5e4b0e65b61c014da',
               _S_TITLE: '联系人姓名：陈晨联系人手机：13612952103启用状态：启用客户类型：普通客户客户状态：销售线索阶段客户是否分配：已分配负责人：69e75eb5e4b0e65b61c014da',
@@ -2665,7 +2672,57 @@ test('ShadowMetadataService synthesizes live fields from formInstance.widgetValu
     assert.deepEqual(record?.fieldMap.Pw_0?.value, ['江苏']);
     assert.equal(record?.fieldMap.Ps_0?.title, '负责人');
     assert.equal(record?.fieldMap.Ps_0?.value, '陈伟棠');
+    assert.equal(record?.fieldMap.De_0?.title, '所属部门');
+    assert.equal(record?.fieldMap.De_0?.value, '已选择部门');
     assert.equal(record?.fieldMap._S_DISABLE?.value, '启用');
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ShadowMetadataService does not derive opportunity or followup titles from operator IDs', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-derived-title-'));
+  const dictionaryPath = join(tempDir, 'shadow-dictionaries.json');
+  const service = createService(dictionaryPath, join(tempDir, 'skills'));
+  const operatorOpenId = '69e75eb5e4b0e65b61c014da';
+
+  try {
+    await service.refreshObject('opportunity');
+    await service.refreshObject('followup');
+
+    const opportunityPreview = await service.previewUpsert('opportunity', {
+      mode: 'create',
+      operatorOpenId,
+      params: {
+        opportunity_name: '智能制造升级项目',
+        opportunity_status: '跟进中',
+        owner_open_id: 'open-sales-1',
+        linked_customer_form_inst_id: CUSTOMER_FORM_INST_ID,
+        expected_close_date: '2026-05-01',
+        opportunity_budget: 500000,
+      },
+    });
+    const opportunityWidgetValue = (opportunityPreview.requestBody as {
+      data: Array<{ widgetValue: Record<string, unknown> }>;
+    }).data[0]?.widgetValue ?? {};
+    assert.equal(opportunityWidgetValue._S_TITLE, '智能制造升级项目');
+    assert.doesNotMatch(String(opportunityWidgetValue._S_TITLE ?? ''), new RegExp(operatorOpenId));
+
+    const followupPreview = await service.previewUpsert('followup', {
+      mode: 'create',
+      operatorOpenId,
+      params: {
+        followup_record: '完成现场回访并记录问题',
+        followup_method: '电话',
+        owner_open_id: 'open-followup-1',
+        linked_customer_form_inst_id: CUSTOMER_FORM_INST_ID,
+      },
+    });
+    const followupWidgetValue = (followupPreview.requestBody as {
+      data: Array<{ widgetValue: Record<string, unknown> }>;
+    }).data[0]?.widgetValue ?? {};
+    assert.equal(followupWidgetValue._S_TITLE, '完成现场回访并记录问题');
+    assert.doesNotMatch(String(followupWidgetValue._S_TITLE ?? ''), new RegExp(operatorOpenId));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

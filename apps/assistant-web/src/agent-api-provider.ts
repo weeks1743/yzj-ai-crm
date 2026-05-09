@@ -15,7 +15,7 @@ export const ASSISTANT_OPERATOR_OPEN_ID =
 export const ASSISTANT_LOCAL_IDENTITY: YzjAuthIdentityResponse = {
   source: 'local_fixed',
   eid: '21024647',
-  appId: '501037729',
+  appId: '501037649',
   operatorOpenId: ASSISTANT_OPERATOR_OPEN_ID,
   userId: null,
   userName: '陈伟棠',
@@ -44,26 +44,32 @@ function isLocalDebugHost() {
   return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 }
 
-export async function resolveAssistantIdentity(ticket?: string): Promise<YzjAuthIdentityResponse> {
-  const normalizedTicket = ticket?.trim();
-  const allowLocalIdentity =
+function shouldUseLocalIdentityWithoutServer(normalizedTicket: string | undefined) {
+  return !normalizedTicket && (
     import.meta.env.DEV ||
     import.meta.env.VITE_YZJ_ALLOW_LOCAL_IDENTITY === 'true' ||
-    isLocalDebugHost();
+    isLocalDebugHost()
+  );
+}
 
-  if (!normalizedTicket && !allowLocalIdentity) {
+export async function resolveAssistantIdentity(ticket?: string): Promise<YzjAuthIdentityResponse> {
+  const normalizedTicket = ticket?.trim();
+  const useLocalIdentity = shouldUseLocalIdentityWithoutServer(normalizedTicket);
+
+  if (useLocalIdentity) {
+    return ASSISTANT_LOCAL_IDENTITY;
+  }
+
+  if (!normalizedTicket) {
     throw new Error('缺少云之家 ticket，请从云之家轻应用入口进入。');
   }
 
-  const endpoint = normalizedTicket ? '/api/yzj/auth/resolve-ticket' : '/api/yzj/auth/local-identity';
-  const response = normalizedTicket
-    ? await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticket: normalizedTicket }),
-        cache: 'no-store',
-      })
-    : await fetch(endpoint, { cache: 'no-store' });
+  const response = await fetch('/api/yzj/auth/resolve-ticket', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticket: normalizedTicket }),
+    cache: 'no-store',
+  });
 
   if (!response.ok) {
     const reason = await readApiError(response);
@@ -83,6 +89,7 @@ export interface AssistantAttachment {
 export interface AssistantEvidenceCard {
   artifactId: string;
   versionId: string;
+  kind?: 'company_research' | 'recording_material' | 'analysis_material';
   title: string;
   version: number;
   sourceToolCode: string;
@@ -90,6 +97,7 @@ export interface AssistantEvidenceCard {
   snippet: string;
   score?: number;
   vectorStatus?: string;
+  recordingTaskId?: string;
 }
 
 export interface AssistantFieldOptionHint {
@@ -103,7 +111,7 @@ export interface AssistantFieldOptionHint {
 export interface AssistantMetaQuestionLookup {
   kind: 'remote_select';
   endpoint: '/api/agent/meta-question-options';
-  source: 'employee' | 'record';
+  source: 'employee' | 'record' | 'field_option';
   targetObjectKey?: string;
   minKeywordLength: 1;
   pageSize: number;
@@ -135,6 +143,11 @@ export interface AssistantMetaQuestion {
 export interface AssistantMetaQuestionCard {
   title: string;
   description?: string;
+  layout?: 'missing_fields' | 'update_field_picker';
+  targetSummary?: {
+    label: string;
+    value: string;
+  };
   toolCode: string;
   submitLabel: string;
   currentValues: Record<string, {

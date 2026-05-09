@@ -46,6 +46,7 @@ const GENERIC_TEXT_SKILLS = new Set([
   'customer-needs-todo-analysis',
   'problem-statement',
   'customer-value-positioning',
+  'yunzhijia-visit-prep',
 ]);
 const SUPER_PPT_SKILL = 'super-ppt';
 const SUPER_PPT_OFFICIAL_FLOW_TIMEOUT_MS = 600_000;
@@ -99,7 +100,29 @@ function isDocmeeTemplateLayoutFailure(error: unknown): boolean {
   })().toLowerCase();
   const combined = `${error.message}\n${detailsText}`.toLowerCase();
   return combined.includes('模板解析失败')
+    || combined.includes('未识别到可用内容页')
     || combined.includes('classification result must include at least one content page');
+}
+
+function createDocmeeTemplateFailureMessage(): string {
+  return '当前企业 PPT 模板未被 Docmee 识别出内容页，请在后台更换或修复模板后重试。';
+}
+
+function createDocmeeOfficialFlowFailureMessage(error: unknown, hasEnterpriseTemplate: boolean): string {
+  if (isDocmeeTemplateLayoutFailure(error)) {
+    return createDocmeeTemplateFailureMessage();
+  }
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  if (/未在预期时间内完成|timeout|timed out|超时/i.test(rawMessage)) {
+    if (!hasEnterpriseTemplate) {
+      return 'PPT 排版任务未在预期时间内完成，已停止本次生成。请稍后重试。';
+    }
+    return 'PPT 排版任务未在预期时间内完成，已停止本次生成。请稍后重试；如持续失败，请在后台检查企业 PPT 模板。';
+  }
+  if (!hasEnterpriseTemplate) {
+    return 'Docmee 官方 PPT 排版链路未完成，已停止本次生成。请稍后重试。';
+  }
+  return 'Docmee 官方 PPT 排版链路未完成，已停止本次生成，未执行默认模板降级。请检查企业 PPT 模板兼容性或稍后重试。';
 }
 
 function walkFiles(baseDir: string, currentDir = baseDir): string[] {
@@ -564,13 +587,14 @@ export class SkillExecutor {
       latestDataError = officialFlowError.message;
 
       if (input.job.templateId && isDocmeeTemplateLayoutFailure(error)) {
-        await input.emitEvent('error', 'Docmee 模板解析失败，已停止本次带模板生成', {
+        const userMessage = createDocmeeTemplateFailureMessage();
+        await input.emitEvent('error', userMessage, {
           taskId: task.id,
           templateId: input.job.templateId,
           reason: error instanceof Error ? error.message : String(error),
         });
         throw new ExternalServiceError(
-          'Docmee 模板解析失败：当前模板未识别到可用内容页，请在企业PPT模板中更换或修复模板后重试。',
+          userMessage,
           {
             taskId: task.id,
             templateId: input.job.templateId,
@@ -579,14 +603,15 @@ export class SkillExecutor {
         );
       }
 
-      await input.emitEvent('error', 'Docmee 官方链路未完成，已停止本次生成，未执行降级链路', {
+      const userMessage = createDocmeeOfficialFlowFailureMessage(error, Boolean(input.job.templateId));
+      await input.emitEvent('error', userMessage, {
         taskId: task.id,
         templateId: input.job.templateId,
         reason: officialFlowError.message,
         officialFlowError: officialFlowError.details ?? null,
       });
       throw new ExternalServiceError(
-        'Docmee 官方链路未完成，已停止本次生成，未执行降级 PPT。请检查模板兼容性或等待布局任务完成后重试。',
+        userMessage,
         {
           taskId: task.id,
           templateId: input.job.templateId,

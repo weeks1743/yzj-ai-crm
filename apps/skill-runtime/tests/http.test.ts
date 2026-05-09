@@ -260,6 +260,100 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
   }
 });
 
+test('POST /api/jobs runs yunzhijia visit prep with company research attachment', async () => {
+  const tempRoot = createTempDir('skill-runtime-http-visit-prep-');
+  const skillDir = resolve(REPO_ROOT, '3rdSkill');
+  const sourcePath = writeTextFixture(
+    tempRoot,
+    'inputs/company-research.md',
+    [
+      '# 绍兴贝斯美化工股份有限公司 公司研究',
+      '',
+      '## 公司概览',
+      '贝斯美是化工制造企业，销售拜访需要关注流程规范和统一门户。',
+    ].join('\n'),
+  );
+
+  const chatClient = new QueueChatClient([
+    (input) => {
+      const userPrompt = input.messages.find((message) => message.role === 'user')?.content || '';
+      const attachmentPath = extractListItem(userPrompt, '.md');
+      return {
+        content: null,
+        toolCalls: [
+          {
+            id: 'visit-1',
+            name: 'read_source_file',
+            arguments: JSON.stringify({
+              path: attachmentPath,
+            }),
+          },
+          {
+            id: 'visit-2',
+            name: 'write_text_artifact',
+            arguments: JSON.stringify({
+              fileName: 'visit-prep.md',
+              content: [
+                '# 绍兴贝斯美化工股份有限公司 拜访讲解准备',
+                '',
+                '## 一、客户画像速览',
+                '- 化工制造企业，关注统一门户和流程审批。',
+                '',
+                '## 二、需求理解与方案匹配',
+                '- 统一门户 -> 聚合系统入口。',
+              ].join('\n'),
+            }),
+          },
+        ],
+      };
+    },
+    {
+      content: 'Visit prep generated.',
+      toolCalls: [],
+    },
+  ]);
+
+  const harness = await createRuntimeHarness({
+    config: createTestConfig({
+      rootDir: tempRoot,
+      skillDirs: [skillDir],
+      allowedRoots: [tempRoot, REPO_ROOT],
+      artifactDir: join(tempRoot, 'artifacts'),
+    }),
+    dependencySnapshot: createDependencySnapshot(),
+    chatClient,
+    webSearchClient: new StubWebSearchClient({}),
+  });
+
+  try {
+    const response = await fetch(`${harness.baseUrl}/api/jobs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        skillName: 'yunzhijia-visit-prep',
+        requestText: '请基于公司研究 md，为绍兴贝斯美化工股份有限公司准备拜访材料，客户关注统一门户和流程审批。',
+        attachments: [sourcePath],
+      }),
+    });
+    assert.equal(response.status, 202);
+    const createdJob = await response.json();
+    const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+    assert.equal(job.finalText, 'Visit prep generated.');
+    assert.equal(job.artifacts.length, 1);
+
+    const artifactResponse = await fetch(`${harness.baseUrl}${job.artifacts[0].downloadPath}`);
+    assert.equal(artifactResponse.status, 200);
+    const artifactText = await artifactResponse.text();
+    assert.match(artifactText, /拜访讲解准备/);
+    assert.match(artifactText, /统一门户/);
+  } finally {
+    await harness.close();
+  }
+});
+
 test('GET /api/jobs lists completed jobs for downstream repair lookup', async () => {
   const tempRoot = createTempDir('skill-runtime-http-job-list-');
   const skillDir = resolve(REPO_ROOT, '3rdSkill');
@@ -850,7 +944,12 @@ test('POST /api/jobs fails fast when Docmee rejects the selected PPT template', 
     const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
     assert.equal(job.status, 'failed');
     assert.equal(generatePptxCalled, false);
-    assert.match(job.error?.message || '', /模板未识别到可用内容页/);
+    assert.match(job.error?.message || '', /当前企业 PPT 模板未被 Docmee 识别出内容页/);
+    assert.ok(
+      job.events.some((event: any) =>
+        event.type === 'error' && /当前企业 PPT 模板未被 Docmee 识别出内容页/.test(event.message),
+      ),
+    );
   } finally {
     await harness.close();
   }
@@ -989,7 +1088,12 @@ test('POST /api/jobs fails instead of downgrading when Docmee official layout do
     assert.equal(job.status, 'failed');
     assert.equal(generatePptxCalled, false);
     assert.equal(markdownGenerateCalled, false);
-    assert.match(job.error?.message || '', /未执行降级 PPT/);
+    assert.match(job.error?.message || '', /Docmee 官方 PPT 排版链路未完成/);
+    assert.ok(
+      job.events.some((event: any) =>
+        event.type === 'error' && /Docmee 官方 PPT 排版链路未完成/.test(event.message),
+      ),
+    );
   } finally {
     await harness.close();
   }

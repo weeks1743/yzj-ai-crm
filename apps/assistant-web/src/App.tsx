@@ -4,6 +4,7 @@ import {
   CopyOutlined,
   CloseOutlined,
   DownloadOutlined,
+  EditOutlined,
   EyeOutlined,
   FileSearchOutlined,
   GlobalOutlined,
@@ -49,11 +50,15 @@ import {
   Alert,
   Button,
   Card,
+  DatePicker,
   Drawer,
   Flex,
+  Image,
   Space,
   Skeleton,
+  Spin,
   Input,
+  Modal,
   Pagination,
   Select,
   Tag,
@@ -64,6 +69,7 @@ import {
 import type { GetProp } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { createStyles } from 'antd-style';
+import dayjs from 'dayjs';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type {
@@ -83,6 +89,8 @@ import type {
   ConversationSession,
   ExternalSkillJobResponse,
   ExternalSkillJobStatus,
+  MarkdownImageGenerationRequest,
+  MarkdownImageGenerationResponse,
   ShadowObjectKey,
   YzjAuthIdentityResponse,
 } from '@shared/types';
@@ -108,6 +116,12 @@ import {
   type BrowserStorageLike,
 } from './assistant-auth-cache';
 import {
+  canGenerateEvidenceImage,
+  getEvidenceCardTitle,
+  isRecordingMaterialEvidenceCard,
+  sanitizeEvidenceText,
+} from './evidence-card-utils';
+import {
   chooseConversationMessages,
   mergeAuthoritativeRemoteConversations,
   mergeOfflineCachedConversations,
@@ -116,6 +130,15 @@ import {
   type ConversationSyncPolicy,
   type RemoteMessagesResult,
 } from './chat-sync';
+import {
+  DEFAULT_UPDATE_FIELD_VISIBLE_COUNT,
+  UPDATE_FIELD_VISIBLE_COUNT_STEP,
+  filterUpdateFieldQuestions,
+  getMetaQuestionAnswerDisplay,
+  getMetaQuestionCurrentDisplay,
+  pickChangedMetaQuestionAnswers,
+  shouldRenderMetaQuestionCard,
+} from './meta-question-card-utils';
 import { useMarkdownTheme } from './use-markdown-theme';
 import brandLogo from '@shared/assets/logo.png';
 
@@ -136,7 +159,7 @@ const LEGACY_CHAT_STORAGE_KEYS = [
   'yzj-ai-crm.assistant.conversations.v1',
 ];
 const NEW_CONVERSATION_LABEL = '新会话';
-const NEW_CONVERSATION_LAST_MESSAGE = '输入公司名称，或使用 /公司研究 开始研究。';
+const NEW_CONVERSATION_LAST_MESSAGE = '输入客户名称，客户关注点可选。';
 const DEPRECATED_WORKBENCH_SCENE_KEYS = new Set([
   'customer-analysis',
   'conversation-understanding',
@@ -243,6 +266,7 @@ const runtimeTenantContext = {
 
 const senderShortcutIcons = [
   <FileSearchOutlined />,
+  <ProductOutlined />,
 ];
 
 const slashCommands = [
@@ -253,6 +277,14 @@ const slashCommands = [
     icon: <FileSearchOutlined />,
     route: '/chat',
     draft: '/公司研究 ',
+  },
+  {
+    key: 'yunzhijia-visit-prep',
+    command: '/拜访准备',
+    description: '选择客户并基于关联公司研究生成拜访讲解提纲',
+    icon: <ProductOutlined />,
+    route: '/chat',
+    draft: '/拜访准备 ',
   },
 ];
 
@@ -290,9 +322,10 @@ const recordingSkillLabels = Object.fromEntries(
 ) as Record<RecordingSkillCode, string>;
 
 type OpenArtifactHandler = (evidence: AssistantEvidenceCard) => void;
-type PresentationTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title'>;
-type GeneratePresentationHandler = (target: PresentationTarget) => void;
-type GenerateImageHandler = (target: PresentationTarget) => void;
+type OpenRecordingEvidenceHandler = (evidence: AssistantEvidenceCard) => void;
+type ArtifactActionTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title' | 'kind' | 'sourceToolCode'>;
+type GenerateImageHandler = (target: ArtifactActionTarget) => void;
+type GenerateAttachmentImageHandler = (attachment: MarkdownAttachmentTarget) => void;
 type MetaQuestionSubmitHandler = (input: {
   runId: string;
   interactionId: string;
@@ -329,33 +362,6 @@ type RecordResultViewModel = Omit<AgentRecordResultViewModel, 'records' | 'recor
   record?: RecordResultRecordView;
 };
 
-type ArtifactPresentationStatus =
-  | 'not_started'
-  | 'queued'
-  | 'running'
-  | 'succeeded'
-  | 'failed';
-
-interface ArtifactPresentationPayload {
-  artifactId: string;
-  versionId: string;
-  title: string;
-  status: ArtifactPresentationStatus;
-  jobId?: string;
-  pptArtifact?: {
-    artifactId: string;
-    jobId: string;
-    fileName: string;
-    mimeType: string;
-    byteSize: number;
-    createdAt: string;
-    downloadPath: string;
-  };
-  errorMessage?: string | null;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
 type ArtifactImageStatus = 'not_started' | 'queued' | 'succeeded' | 'failed';
 
 type GroupedEvidenceCard = AssistantEvidenceCard & {
@@ -386,6 +392,22 @@ interface ArtifactImagePayload {
   updatedAt?: string;
 }
 
+type MarkdownImageStatus = 'not_started' | 'queued' | 'succeeded' | 'failed';
+
+interface MarkdownAttachmentTarget {
+  key: string;
+  name: string;
+  url: string;
+  type?: string;
+}
+
+interface MarkdownImagePayload extends Partial<MarkdownImageGenerationResponse> {
+  key: string;
+  title: string;
+  status: MarkdownImageStatus;
+  errorMessage?: string | null;
+}
+
 interface ArtifactDetailPayload {
   artifact: {
     artifactId: string;
@@ -407,6 +429,7 @@ interface ArtifactDetailPayload {
   };
   markdown: string;
   summary?: string;
+  metadata?: Record<string, unknown>;
 }
 
 interface ArtifactViewerState {
@@ -567,7 +590,7 @@ const useStyles = createStyles(({ token, css }) => ({
     height: 100%;
     display: flex;
     flex-direction: column;
-    padding: 0 12px;
+    padding: 0 12px 12px;
     box-sizing: border-box;
     flex-shrink: 0;
   `,
@@ -575,15 +598,15 @@ const useStyles = createStyles(({ token, css }) => ({
     display: flex;
     align-items: center;
     justify-content: start;
-    padding: 0 24px;
+    padding: 0 10px;
     box-sizing: border-box;
-    gap: 12px;
-    margin: 28px 0 20px;
+    gap: 10px;
+    margin: 14px 0 12px;
   `,
   logoMark: css`
-    width: 40px;
-    height: 40px;
-    border-radius: 12px;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -606,15 +629,15 @@ const useStyles = createStyles(({ token, css }) => ({
 
     span {
       color: rgba(0, 0, 0, 0.88);
-      font-size: 18px;
+      font-size: 17px;
       font-weight: 700;
       line-height: 1.15;
-      letter-spacing: 0.01em;
+      letter-spacing: 0;
     }
   `,
   conversations: css`
     overflow-y: auto;
-    margin-top: 12px;
+    margin-top: 4px;
     padding: 0;
     flex: 1;
 
@@ -624,7 +647,7 @@ const useStyles = createStyles(({ token, css }) => ({
   `,
   sideFooter: css`
     border-top: 1px solid ${token.colorBorderSecondary};
-    min-height: 48px;
+    min-height: 44px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -632,6 +655,7 @@ const useStyles = createStyles(({ token, css }) => ({
   `,
   sideFooterInfo: css`
     min-width: 0;
+    flex: 1;
   `,
   sideFooterButton: css`
     flex: none;
@@ -1035,6 +1059,14 @@ const useStyles = createStyles(({ token, css }) => ({
   inlineRefs: css`
     margin-top: 14px;
   `,
+  attachmentList: css`
+    margin-top: 8px;
+    display: grid;
+    gap: 10px;
+  `,
+  attachmentItem: css`
+    min-width: 0;
+  `,
   assistantMessageShell: css`
     width: min(100%, 840px);
   `,
@@ -1215,19 +1247,102 @@ const useStyles = createStyles(({ token, css }) => ({
     padding: 10px 12px;
     background: ${token.colorFillQuaternary};
   `,
+  updateFieldPickerSearch: css`
+    margin-top: 12px;
+  `,
+  updateFieldPickerList: css`
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+  `,
+  updateFieldPickerItem: css`
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    background: ${token.colorFillQuaternary};
+    cursor: pointer;
+    display: grid;
+    grid-template-columns: minmax(120px, 0.42fr) 1fr auto;
+    align-items: center;
+    gap: 10px;
+    color: ${token.colorText};
+    text-align: left;
+
+    &:hover,
+    &:focus-visible {
+      border-color: ${token.colorPrimaryBorder};
+      background: ${token.colorPrimaryBg};
+      outline: none;
+    }
+  `,
+  updateFieldPickerItemActive: css`
+    border-color: ${token.colorPrimary};
+    background: ${token.colorPrimaryBg};
+  `,
+  updateFieldPickerCurrent: css`
+    min-width: 0;
+    color: ${token.colorTextSecondary};
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  `,
+  updateFieldPickerSelectedList: css`
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+  `,
+  updateFieldPickerSelectedItem: css`
+    display: grid;
+    grid-template-columns: minmax(100px, 0.28fr) 1fr auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 36px;
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 8px;
+    background: ${token.colorBgContainer};
+    padding: 6px 8px;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      border-color: ${token.colorPrimaryBorder};
+      background: ${token.colorPrimaryBg};
+      outline: none;
+    }
+  `,
+  updateFieldPickerSelectedItemActive: css`
+    border-color: ${token.colorPrimary};
+    background: ${token.colorPrimaryBg};
+  `,
+  updateFieldPickerEditor: css`
+    margin-top: 12px;
+    border: 1px solid ${token.colorPrimaryBorder};
+    border-radius: 8px;
+    background: ${token.colorBgContainer};
+    padding: 12px;
+  `,
   evidenceGrid: css`
     margin-top: 8px;
+    width: 100%;
 
     .ant-prompts-list {
-      gap: 10px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 8px;
+      overflow: visible;
     }
 
     .ant-prompts-item {
       border: 1px solid ${token.colorBorderSecondary};
-      border-radius: 16px;
+      border-radius: 8px;
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 250, 255, 0.86)),
         ${token.colorFillQuaternary};
+      min-width: 0;
+      width: 100%;
+      padding: 10px 12px;
       box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
       transition:
         border-color 0.2s ease,
@@ -1239,23 +1354,31 @@ const useStyles = createStyles(({ token, css }) => ({
         box-shadow: 0 14px 36px rgba(22, 119, 255, 0.12);
         transform: translateY(-1px);
       }
+
+      &:has(.ant-image) {
+        grid-column: 1 / -1;
+      }
+    }
+
+    .ant-prompts-label {
+      width: 100%;
+      line-height: 1.4;
+    }
+
+    .ant-prompts-desc {
+      width: 100%;
+    }
+
+    .ant-typography {
+      max-width: 100%;
     }
   `,
-  evidenceSnippet: css`
-    margin-top: 8px;
-    color: ${token.colorTextSecondary};
-    font-size: 13px;
-    line-height: 1.65;
-    display: -webkit-box;
-    -webkit-line-clamp: 4;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  `,
-  evidenceMeta: css`
+  evidenceCardActions: css`
     display: flex;
+    align-items: center;
+    gap: 10px;
     flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 8px;
+    margin-top: 6px;
   `,
   evidenceErrorText: css`
     margin-top: 6px;
@@ -1270,19 +1393,26 @@ const useStyles = createStyles(({ token, css }) => ({
     background: ${token.colorBgContainer};
     overflow: hidden;
     max-width: 520px;
+    position: relative;
 
-    img {
+    .ant-image {
+      display: block;
+    }
+
+    .ant-image-img {
       display: block;
       width: 100%;
       height: auto;
       background: ${token.colorFillQuaternary};
+      cursor: zoom-in;
     }
   `,
-  evidenceImageCaption: css`
-    padding: 8px 10px;
-    color: ${token.colorTextSecondary};
-    font-size: 12px;
-    line-height: 1.5;
+  evidenceImageDownload: css`
+    position: absolute;
+    inset-block-start: 8px;
+    inset-inline-end: 8px;
+    z-index: 2;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
   `,
   markdownDrawerBody: css`
     .ant-drawer-body {
@@ -1467,14 +1597,12 @@ function toRecordingSkillJobState(
   };
 }
 
-function compactSnippet(value?: string) {
-  const normalized = (value || '').replace(/\s+/g, ' ').trim();
-  return normalized.length > 420 ? `${normalized.slice(0, 420)}…` : normalized;
-}
-
 function formatReferenceLabel(value: string) {
   if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value)) {
     return '';
+  }
+  if (value === 'ext.yunzhijia_visit_prep' || value === 'external.yunzhijia_visit_prep') {
+    return '客户拜访准备资料';
   }
   if (
     value === 'company-research'
@@ -1501,24 +1629,11 @@ function getVisibleReferenceLabels(references?: string[]) {
   ));
 }
 
-function isPresentationRunning(status?: ArtifactPresentationStatus) {
-  return status === 'queued' || status === 'running';
-}
-
-function getPresentationButtonLabel(presentation?: ArtifactPresentationPayload) {
-  if (!presentation || presentation.status === 'not_started') {
-    return '生成 PPT';
-  }
-  if (isPresentationRunning(presentation.status)) {
-    return 'PPT 生成中';
-  }
-  if (presentation.status === 'succeeded') {
-    return '下载 PPT';
-  }
-  return '重新生成 PPT';
-}
-
 function isImageGenerating(status?: ArtifactImageStatus) {
+  return status === 'queued';
+}
+
+function isMarkdownImageGenerating(status?: MarkdownImageStatus) {
   return status === 'queued';
 }
 
@@ -1533,6 +1648,64 @@ function getImageButtonLabel(image?: ArtifactImagePayload) {
     return '重新生成图片';
   }
   return '重新生成图片';
+}
+
+function getMarkdownImageButtonLabel(image?: MarkdownImagePayload) {
+  if (!image || image.status === 'not_started') {
+    return '生成图片';
+  }
+  if (isMarkdownImageGenerating(image.status)) {
+    return '图片生成中';
+  }
+  return '重新生成图片';
+}
+
+function buildAttachmentImageKey(attachment: Pick<MarkdownAttachmentTarget, 'name' | 'url'>): string {
+  return `${attachment.name}:${attachment.url}`;
+}
+
+function isMarkdownAttachment(attachment: { name?: string; type?: string; url?: string }): boolean {
+  const type = attachment.type?.toLowerCase() ?? '';
+  const name = attachment.name?.toLowerCase() ?? '';
+  const url = attachment.url?.toLowerCase() ?? '';
+  return type.includes('markdown')
+    || name.endsWith('.md')
+    || name.endsWith('.markdown')
+    || url.includes('.md');
+}
+
+function downloadDataUrl(dataUrl: string, fileName: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = dataUrl;
+  anchor.download = fileName;
+  anchor.rel = 'noopener noreferrer';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+function getRecordingViewerTargetPath(taskId: string): string {
+  return `/api/recording-audio-tasks/${encodeURIComponent(taskId)}/meeting-viewer`;
+}
+
+function getRecordingViewerLoadingPath(taskId: string): string {
+  return `/recording-viewer-loading?target=${encodeURIComponent(getRecordingViewerTargetPath(taskId))}`;
+}
+
+function openRecordingViewer(taskId: string): void {
+  window.open(getRecordingViewerLoadingPath(taskId), '_blank', 'noopener,noreferrer');
+}
+
+function isSafeRecordingViewerTarget(target: string): boolean {
+  return /^\/api\/recording-audio-tasks\/[^/?#]+\/meeting-viewer(?:[?#].*)?$/.test(target);
+}
+
+function getRecordingTaskIdFromArtifactDetail(payload: ArtifactDetailPayload): string {
+  const direct = payload.metadata?.recordingTaskId;
+  if (typeof direct === 'string' && direct.trim()) {
+    return direct.trim();
+  }
+  return '';
 }
 
 function getBrowserStorage() {
@@ -2274,8 +2447,26 @@ function MetaQuestionCardPanel({
     setAnswerLabels({});
   }, [pendingInteraction?.interactionId]);
 
-  if (!questionCard || !pendingInteraction) {
+  if (!pendingInteraction || !questionCard || !shouldRenderMetaQuestionCard({
+    status: pendingInteraction.status,
+    questionCard,
+  })) {
     return null;
+  }
+
+  if (questionCard.layout === 'update_field_picker') {
+    return (
+      <UpdateFieldPickerQuestionCardPanel
+        identity={identity}
+        pendingInteraction={pendingInteraction}
+        questionCard={questionCard}
+        activeInteractionId={activeInteractionId}
+        submittedInteractionIds={submittedInteractionIds}
+        styles={styles}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+      />
+    );
   }
 
   const interactionId = pendingInteraction.interactionId;
@@ -2309,6 +2500,14 @@ function MetaQuestionCardPanel({
         <Text strong>{questionCard.title || pendingInteraction.title}</Text>
         {statusTag}
       </Space>
+      {questionCard.targetSummary ? (
+        <div className={styles.metaQuestionSection}>
+          <Text type="secondary">{questionCard.targetSummary.label}</Text>
+          <Space size={6} wrap style={{ marginTop: 8 }}>
+            <Tag color="blue">{questionCard.targetSummary.value}</Tag>
+          </Space>
+        </div>
+      ) : null}
       {currentValues.length ? (
         <div className={styles.metaQuestionSection}>
           <Text type="secondary">已收到</Text>
@@ -2396,6 +2595,343 @@ function MetaQuestionCardPanel({
   );
 }
 
+function UpdateFieldPickerQuestionCardPanel({
+  identity,
+  pendingInteraction,
+  questionCard,
+  activeInteractionId,
+  submittedInteractionIds,
+  styles,
+  onSubmit,
+  onCancel,
+}: {
+  identity: YzjAuthIdentityResponse;
+  pendingInteraction: PendingInteractionView;
+  questionCard: AssistantMetaQuestionCard;
+  activeInteractionId?: string;
+  submittedInteractionIds?: Set<string>;
+  styles: ReturnType<typeof useStyles>['styles'];
+  onSubmit?: MetaQuestionSubmitHandler;
+  onCancel?: MetaQuestionCancelHandler;
+}) {
+  const [answers, setAnswers] = useState<Record<string, unknown>>({});
+  const [answerLabels, setAnswerLabels] = useState<Record<string, string>>({});
+  const [selectedParamKeys, setSelectedParamKeys] = useState<string[]>([]);
+  const [activeParamKey, setActiveParamKey] = useState('');
+  const [searchText, setSearchText] = useState('');
+  const [visibleFieldCount, setVisibleFieldCount] = useState(DEFAULT_UPDATE_FIELD_VISIBLE_COUNT);
+
+  useEffect(() => {
+    setAnswers({});
+    setAnswerLabels({});
+    setSelectedParamKeys([]);
+    setActiveParamKey('');
+    setSearchText('');
+    setVisibleFieldCount(DEFAULT_UPDATE_FIELD_VISIBLE_COUNT);
+  }, [pendingInteraction.interactionId]);
+
+  const interactionId = pendingInteraction.interactionId;
+  const isPending = pendingInteraction.status === 'pending';
+  const isActive = Boolean(interactionId && activeInteractionId === interactionId);
+  const isSubmitted = Boolean(interactionId && submittedInteractionIds?.has(interactionId));
+  const canInteract = isPending && isActive && !isSubmitted;
+  const selectedParamKeySet = useMemo(() => new Set(selectedParamKeys), [selectedParamKeys]);
+  const selectedQuestions = useMemo(
+    () => selectedParamKeys
+      .map((paramKey) => questionCard.questions.find((question) => question.paramKey === paramKey))
+      .filter((question): question is AssistantMetaQuestion => Boolean(question)),
+    [questionCard.questions, selectedParamKeys],
+  );
+  const { visibleQuestions, hiddenCount, hasSearch } = useMemo(
+    () => filterUpdateFieldQuestions({
+      questions: questionCard.questions ?? [],
+      currentValues: questionCard.currentValues,
+      searchText,
+      visibleCount: visibleFieldCount,
+    }),
+    [questionCard.currentValues, questionCard.questions, searchText, visibleFieldCount],
+  );
+  const activeQuestion = useMemo(
+    () => questionCard.questions.find((question) => question.paramKey === activeParamKey)
+      ?? selectedQuestions[0],
+    [activeParamKey, questionCard.questions, selectedQuestions],
+  );
+  const changedAnswers = useMemo(
+    () => pickChangedMetaQuestionAnswers({
+      questionCard,
+      answers,
+      selectedParamKeys,
+    }),
+    [answers, questionCard, selectedParamKeys],
+  );
+  const changedCount = Object.keys(changedAnswers).length;
+  const canSubmit = Boolean(onSubmit) && canInteract && changedCount > 0;
+  const canCancel = Boolean(onCancel) && canInteract;
+  const statusTag = canInteract
+    ? <Tag color="blue">选择要修改的字段</Tag>
+    : isSubmitted
+      ? <Tag color="processing">已提交</Tag>
+      : isPending
+        ? <Tag>已过期</Tag>
+        : <Tag color="green">已处理</Tag>;
+  const helperText = isSubmitted
+    ? '已提交，等待智能体生成预览。'
+    : !isPending
+      ? '这张更新卡已经处理完成。'
+      : !isActive
+        ? '这张更新卡不是当前等待项，请使用最新卡片继续。'
+        : '也可以继续直接输入自然语言补充。';
+
+  const selectQuestion = (question: AssistantMetaQuestion) => {
+    if (!canInteract) {
+      return;
+    }
+    setSelectedParamKeys((current) => (
+      current.includes(question.paramKey) ? current : [...current, question.paramKey]
+    ));
+    setActiveParamKey(question.paramKey);
+  };
+
+  const removeQuestion = (paramKey: string) => {
+    setSelectedParamKeys((current) => current.filter((item) => item !== paramKey));
+    setAnswers((current) => {
+      const next = { ...current };
+      delete next[paramKey];
+      return next;
+    });
+    setAnswerLabels((current) => {
+      const next = { ...current };
+      delete next[paramKey];
+      return next;
+    });
+    setActiveParamKey((current) => current === paramKey ? '' : current);
+  };
+
+  return (
+    <div className={styles.metaQuestionCard}>
+      <Space align="center" wrap>
+        <Text strong>{questionCard.title || pendingInteraction.title}</Text>
+        {statusTag}
+      </Space>
+      {questionCard.targetSummary ? (
+        <div className={styles.metaQuestionSection}>
+          <Text type="secondary">{questionCard.targetSummary.label}</Text>
+          <Space size={6} wrap style={{ marginTop: 8 }}>
+            <Tag color="blue">{questionCard.targetSummary.value}</Tag>
+          </Space>
+        </div>
+      ) : null}
+
+      <Input.Search
+        allowClear
+        size="small"
+        className={styles.updateFieldPickerSearch}
+        placeholder="搜索要修改的字段"
+        value={searchText}
+        disabled={!canInteract}
+        onChange={(event) => {
+          setSearchText(event.target.value);
+          setVisibleFieldCount(DEFAULT_UPDATE_FIELD_VISIBLE_COUNT);
+        }}
+      />
+
+      <div className={styles.updateFieldPickerList}>
+        {visibleQuestions.map((question) => {
+          const selected = selectedParamKeySet.has(question.paramKey);
+          const current = getMetaQuestionCurrentDisplay(questionCard, question);
+          return (
+            <button
+              type="button"
+              key={question.questionId}
+              className={`${styles.updateFieldPickerItem} ${activeQuestion?.paramKey === question.paramKey ? styles.updateFieldPickerItemActive : ''}`}
+              disabled={!canInteract}
+              onClick={() => selectQuestion(question)}
+            >
+              <Text strong>{question.label}</Text>
+              <Text className={styles.updateFieldPickerCurrent}>
+                当前：{current || '未填写'}
+              </Text>
+              {selected ? <Tag color="blue">已选择</Tag> : null}
+            </button>
+          );
+        })}
+      </div>
+      {!visibleQuestions.length ? (
+        <Text type="secondary">没有匹配字段。</Text>
+      ) : null}
+      {!hasSearch && hiddenCount > 0 ? (
+        <Button
+          type="link"
+          size="small"
+          style={{ paddingInline: 0, marginTop: 8 }}
+          disabled={!canInteract}
+          onClick={() => setVisibleFieldCount((current) => current + UPDATE_FIELD_VISIBLE_COUNT_STEP)}
+        >
+          展开更多字段（再显示 {Math.min(UPDATE_FIELD_VISIBLE_COUNT_STEP, hiddenCount)} 个，剩余 {hiddenCount}）
+        </Button>
+      ) : null}
+      {visibleFieldCount > DEFAULT_UPDATE_FIELD_VISIBLE_COUNT && !hasSearch ? (
+        <Button
+          type="link"
+          size="small"
+          style={{ paddingInline: 0, marginTop: 8 }}
+          disabled={!canInteract}
+          onClick={() => setVisibleFieldCount(DEFAULT_UPDATE_FIELD_VISIBLE_COUNT)}
+        >
+          收起常用字段
+        </Button>
+      ) : null}
+
+      {selectedQuestions.length ? (
+        <div className={styles.metaQuestionSection}>
+          <Text type="secondary">已选择修改</Text>
+          <div className={styles.updateFieldPickerSelectedList}>
+            {selectedQuestions.map((question) => {
+              const current = getMetaQuestionCurrentDisplay(questionCard, question);
+              const next = getMetaQuestionAnswerDisplay({
+                question,
+                value: answers[question.paramKey],
+                answerLabels,
+              });
+              return (
+                <div
+                  key={question.paramKey}
+                  className={`${styles.updateFieldPickerSelectedItem} ${activeQuestion?.paramKey === question.paramKey ? styles.updateFieldPickerSelectedItemActive : ''}`}
+                  role="button"
+                  tabIndex={canInteract ? 0 : -1}
+                  onClick={() => {
+                    if (canInteract) {
+                      setActiveParamKey(question.paramKey);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (!canInteract || !['Enter', ' '].includes(event.key)) {
+                      return;
+                    }
+                    event.preventDefault();
+                    setActiveParamKey(question.paramKey);
+                  }}
+                >
+                  <Text strong>{question.label}</Text>
+                  <Text type={next ? undefined : 'secondary'}>
+                    {current || '未填写'} → {next || '待填写'}
+                  </Text>
+                  <Button
+                    type="link"
+                    size="small"
+                    disabled={!canInteract}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removeQuestion(question.paramKey);
+                    }}
+                  >
+                    移除
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {activeQuestion ? (
+        <div className={styles.updateFieldPickerEditor}>
+          <MetaQuestionInput
+            identity={identity}
+            toolCode={questionCard.toolCode}
+            question={activeQuestion}
+            value={getUpdateFieldEditorValue(activeQuestion, answers)}
+            styles={styles}
+            disabled={!canInteract}
+            showCurrentOptionTag
+            onChange={(value, displayLabel) => {
+              setSelectedParamKeys((current) => (
+                current.includes(activeQuestion.paramKey) ? current : [...current, activeQuestion.paramKey]
+              ));
+              setAnswers((current) => ({
+                ...current,
+                [activeQuestion.paramKey]: value,
+              }));
+              setAnswerLabels((current) => {
+                const next = { ...current };
+                if (displayLabel) {
+                  next[activeQuestion.paramKey] = displayLabel;
+                } else {
+                  delete next[activeQuestion.paramKey];
+                }
+                return next;
+              });
+            }}
+          />
+        </div>
+      ) : (
+        <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
+          请选择一个字段后填写新值。
+        </Text>
+      )}
+
+      <Space size={8} wrap style={{ marginTop: 12 }}>
+        <Button
+          type="primary"
+          size="small"
+          disabled={!canSubmit}
+          onClick={() => {
+            if (!onSubmit) {
+              return;
+            }
+            onSubmit({
+              runId: pendingInteraction.runId,
+              interactionId: pendingInteraction.interactionId,
+              answers: changedAnswers,
+              queryText: buildMetaQuestionSubmitText(questionCard, changedAnswers, answerLabels),
+            });
+          }}
+        >
+          {questionCard.submitLabel || '生成更新预览'}
+        </Button>
+        <Button
+          size="small"
+          disabled={!canCancel}
+          onClick={() => {
+            if (!onCancel) {
+              return;
+            }
+            onCancel({
+              runId: pendingInteraction.runId,
+              interactionId: pendingInteraction.interactionId,
+            });
+          }}
+        >
+          取消本次录入
+        </Button>
+        <Text type="secondary">{helperText}</Text>
+      </Space>
+    </div>
+  );
+}
+
+function getUpdateFieldEditorValue(
+  question: AssistantMetaQuestion,
+  answers: Record<string, unknown>,
+): unknown {
+  if (Object.prototype.hasOwnProperty.call(answers, question.paramKey)) {
+    return answers[question.paramKey];
+  }
+  return question.options?.length ? question.currentValue : undefined;
+}
+
+function parseMetaQuestionDateValue(value: unknown) {
+  if (value === undefined || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return null;
+  }
+  const parsed = dayjs(text);
+  return parsed.isValid() ? parsed : null;
+}
+
 function MetaQuestionInput({
   identity,
   toolCode,
@@ -2403,6 +2939,7 @@ function MetaQuestionInput({
   value,
   styles,
   disabled,
+  showCurrentOptionTag,
   onChange,
 }: {
   identity: YzjAuthIdentityResponse;
@@ -2411,6 +2948,7 @@ function MetaQuestionInput({
   value: unknown;
   styles: ReturnType<typeof useStyles>['styles'];
   disabled?: boolean;
+  showCurrentOptionTag?: boolean;
   onChange: (value: unknown, displayLabel?: string) => void;
 }) {
   return (
@@ -2433,6 +2971,7 @@ function MetaQuestionInput({
           <Space size={6} wrap>
             {question.options.map((option) => {
               const active = String(value ?? '') === String(option.value);
+              const isCurrent = showCurrentOptionTag && String(question.currentValue ?? '') === String(option.value);
               return (
                 <Button
                   key={String(option.key ?? option.value)}
@@ -2441,11 +2980,26 @@ function MetaQuestionInput({
                   disabled={disabled}
                   onClick={() => onChange(option.value, formatMetaOptionDisplay(option))}
                 >
-                  {option.label}
+                  <Space size={4}>
+                    <span>{option.label}</span>
+                    {isCurrent ? <Tag color={active ? 'blue' : undefined}>当前</Tag> : null}
+                  </Space>
                 </Button>
               );
             })}
           </Space>
+        ) : question.type === 'date' ? (
+          <DatePicker
+            size="small"
+            value={parseMetaQuestionDateValue(value)}
+            placeholder={question.placeholder || `请选择${question.label}`}
+            format="YYYY-MM-DD"
+            disabled={disabled}
+            onChange={(_, dateString) => {
+              onChange(typeof dateString === 'string' && dateString ? dateString : undefined);
+            }}
+            style={{ width: '100%' }}
+          />
         ) : (
           <Input
             size="small"
@@ -3040,19 +3594,22 @@ function getRecordFields(record: RecordResultRecordView): RecordResultFieldView[
 function findRecordField(record: RecordResultRecordView, labels: string[]): RecordResultFieldView | undefined {
   const fields = getRecordFields(record);
   const normalizedLabels = labels.map((label) => label.trim()).filter(Boolean);
-  return fields.find((field) => normalizedLabels.includes(field.label));
+  return fields.find((field) => normalizedLabels.includes(field.label) && sanitizeRecordDisplayValue(field.value));
 }
 
 function readRecordFieldValue(record: RecordResultRecordView, labels: string[]): string {
   const matched = findRecordField(record, labels);
-  return matched?.value ?? '';
+  return sanitizeRecordDisplayValue(matched?.value);
 }
 
 function readRecordAssociationSummary(record: RecordResultRecordView, objectKey?: ShadowObjectKey): string {
   const seen = new Set<string>();
-  const serverRelationFields = (record.relationFields ?? []).filter((field) => field.label && field.value);
+  const serverRelationFields = (record.relationFields ?? [])
+    .map((field) => ({ ...field, value: sanitizeRecordDisplayValue(field.value) }))
+    .filter((field) => field.label && field.value);
   const fallbackRelationFields = getRecordAssociationFieldGroups(objectKey)
     .map((labels) => findRecordField(record, labels))
+    .map((field) => field ? { ...field, value: sanitizeRecordDisplayValue(field.value) } : undefined)
     .filter((field): field is RecordResultFieldView => Boolean(field?.label && field.value));
   const entries = (serverRelationFields.length ? serverRelationFields : fallbackRelationFields)
     .filter((field) => {
@@ -3111,7 +3668,9 @@ function RecordFieldGrid({
   fields: RecordResultFieldView[];
   styles: ReturnType<typeof useStyles>['styles'];
 }) {
-  const visibleFields = fields.filter((field) => field.label && field.value);
+  const visibleFields = fields
+    .map((field) => ({ ...field, value: sanitizeRecordDisplayValue(field.value) }))
+    .filter((field) => field.label && field.value);
   if (!visibleFields.length) {
     return null;
   }
@@ -3141,7 +3700,7 @@ function mapRecordObjectLabel(objectKey?: string) {
 }
 
 function getRecordDisplayTitle(record: RecordResultRecordView, result?: RecordResultViewModel): string {
-  const rawTitle = record.title?.trim() ?? '';
+  const rawTitle = sanitizeRecordDisplayValue(record.title);
   if (rawTitle && !isInternalRecordIdentifier(rawTitle, record.formInstId)) {
     return rawTitle;
   }
@@ -3180,7 +3739,19 @@ function isInternalRecordIdentifier(value?: string, formInstId?: string): boolea
     return true;
   }
   return /^[0-9a-f]{16,64}$/i.test(normalized)
-    || /^(?:customer|contact|opportunity|followup|form|record)[-_][A-Za-z0-9_-]+$/i.test(normalized);
+    || /^[0-9a-f]{16,64}的(?:商机|机会|商机跟进记录|跟进记录|拜访记录|回访记录)$/i.test(normalized)
+    || /^(?:customer|contact|opportunity|followup|form|record|dept|department)[-_][A-Za-z0-9_-]+$/i.test(normalized);
+}
+
+function sanitizeRecordDisplayValue(value?: string | null): string {
+  const text = (value ?? '').trim();
+  if (!text || isInternalRecordIdentifier(text)) {
+    return '';
+  }
+  return text
+    .replace(/((?:负责人|销售负责人|所有者|所属人|跟进人|跟进负责人|服务代表|售后服务代表|申请人|创建人|openId|open_id)\s*[：:]\s*)[0-9a-f]{16,64}/gi, '$1已绑定人员')
+    .replace(/((?:所属部门|部门|组织|部门ID|deptId|departmentId)\s*[：:]\s*)[0-9a-f]{16,64}/gi, '$1已选择部门')
+    .trim();
 }
 
 function isShadowObjectKey(value: string): value is ShadowObjectKey {
@@ -3194,15 +3765,16 @@ function AssistantMessageContent({
   styles,
   markdownClassName,
   onOpenArtifact,
-  onGeneratePresentation,
+  onOpenRecordingEvidence,
   onGenerateImage,
+  onGenerateAttachmentImage,
   onOpenRecord,
   onSubmitQuestionCard,
   onCancelQuestionCard,
   activeQuestionInteractionId,
   submittedQuestionInteractionIds,
-  presentationByArtifactId,
   imageByArtifactId,
+  imageByAttachmentKey,
 }: {
   identity: YzjAuthIdentityResponse;
   content: string;
@@ -3210,15 +3782,16 @@ function AssistantMessageContent({
   styles: ReturnType<typeof useStyles>['styles'];
   markdownClassName: string;
   onOpenArtifact: OpenArtifactHandler;
-  onGeneratePresentation: GeneratePresentationHandler;
+  onOpenRecordingEvidence: OpenRecordingEvidenceHandler;
   onGenerateImage: GenerateImageHandler;
+  onGenerateAttachmentImage: GenerateAttachmentImageHandler;
   onOpenRecord?: OpenRecordHandler;
   onSubmitQuestionCard?: MetaQuestionSubmitHandler;
   onCancelQuestionCard?: MetaQuestionCancelHandler;
   activeQuestionInteractionId?: string;
   submittedQuestionInteractionIds?: Set<string>;
-  presentationByArtifactId: Record<string, ArtifactPresentationPayload>;
   imageByArtifactId: Record<string, ArtifactImagePayload>;
+  imageByAttachmentKey: Record<string, MarkdownImagePayload>;
 }) {
   const evidence = (info.extraInfo?.evidence ?? []) as AssistantEvidenceCard[];
   const groupedEvidence = useMemo(() => groupEvidenceByArtifact(evidence), [evidence]);
@@ -3226,12 +3799,7 @@ function AssistantMessageContent({
   const pendingConfirmation = info.extraInfo?.agentTrace?.pendingConfirmation as PendingConfirmationView | null | undefined;
   const pendingInteraction = info.extraInfo?.agentTrace?.pendingInteraction as PendingInteractionView | null | undefined;
   const referenceLabels = getVisibleReferenceLabels(info.extraInfo?.references);
-  const visibleAttachments = ((info.attachments as any[]) ?? []).filter(
-    (attachment) => attachment?.type !== 'markdown',
-  );
-  const evidenceByKey = new Map(
-    groupedEvidence.map((item) => [getGroupedEvidenceKey(item), item]),
-  );
+  const visibleAttachments = ((info.attachments as any[]) ?? []).filter((attachment) => attachment?.name);
 
   return (
     <div className={styles.assistantMessageShell}>
@@ -3271,12 +3839,81 @@ function AssistantMessageContent({
       {visibleAttachments.length ? (
         <div className={styles.inlineRefs}>
           <Text strong>关联附件</Text>
-          <div style={{ marginTop: 8 }}>
-            {visibleAttachments.map((attachment: any) => (
-              <Tag key={attachment.name} color="blue">
-                {attachment.name}
-              </Tag>
-            ))}
+          <div className={styles.attachmentList}>
+            {visibleAttachments.map((attachment: any) => {
+              const canOpen = typeof attachment.url === 'string' && attachment.url && attachment.url !== '#attachment';
+              const attachmentTarget: MarkdownAttachmentTarget | null = canOpen && isMarkdownAttachment(attachment)
+                ? {
+                    key: buildAttachmentImageKey({ name: attachment.name, url: attachment.url }),
+                    name: attachment.name,
+                    url: attachment.url,
+                    type: attachment.type,
+                  }
+                : null;
+              const markdownImage = attachmentTarget ? imageByAttachmentKey[attachmentTarget.key] : undefined;
+              return canOpen ? (
+                <div
+                  key={`${attachment.name}:${attachment.url}`}
+                  className={styles.attachmentItem}
+                >
+                  <div className={styles.evidenceCardActions}>
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      style={{ paddingInline: 0 }}
+                      onClick={() => window.open(attachment.url, '_blank', 'noopener,noreferrer')}
+                    >
+                      {attachment.name}
+                    </Button>
+                    {attachmentTarget ? (
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<PictureOutlined />}
+                        loading={isMarkdownImageGenerating(markdownImage?.status)}
+                        disabled={isMarkdownImageGenerating(markdownImage?.status)}
+                        style={{ paddingInline: 0 }}
+                        onClick={() => onGenerateAttachmentImage(attachmentTarget)}
+                      >
+                        {getMarkdownImageButtonLabel(markdownImage)}
+                      </Button>
+                    ) : null}
+                  </div>
+                  {markdownImage?.status === 'failed' && markdownImage.errorMessage ? (
+                    <div className={styles.evidenceErrorText}>{markdownImage.errorMessage}</div>
+                  ) : null}
+                  {markdownImage?.status === 'succeeded' && markdownImage.previewDataUrl ? (
+                    <div className={styles.evidenceImagePreview}>
+                      <Image
+                        src={markdownImage.previewDataUrl}
+                        alt={`${markdownImage.title || attachment.name} 配图`}
+                        preview={{ mask: '预览图片' }}
+                      />
+                      {markdownImage.downloadDataUrl ? (
+                        <Button
+                          className={styles.evidenceImageDownload}
+                          type="primary"
+                          shape="circle"
+                          size="small"
+                          icon={<DownloadOutlined />}
+                          aria-label="下载图片"
+                          title="下载图片"
+                          onClick={() => downloadDataUrl(
+                            markdownImage.downloadDataUrl!,
+                            markdownImage.fileName || `${attachment.name}.png`,
+                          )}
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <Tag key={attachment.name} color="blue">
+                  {attachment.name}
+                </Tag>
+              );
+            })}
           </div>
         </div>
       ) : null}
@@ -3295,127 +3932,138 @@ function AssistantMessageContent({
       {groupedEvidence.length ? (
         <div className={styles.inlineRefs}>
           <Space align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Text strong>公司研究资料</Text>
+            <Text strong>关联资料</Text>
             <Text type="secondary">
-              {groupedEvidence.length} 份资料 · {evidence.length} 条引用内容
+              {groupedEvidence.length} 份资料
             </Text>
           </Space>
           <Prompts
-            vertical
             wrap
             className={styles.evidenceGrid}
+            onItemClick={(info) => {
+              const key = String(info.data.key ?? '');
+              const item = groupedEvidence.find((candidate) => getGroupedEvidenceKey(candidate) === key);
+              if (!item) {
+                return;
+              }
+              if (isRecordingMaterialEvidenceCard(item)) {
+                onOpenRecordingEvidence(item);
+                return;
+              }
+              onOpenArtifact(item);
+            }}
             items={groupedEvidence.map((item) => ({
               key: getGroupedEvidenceKey(item),
               icon: <FileSearchOutlined />,
               label: (
                 <Space size={6} wrap>
-                  <Text strong>{item.title}</Text>
-                  <Tag color="geekblue">第 {item.version} 版</Tag>
+                  <Text strong>{getEvidenceCardTitle(item)}</Text>
                 </Space>
               ),
               description: (
                 <div>
                   {(() => {
-                    const presentation = presentationByArtifactId[item.artifactId];
-                    const image = imageByArtifactId[item.artifactId];
+                    const recordingMaterialEvidence = isRecordingMaterialEvidenceCard(item);
+                    const canGenerateImage = canGenerateEvidenceImage(item);
+                    const image = canGenerateImage
+                      ? imageByArtifactId[item.artifactId]
+                      : undefined;
                     return (
                       <>
-                  <div className={styles.evidenceMeta}>
-                    <Tag>{item.anchorLabel}</Tag>
-                    {typeof item.score === 'number' ? (
-                      <Tag color="purple">{Math.round(item.score * 100)}%</Tag>
-                    ) : null}
-                    {item.matchCount > 1 ? (
-                      <Tag>{item.matchCount} 条命中片段</Tag>
-                    ) : null}
-                  </div>
-                  <div className={styles.evidenceSnippet}>{compactSnippet(item.snippet)}</div>
-                  <Space size={10} wrap style={{ marginTop: 8 }}>
-                    <Button
-                      type="link"
-                      size="small"
-                      icon={<EyeOutlined />}
-                      style={{ paddingInline: 0 }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onOpenArtifact(item);
-                      }}
-                    >
-                      查看完整研究
-                    </Button>
-                    <Button
-                      type="link"
-                      size="small"
-                      icon={<ShareAltOutlined />}
-                      loading={isPresentationRunning(presentation?.status)}
-                      disabled={isPresentationRunning(presentation?.status)}
-                      style={{ paddingInline: 0 }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        if (presentation?.status === 'succeeded' && presentation.pptArtifact?.downloadPath) {
-                          window.open(presentation.pptArtifact.downloadPath, '_blank', 'noopener,noreferrer');
-                          return;
-                        }
-                        onGeneratePresentation(item);
-                      }}
-                    >
-                      {getPresentationButtonLabel(presentation)}
-                    </Button>
-                    <Button
-                      type="link"
-                      size="small"
-                      icon={<PictureOutlined />}
-                      loading={isImageGenerating(image?.status)}
-                      disabled={isImageGenerating(image?.status)}
-                      style={{ paddingInline: 0 }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onGenerateImage(item);
-                      }}
-                    >
-                      {getImageButtonLabel(image)}
-                    </Button>
-                  </Space>
-                  {presentation?.status === 'failed' && presentation.errorMessage ? (
-                    <div className={styles.evidenceErrorText}>{presentation.errorMessage}</div>
-                  ) : null}
-                  {image?.status === 'failed' && image.errorMessage ? (
-                    <div className={styles.evidenceErrorText}>{image.errorMessage}</div>
-                  ) : null}
-                  {image?.status === 'succeeded' && (image.previewUrl || image.previewDataUrl) ? (
-                    <div className={styles.evidenceImagePreview}>
-                      <img src={image.previewUrl || image.previewDataUrl} alt={`${item.anchorLabel || item.title} 公司研究配图`} />
-                      <Space size={8} wrap className={styles.evidenceImageCaption}>
-                        <span>公司研究配图已保存，可继续基于这份资料追问或制作材料。</span>
-                        {image.downloadPath ? (
-                          <Button
-                            type="link"
-                            size="small"
-                            icon={<DownloadOutlined />}
-                            style={{ paddingInline: 0 }}
+                        <div className={styles.evidenceCardActions}>
+                          {recordingMaterialEvidence ? (
+                            <Button
+                              type="link"
+                              size="small"
+                              icon={<EyeOutlined />}
+                              style={{ paddingInline: 0 }}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onOpenRecordingEvidence(item);
+                              }}
+                            >
+                              打开录音分析
+                            </Button>
+                          ) : (
+                            <>
+                              <Button
+                                type="link"
+                                size="small"
+                                icon={<EyeOutlined />}
+                                style={{ paddingInline: 0 }}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onOpenArtifact(item);
+                                }}
+                              >
+                                {item.sourceToolCode === 'ext.yunzhijia_visit_prep' ? '查看拜访准备' : '查看完整研究'}
+                              </Button>
+                              {canGenerateImage ? (
+                                <Button
+                                  type="link"
+                                  size="small"
+                                  icon={<PictureOutlined />}
+                                  loading={isImageGenerating(image?.status)}
+                                  disabled={isImageGenerating(image?.status)}
+                                  style={{ paddingInline: 0 }}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    onGenerateImage(item);
+                                  }}
+                                >
+                                  {getImageButtonLabel(image)}
+                                </Button>
+                              ) : null}
+                            </>
+                          )}
+                        </div>
+                        {image?.status === 'failed' && image.errorMessage ? (
+                          <div className={styles.evidenceErrorText}>{image.errorMessage}</div>
+                        ) : null}
+                        {image?.status === 'succeeded' && (image.previewUrl || image.previewDataUrl) ? (
+                          <div
+                            className={styles.evidenceImagePreview}
                             onClick={(event) => {
                               event.stopPropagation();
-                              window.open(image.downloadPath, '_blank', 'noopener,noreferrer');
+                            }}
+                            onMouseDown={(event) => {
+                              event.stopPropagation();
                             }}
                           >
-                            下载图片
-                          </Button>
+                            <Image
+                              src={image.previewUrl || image.previewDataUrl}
+                              alt={`${sanitizeEvidenceText(item.anchorLabel) || getEvidenceCardTitle(item)} 公司研究配图`}
+                              preview={{ mask: '预览图片' }}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                              }}
+                            />
+                            {image.downloadPath ? (
+                              <Button
+                                className={styles.evidenceImageDownload}
+                                type="primary"
+                                shape="circle"
+                                size="small"
+                                icon={<DownloadOutlined />}
+                                aria-label="下载图片"
+                                title="下载图片"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  window.open(image.downloadPath, '_blank', 'noopener,noreferrer');
+                                }}
+                                onMouseDown={(event) => {
+                                  event.stopPropagation();
+                                }}
+                              />
+                            ) : null}
+                          </div>
                         ) : null}
-                      </Space>
-                    </div>
-                  ) : null}
                       </>
                     );
                   })()}
                 </div>
               ),
             }))}
-            onItemClick={(event) => {
-              const item = evidenceByKey.get(event.data.key);
-              if (item) {
-                onOpenArtifact(item);
-              }
-            }}
           />
         </div>
       ) : null}
@@ -3920,15 +4568,16 @@ function buildRole(
   styles: ReturnType<typeof useStyles>['styles'],
   markdownClassName: string,
   onOpenArtifact: OpenArtifactHandler,
-  onGeneratePresentation: GeneratePresentationHandler,
+  onOpenRecordingEvidence: OpenRecordingEvidenceHandler,
   onGenerateImage: GenerateImageHandler,
+  onGenerateAttachmentImage: GenerateAttachmentImageHandler,
   onOpenRecord: OpenRecordHandler,
   onSubmitQuestionCard: MetaQuestionSubmitHandler,
   onCancelQuestionCard: MetaQuestionCancelHandler,
   activeQuestionInteractionId: string | undefined,
   submittedQuestionInteractionIds: Set<string>,
-  presentationByArtifactId: Record<string, ArtifactPresentationPayload>,
   imageByArtifactId: Record<string, ArtifactImagePayload>,
+  imageByAttachmentKey: Record<string, MarkdownImagePayload>,
 ): BubbleListProps['role'] {
   return {
     assistant: {
@@ -3981,15 +4630,16 @@ function buildRole(
           styles={styles}
           markdownClassName={markdownClassName}
           onOpenArtifact={onOpenArtifact}
-          onGeneratePresentation={onGeneratePresentation}
+          onOpenRecordingEvidence={onOpenRecordingEvidence}
           onGenerateImage={onGenerateImage}
+          onGenerateAttachmentImage={onGenerateAttachmentImage}
           onOpenRecord={onOpenRecord}
           onSubmitQuestionCard={onSubmitQuestionCard}
           onCancelQuestionCard={onCancelQuestionCard}
           activeQuestionInteractionId={activeQuestionInteractionId}
           submittedQuestionInteractionIds={submittedQuestionInteractionIds}
-          presentationByArtifactId={presentationByArtifactId}
           imageByArtifactId={imageByArtifactId}
+          imageByAttachmentKey={imageByAttachmentKey}
         />
       ),
     },
@@ -4005,15 +4655,11 @@ function ArtifactMarkdownDrawer({
   state,
   markdownClassName,
   styles,
-  presentation,
-  onGeneratePresentation,
   onClose,
 }: {
   state: ArtifactViewerState;
   markdownClassName: string;
   styles: ReturnType<typeof useStyles>['styles'];
-  presentation?: ArtifactPresentationPayload;
-  onGeneratePresentation: GeneratePresentationHandler;
   onClose: () => void;
 }) {
   const anchorTags = buildArtifactAnchorTags(state.artifact?.anchors);
@@ -4043,26 +4689,6 @@ function ArtifactMarkdownDrawer({
       extra={
         state.markdown ? (
           <Space>
-            {state.artifact ? (
-              <Button
-                icon={<ShareAltOutlined />}
-                loading={isPresentationRunning(presentation?.status)}
-                disabled={isPresentationRunning(presentation?.status)}
-                onClick={() => {
-                  if (presentation?.status === 'succeeded' && presentation.pptArtifact?.downloadPath) {
-                    window.open(presentation.pptArtifact.downloadPath, '_blank', 'noopener,noreferrer');
-                    return;
-                  }
-                  onGeneratePresentation({
-                    artifactId: state.artifact!.artifactId,
-                    versionId: state.artifact!.versionId,
-                    title: state.artifact!.title,
-                  });
-                }}
-              >
-                {getPresentationButtonLabel(presentation)}
-              </Button>
-            ) : null}
             <Actions.Copy text={state.markdown} icon={<CopyOutlined />} />
           </Space>
         ) : null
@@ -4193,10 +4819,8 @@ function AssistantConversationRuntime({
     markdown: '',
     error: null,
   });
-  const [presentationByArtifactId, setPresentationByArtifactId] = useState<
-    Record<string, ArtifactPresentationPayload>
-  >({});
   const [imageByArtifactId, setImageByArtifactId] = useState<Record<string, ArtifactImagePayload>>({});
+  const [imageByAttachmentKey, setImageByAttachmentKey] = useState<Record<string, MarkdownImagePayload>>({});
   const [recordingTasks, setRecordingTasks] = useState<RecordingTaskCardState[]>(
     () => loadPersistedRecordingTasks(runtimeScope, activeConversationKey),
   );
@@ -4387,21 +5011,6 @@ function AssistantConversationRuntime({
     isDefaultMessagesRequesting,
     messageList,
   ]);
-
-  const fetchPresentationStatus = React.useCallback(async (artifactId: string) => {
-    const response = await fetch(
-      `/api/artifacts/${encodeURIComponent(artifactId)}/presentation`,
-    );
-    if (!response.ok) {
-      throw new Error(`PPT 状态接口返回 ${response.status}`);
-    }
-    const payload = (await response.json()) as ArtifactPresentationPayload;
-    setPresentationByArtifactId((current) => ({
-      ...current,
-      [artifactId]: payload,
-    }));
-    return payload;
-  }, []);
 
   const fetchImageStatus = React.useCallback(async (artifactId: string) => {
     const response = await fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/image`);
@@ -4745,7 +5354,7 @@ function AssistantConversationRuntime({
   useEffect(() => {
     const missingArtifacts = Array.from(new Set(
       visibleEvidenceCards
-        .filter((item) => item.artifactId && !imageByArtifactId[item.artifactId])
+        .filter((item) => canGenerateEvidenceImage(item) && item.artifactId && !imageByArtifactId[item.artifactId])
         .map((item) => item.artifactId),
     ));
 
@@ -4780,88 +5389,11 @@ function AssistantConversationRuntime({
     return () => window.clearInterval(timer);
   }, [fetchImageStatus, imageByArtifactId]);
 
-  useEffect(() => {
-    const runningArtifacts = Object.values(presentationByArtifactId)
-      .filter((item) => isPresentationRunning(item.status))
-      .map((item) => item.artifactId);
-
-    if (!runningArtifacts.length) {
-      return undefined;
-    }
-
-    const timer = window.setInterval(() => {
-      runningArtifacts.forEach((artifactId) => {
-        void fetchPresentationStatus(artifactId).catch(() => {
-          // Keep the last visible state; manual retry remains available.
-        });
-      });
-    }, 3000);
-
-    return () => window.clearInterval(timer);
-  }, [fetchPresentationStatus, presentationByArtifactId]);
-
-  const handleGeneratePresentation = React.useCallback(
-    async (evidence: PresentationTarget) => {
-      const existing = presentationByArtifactId[evidence.artifactId];
-      if (existing?.status === 'succeeded' && existing.pptArtifact?.downloadPath) {
-        window.open(existing.pptArtifact.downloadPath, '_blank', 'noopener,noreferrer');
-        return;
-      }
-      if (isPresentationRunning(existing?.status)) {
-        return;
-      }
-
-      setPresentationByArtifactId((current) => ({
-        ...current,
-        [evidence.artifactId]: {
-          artifactId: evidence.artifactId,
-          versionId: evidence.versionId,
-          title: evidence.title,
-          status: 'queued',
-        },
-      }));
-
-      try {
-        const response = await fetch(
-          `/api/artifacts/${encodeURIComponent(evidence.artifactId)}/presentation`,
-          { method: 'POST' },
-        );
-        if (!response.ok) {
-          throw new Error(`PPT 生成接口返回 ${response.status}`);
-        }
-
-        const payload = (await response.json()) as ArtifactPresentationPayload;
-        setPresentationByArtifactId((current) => ({
-          ...current,
-          [evidence.artifactId]: payload,
-        }));
-
-        if (payload.status === 'succeeded') {
-          messageApi.success('PPT 已生成');
-        } else if (payload.status === 'failed') {
-          messageApi.error(payload.errorMessage || 'PPT 生成失败，可重新生成');
-        } else {
-          messageApi.info('PPT 生成已提交，请稍候');
-        }
-      } catch (error) {
-        setPresentationByArtifactId((current) => ({
-          ...current,
-          [evidence.artifactId]: {
-            artifactId: evidence.artifactId,
-            versionId: evidence.versionId,
-            title: evidence.title,
-            status: 'failed',
-            errorMessage: error instanceof Error ? error.message : 'PPT 生成失败',
-          },
-        }));
-        messageApi.error(error instanceof Error ? error.message : 'PPT 生成失败');
-      }
-    },
-    [messageApi, presentationByArtifactId],
-  );
-
   const handleGenerateImage = React.useCallback<GenerateImageHandler>(
     async (evidence) => {
+      if (!canGenerateEvidenceImage(evidence)) {
+        return;
+      }
       const existing = imageByArtifactId[evidence.artifactId];
       if (isImageGenerating(existing?.status)) {
         return;
@@ -4923,6 +5455,74 @@ function AssistantConversationRuntime({
       }
     },
     [imageByArtifactId, messageApi, safeScrollToBottom],
+  );
+
+  const handleGenerateAttachmentImage = React.useCallback<GenerateAttachmentImageHandler>(
+    async (attachment) => {
+      const existing = imageByAttachmentKey[attachment.key];
+      if (isMarkdownImageGenerating(existing?.status)) {
+        return;
+      }
+
+      setImageByAttachmentKey((current) => ({
+        ...current,
+        [attachment.key]: {
+          key: attachment.key,
+          title: attachment.name,
+          status: 'queued',
+        },
+      }));
+
+      try {
+        const markdownResponse = await fetch(attachment.url);
+        if (!markdownResponse.ok) {
+          throw new Error(`Markdown 附件读取失败：${await readApiErrorMessage(markdownResponse)}`);
+        }
+        const markdown = await markdownResponse.text();
+        const request: MarkdownImageGenerationRequest = {
+          title: attachment.name,
+          markdown,
+          size: '1536x1024',
+          quality: 'auto',
+        };
+        const imageResponse = await fetch('/api/markdown/image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request),
+        });
+        if (!imageResponse.ok) {
+          throw new Error(await readApiErrorMessage(imageResponse));
+        }
+
+        const payload = (await imageResponse.json()) as MarkdownImageGenerationResponse;
+        setImageByAttachmentKey((current) => ({
+          ...current,
+          [attachment.key]: {
+            ...payload,
+            key: attachment.key,
+            title: payload.title || attachment.name,
+            status: 'succeeded',
+          },
+        }));
+        messageApi.success('图片已生成');
+        window.requestAnimationFrame(() => {
+          safeScrollToBottom();
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : '图片生成失败';
+        setImageByAttachmentKey((current) => ({
+          ...current,
+          [attachment.key]: {
+            key: attachment.key,
+            title: attachment.name,
+            status: 'failed',
+            errorMessage,
+          },
+        }));
+        messageApi.error(errorMessage);
+      }
+    },
+    [imageByAttachmentKey, messageApi, safeScrollToBottom],
   );
 
   const handleSubmitQuestionCard = React.useCallback<MetaQuestionSubmitHandler>(
@@ -5045,9 +5645,6 @@ function AssistantConversationRuntime({
         error: null,
         artifact: payload.artifact,
       });
-      void fetchPresentationStatus(payload.artifact.artifactId).catch(() => {
-        // PPT status is optional for Markdown viewing.
-      });
     } catch (error) {
       setArtifactViewer({
         open: true,
@@ -5058,18 +5655,38 @@ function AssistantConversationRuntime({
         error: error instanceof Error ? error.message : '无法读取资料',
       });
     }
-  }, [fetchPresentationStatus]);
+  }, []);
+
+  const handleOpenRecordingEvidence = React.useCallback<OpenRecordingEvidenceHandler>(async (evidence) => {
+    const knownTaskId = evidence.recordingTaskId?.trim();
+    if (knownTaskId) {
+      openRecordingViewer(knownTaskId);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/artifacts/${encodeURIComponent(evidence.artifactId)}`);
+      if (!response.ok) {
+        throw new Error(`录音资料接口返回 ${response.status}`);
+      }
+      const payload = (await response.json()) as ArtifactDetailPayload;
+      const taskId = getRecordingTaskIdFromArtifactDetail(payload);
+      if (!taskId) {
+        messageApi.warning('暂时无法定位这份录音分析，请刷新后重试。');
+        return;
+      }
+      openRecordingViewer(taskId);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : '录音分析打开失败');
+    }
+  }, [messageApi]);
 
   const handleOpenRecordingViewer = React.useCallback((task: RecordingTaskCardState) => {
     if (task.status !== 'succeeded') {
       messageApi.warning('录音处理完成后才能打开查看页');
       return;
     }
-    window.open(
-      `/api/recording-audio-tasks/${encodeURIComponent(task.taskId)}/meeting-viewer`,
-      '_blank',
-      'noopener,noreferrer',
-    );
+    openRecordingViewer(task.taskId);
   }, [messageApi]);
 
   const handleOpenRecordingSkillArtifact = React.useCallback(async (
@@ -5180,18 +5797,19 @@ function AssistantConversationRuntime({
   }, [handleOpenRecord, requestFromRecordingTask]);
 
   const role = useMemo(
-    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleGeneratePresentation, handleGenerateImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, presentationByArtifactId, imageByArtifactId),
+    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleOpenRecordingEvidence, handleGenerateImage, handleGenerateAttachmentImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, imageByArtifactId, imageByAttachmentKey),
     [
       activeQuestionInteractionId,
       handleCancelQuestionCard,
+      handleGenerateAttachmentImage,
       handleGenerateImage,
-      handleGeneratePresentation,
       handleOpenArtifactCard,
+      handleOpenRecordingEvidence,
       handleOpenRecord,
       handleSubmitQuestionCard,
+      imageByAttachmentKey,
       imageByArtifactId,
       markdownClassName,
-      presentationByArtifactId,
       runtimeScope.identity,
       submittedQuestionInteractionIds,
       styles,
@@ -5240,6 +5858,10 @@ function AssistantConversationRuntime({
     const normalizedText = text.trim();
     if (selectedComposerCommand?.key === 'company-research' && !normalizedText) {
       messageApi.warning('请输入公司全称');
+      return;
+    }
+    if (selectedComposerCommand?.key === 'yunzhijia-visit-prep' && !normalizedText) {
+      messageApi.warning('请输入客户名称');
       return;
     }
 
@@ -5349,8 +5971,9 @@ function AssistantConversationRuntime({
       return;
     }
 
-    if (normalized === '/公司研究') {
-      selectSlashCommand(slashCommands[0]);
+    const exactSlashCommand = slashCommands.find((item) => item.command === normalized);
+    if (exactSlashCommand) {
+      selectSlashCommand(exactSlashCommand);
       return;
     }
 
@@ -5480,7 +6103,7 @@ function AssistantConversationRuntime({
   const hasTimelineEntries = recordingTimeline.length > 0;
 
   const senderFooter: NodeRender = (_, { components }) => {
-    const { LoadingButton, SendButton, SpeechButton } = components;
+    const { LoadingButton, SendButton } = components;
 
     return (
       <div className={styles.composerFooter}>
@@ -5514,7 +6137,6 @@ function AssistantConversationRuntime({
           ))}
         </div>
         <div className={styles.composerFooterActions}>
-          <SpeechButton />
           {isRequesting ? <LoadingButton /> : <SendButton />}
         </div>
       </div>
@@ -5632,10 +6254,11 @@ function AssistantConversationRuntime({
         skill={selectedSenderSkill}
         loading={isRequesting}
         className={styles.sender}
-        allowSpeech
         placeholder={
           selectedComposerCommand?.key === 'company-research'
             ? '请输入公司全称，例如：上海松井机械有限公司'
+            : selectedComposerCommand?.key === 'yunzhijia-visit-prep'
+              ? '输入客户名称，客户关注点可选'
             : scene.defaultInput
         }
       />
@@ -5653,9 +6276,7 @@ function AssistantConversationRuntime({
               <Tag color="blue">{scene.title}</Tag>
               <Tag color="purple">命中 {getSceneSlashCommand(scene.key)}</Tag>
             </>
-          ) : (
-            <Tag color="cyan">公司研究入口</Tag>
-          )}
+          ) : null}
           <Button
             type="text"
             icon={<EyeOutlined />}
@@ -5707,12 +6328,6 @@ function AssistantConversationRuntime({
         state={artifactViewer}
         markdownClassName={markdownClassName}
         styles={styles}
-        presentation={
-          artifactViewer.artifactId
-            ? presentationByArtifactId[artifactViewer.artifactId]
-            : undefined
-        }
-        onGeneratePresentation={handleGeneratePresentation}
         onClose={() => setArtifactViewer((current) => ({ ...current, open: false }))}
       />
     </ChatContext.Provider>
@@ -5838,6 +6453,8 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
     () => buildDefaultPersonalSettings(runtimeScope.identity),
   );
   const [personalSettingsLoading, setPersonalSettingsLoading] = useState(true);
+  const [renamingConversation, setRenamingConversation] = useState<ConversationSession | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const [blankConversationKeys, setBlankConversationKeys] = useState<Set<string>>(
     () => new Set(),
   );
@@ -5848,7 +6465,7 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
       label: 'AI 销售工作台',
       route: '/chat',
       group: '固定会话',
-      lastMessage: '输入公司名称，使用公司研究生成或复用 Markdown 资料。',
+      lastMessage: '输入客户名称，客户关注点可选。',
       updatedAt: '刚刚',
       scene: 'chat',
     }),
@@ -6109,7 +6726,51 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
     }
   }, [activeConversationKey, location.pathname, navigate, setActiveConversationKey]);
 
-  const footerSubtitle = `${personalSettings.roleLabel}${personalSettings.isDefaultSoulPrompt ? ' · SOUL 未配置' : ' · SOUL 已配置'}`;
+  const openRenameConversation = React.useCallback((conversation: ConversationSession) => {
+    setRenamingConversation(conversation);
+    setRenameDraft(conversation.label);
+  }, []);
+
+  const closeRenameConversation = React.useCallback(() => {
+    setRenamingConversation(null);
+    setRenameDraft('');
+  }, []);
+
+  const handleRenameConversation = React.useCallback(async () => {
+    if (!renamingConversation) {
+      return;
+    }
+    const nextLabel = renameDraft.replace(/\s+/g, ' ').trim();
+    if (!nextLabel) {
+      messageApi.warning('请输入会话名称');
+      return;
+    }
+
+    const nextConversation: ConversationSession = {
+      ...renamingConversation,
+      label: nextLabel.length > 40 ? `${nextLabel.slice(0, 40)}…` : nextLabel,
+      updatedAt: '刚刚',
+    };
+    const nextConversations = conversationsRef.current.map((item) => (
+      item.key === nextConversation.key ? nextConversation : item
+    ));
+    conversationsRef.current = nextConversations;
+    setConversation(nextConversation.key, nextConversation);
+    persistCustomConversations(runtimeScope, nextConversations, baseConversations);
+    void persistRemoteConversation(runtimeScope, nextConversation).catch(() => {
+      // The local rename is kept even when admin-api is not running.
+    });
+    messageApi.success('会话已重命名');
+    closeRenameConversation();
+  }, [
+    baseConversations,
+    closeRenameConversation,
+    messageApi,
+    renameDraft,
+    renamingConversation,
+    runtimeScope,
+    setConversation,
+  ]);
 
   const onCreateConversation = () => {
     const existingBlankConversation = conversations.find((item) => (
@@ -6179,22 +6840,39 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
           }
         }}
         styles={{ item: { padding: '0 8px' } }}
-        menu={() => undefined}
+        menu={(item) => {
+          const conversation = conversations.find((candidate) => candidate.key === item.key) as
+            | ConversationSession
+            | undefined;
+          if (!conversation || !isUserCreatedConversationKey(runtimeScope, conversation.key)) {
+            return undefined;
+          }
+          return {
+            items: [
+              {
+                key: 'rename',
+                icon: <EditOutlined />,
+                label: '重命名',
+              },
+            ],
+            onClick: ({ key, domEvent }) => {
+              domEvent.stopPropagation();
+              if (key === 'rename') {
+                openRenameConversation(conversation);
+              }
+            },
+          };
+        }}
       />
 
       <div className={styles.sideFooter}>
-        <Space size={10}>
+        <Space size={8} className={styles.sideFooterInfo}>
           <Avatar size={24} style={{ backgroundColor: '#1677ff' }}>
             {personalSettings.displayName.slice(0, 1)}
           </Avatar>
-          <Space orientation="vertical" size={0} className={styles.sideFooterInfo}>
-            <Text strong ellipsis>
-              {personalSettings.displayName}
-            </Text>
-            <Text type="secondary" ellipsis>
-              {footerSubtitle}
-            </Text>
-          </Space>
+          <Text strong ellipsis>
+            {personalSettings.displayName}
+          </Text>
         </Space>
         <Button
           type="text"
@@ -6204,6 +6882,29 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
         />
       </div>
     </div>
+  );
+
+  const renameConversationModal = (
+    <Modal
+      title="重命名会话"
+      open={Boolean(renamingConversation)}
+      onCancel={closeRenameConversation}
+      onOk={handleRenameConversation}
+      okText="保存"
+      cancelText="取消"
+      destroyOnHidden
+    >
+      <Input
+        autoFocus
+        maxLength={40}
+        value={renameDraft}
+        placeholder="请输入会话名称"
+        onChange={(event) => setRenameDraft(event.target.value)}
+        onPressEnter={() => {
+          void handleRenameConversation();
+        }}
+      />
+    </Modal>
   );
 
   const mainContent = isPersonalSettingsRoute ? (
@@ -6244,6 +6945,7 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
         {chatSide}
         {mainContent}
       </div>
+      {renameConversationModal}
     </XProvider>
   );
 }
@@ -6335,10 +7037,56 @@ function AssistantIdentityGate() {
   );
 }
 
+function RecordingViewerLoadingPage() {
+  const { styles } = useStyles();
+  const location = useLocation();
+  const target = useMemo(
+    () => new URLSearchParams(location.search).get('target')?.trim() || '',
+    [location.search],
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!target || !isSafeRecordingViewerTarget(target)) {
+      setError('录音分析地址无效，请返回对话后重新打开。');
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      window.location.replace(target);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [target]);
+
+  return (
+    <div className={styles.authGate}>
+      <div className={styles.authGatePanel}>
+        {error ? (
+          <Alert
+            type="error"
+            showIcon
+            message="录音分析打开失败"
+            description={error}
+          />
+        ) : (
+          <Flex vertical align="center" gap={14}>
+            <Spin size="large" />
+            <Text strong>录音分析正在打开，请稍候</Text>
+            <Text type="secondary" style={{ textAlign: 'center' }}>
+              服务器准备查看页可能需要一点时间，请不要关闭此页。
+            </Text>
+          </Flex>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/chat" replace />} />
+      <Route path="/recording-viewer-loading" element={<RecordingViewerLoadingPage />} />
       <Route path="/chat" element={<AssistantIdentityGate />} />
       <Route path="/settings/personal" element={<AssistantIdentityGate />} />
       <Route path="/chat/company-research" element={<Navigate to="/chat" replace />} />

@@ -13,7 +13,7 @@ test('materializeTask only writes temporary consumable markdown before formal fo
   const record: RecordingTaskRecord = {
     taskId: 'recording-task-001',
     eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    appId: config.yzj.lightCloud.appId,
     serviceTaskId: 'audio-task-001',
     providerDataId: 'EV5',
     fixtureTaskId: 'EV5',
@@ -124,7 +124,7 @@ test('archiveTask saves recording_material only after followup commit with forma
   const record: RecordingTaskRecord = {
     taskId: 'recording-task-archive',
     eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    appId: config.yzj.lightCloud.appId,
     serviceTaskId: 'audio-task-archive',
     providerDataId: 'DATA-ARCHIVE',
     fixtureTaskId: null,
@@ -257,7 +257,7 @@ test('requestArchiveTask stores pending archive when recording is not complete',
   const record: RecordingTaskRecord = {
     taskId: 'recording-task-pending-archive',
     eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    appId: config.yzj.lightCloud.appId,
     serviceTaskId: 'audio-task-pending-archive',
     providerDataId: 'DATA-PENDING',
     fixtureTaskId: null,
@@ -346,7 +346,7 @@ test('requestArchiveTask repairs downstream analysis for already archived record
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-archived-repair',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-archived-repair',
       providerDataId: 'DATA-ARCHIVED-REPAIR',
       fixtureTaskId: null,
@@ -514,7 +514,7 @@ test('uploadTask falls back to completed md5 cache when audio service sync is un
   const cachedRecord: RecordingTaskRecord = {
     taskId: 'recording-task-cached',
     eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    appId: config.yzj.lightCloud.appId,
     serviceTaskId: 'audio-task-cached',
     providerDataId: 'cached-data-id',
     fixtureTaskId: null,
@@ -576,7 +576,7 @@ test('uploadTask reuses completed md5 cache without creating a new provider task
   const cachedRecord: RecordingTaskRecord = {
     taskId: 'recording-task-cached',
     eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    appId: config.yzj.lightCloud.appId,
     serviceTaskId: 'audio-task-old',
     providerDataId: 'pqngDD3wjSwf',
     fixtureTaskId: null,
@@ -653,7 +653,7 @@ test('uploadTask restarts failed md5 cache instead of returning stale dependency
   const failedRecord: RecordingTaskRecord = {
     taskId: 'recording-task-failed',
     eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    appId: config.yzj.lightCloud.appId,
     serviceTaskId: 'audio-task-old-failed',
     providerDataId: null,
     fixtureTaskId: null,
@@ -743,7 +743,7 @@ test('getMeetingViewerUrl redirects completed task to provider or fixture viewer
   const record: RecordingTaskRecord = {
     taskId: 'recording-task-viewer',
     eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    appId: config.yzj.lightCloud.appId,
     serviceTaskId: 'audio-task-viewer',
     providerDataId: 'pqngDD3wjSwf',
     fixtureTaskId: 'EV5TddyrE5zM',
@@ -801,7 +801,7 @@ test('createSkillJob sends structured Tongyi analysis JSON before recording mark
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-skill',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-skill',
       providerDataId: 'DATA-SKILL',
       fixtureTaskId: null,
@@ -924,7 +924,7 @@ test('getSkillJob upserts one formal analysis_material when archived recording j
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-analysis',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-analysis',
       providerDataId: 'DATA-ANALYSIS',
       fixtureTaskId: null,
@@ -1091,7 +1091,7 @@ test('archiveCompletedSkillJobs persists succeeded downstream jobs after recordi
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-archive-completed',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-archive-completed',
       providerDataId: 'DATA-ARCHIVE',
       fixtureTaskId: null,
@@ -1213,7 +1213,7 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal problem statem
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-problem-rerun',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-problem-rerun',
       providerDataId: 'DATA-PROBLEM',
       fixtureTaskId: null,
@@ -1353,7 +1353,7 @@ test('ensureCoreAnalysisMaterials reruns visit understanding, needs analysis, an
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-core-analysis',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-core-analysis',
       providerDataId: 'DATA-CORE-ANALYSIS',
       fixtureTaskId: null,
@@ -1522,7 +1522,7 @@ test('getTask completes pending archive and reruns existing downstream analysis 
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-pending-auto',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-pending-auto',
       providerDataId: 'DATA-PENDING-AUTO',
       fixtureTaskId: null,
@@ -1706,7 +1706,7 @@ test('formal analysis material blocks stale unbound context markdown', async () 
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-stale-analysis',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-stale-analysis',
       providerDataId: 'DATA-STALE',
       fixtureTaskId: null,
@@ -1800,7 +1800,7 @@ test('archiveCompletedSkillJobs recovers markdown artifacts when runtime job ind
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-artifact-recovery',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-artifact-recovery',
       providerDataId: 'DATA-ARTIFACT-RECOVERY',
       fixtureTaskId: null,
@@ -1884,7 +1884,7 @@ test('createSkillJob rejects empty generated material without structured analysi
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-empty-material',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-empty-material',
       providerDataId: 'DATA-EMPTY',
       fixtureTaskId: null,
@@ -1958,7 +1958,7 @@ test('createSkillJob rejects non-whitelisted skill and process-file material pat
     const record: RecordingTaskRecord = {
       taskId: 'recording-task-process-file',
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       serviceTaskId: 'audio-task-process-file',
       providerDataId: 'DATA-PROCESS',
       fixtureTaskId: null,

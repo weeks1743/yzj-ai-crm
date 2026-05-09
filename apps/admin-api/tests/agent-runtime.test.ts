@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { AgentRunRepository } from '../src/agent-run-repository.js';
 import { MainAgentRuntime } from '../src/agent-runtime.js';
@@ -361,6 +362,10 @@ function createAgentTestService(input: {
       createCompanyResearchArtifact: async () => {
         throw new Error('not used');
       },
+      createAnalysisMaterialArtifact: async () => {
+        throw new Error('not used');
+      },
+      findLatestCompanyResearchArtifact: async () => null,
       search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
       getArtifact: async () => {
         throw new Error('not used');
@@ -650,6 +655,293 @@ function createFollowupWriteFields(): ShadowStandardizedField[] {
   ];
 }
 
+function createCustomerUpdateFields(): ShadowStandardizedField[] {
+  return [
+    createSearchField({
+      fieldCode: '_S_NAME',
+      label: '客户名称',
+      widgetType: 'textWidget',
+      semanticSlot: 'customer_name',
+      searchParameterKey: 'customer_name',
+      writeParameterKey: 'customer_name',
+    }),
+    createSearchField({
+      fieldCode: 'Ra_0',
+      label: '客户状态',
+      widgetType: 'radioWidget',
+      semanticSlot: 'customer_status',
+      searchParameterKey: 'customer_status',
+      writeParameterKey: 'customer_status',
+      options: [
+        { title: '潜在客户', key: 'potential', value: '潜在客户' },
+        { title: '成交', key: 'won', value: '成交' },
+      ],
+    }),
+    createSearchField({
+      fieldCode: 'Industry_0',
+      label: '行业',
+      widgetType: 'textWidget',
+      semanticSlot: 'industry',
+      searchParameterKey: 'industry',
+      writeParameterKey: 'industry',
+    }),
+    createSearchField({
+      fieldCode: 'Ps_owner',
+      label: '负责人',
+      widgetType: 'personSelectWidget',
+      writeParameterKey: 'owner_open_id',
+    }),
+  ];
+}
+
+function createContactUpdateFields(): ShadowStandardizedField[] {
+  return [
+    createSearchField({
+      fieldCode: '_S_NAME',
+      label: '联系人姓名',
+      widgetType: 'textWidget',
+      searchParameterKey: 'contact_name',
+      writeParameterKey: 'contact_name',
+    }),
+    createSearchField({
+      fieldCode: 'Nu_0',
+      label: '手机',
+      widgetType: 'numberWidget',
+      searchParameterKey: 'mobile_phone',
+      writeParameterKey: 'mobile_phone',
+    }),
+    createSearchField({
+      fieldCode: '_S_DISABLE',
+      label: '启用状态',
+      widgetType: 'switchWidget',
+      searchParameterKey: 'enabled_state',
+      writeParameterKey: 'enabled_state',
+    }),
+    createSearchField({
+      fieldCode: 'Bd_customer',
+      label: '关联客户',
+      widgetType: 'basicDataWidget',
+      searchParameterKey: 'linked_customer_form_inst_id',
+      writeParameterKey: 'linked_customer_form_inst_id',
+      relationBinding: {
+        kind: 'basic_data',
+        formCodeId: 'customer-form',
+        modelName: '客户',
+        displayCol: '_S_NAME',
+      },
+    }),
+    createSearchField({
+      fieldCode: 'Pw_0',
+      label: '省',
+      widgetType: 'publicOptBoxWidget',
+      searchParameterKey: 'province',
+      writeParameterKey: 'province',
+      options: [{ title: '安徽', key: 'anhui', value: '安徽' }],
+    }),
+    createSearchField({
+      fieldCode: 'Te_office',
+      label: '办公电话',
+      widgetType: 'textWidget',
+      searchParameterKey: 'office_phone',
+      writeParameterKey: 'office_phone',
+    }),
+  ];
+}
+
+function createUpdateLiveRecord(
+  objectKey: ShadowObjectKey,
+  formInstId: string,
+  name: string,
+  extraFields: Array<{
+    codeId: string;
+    title: string;
+    type?: string;
+    value: unknown;
+    rawValue?: unknown;
+  }> = [],
+): any {
+  const title = objectKey === 'contact'
+    ? '联系人姓名'
+    : objectKey === 'opportunity'
+      ? '机会名称'
+      : objectKey === 'followup'
+        ? '跟进记录'
+        : '客户名称';
+  const codeId = objectKey === 'customer' || objectKey === 'contact' ? '_S_NAME' : '_S_TITLE';
+  const fields = [
+    {
+      codeId,
+      title,
+      type: 'textWidget',
+      value: name,
+      rawValue: name,
+      parentCodeId: null,
+    },
+    ...extraFields.map((field) => ({
+      codeId: field.codeId,
+      title: field.title,
+      type: field.type ?? 'textWidget',
+      value: field.value,
+      rawValue: field.rawValue ?? field.value,
+      parentCodeId: null,
+    })),
+  ];
+  return {
+    formInstId,
+    important: Object.fromEntries(fields.map((field) => [field.title, field.value])),
+    fields,
+    fieldMap: Object.fromEntries(fields.map((field) => [field.codeId, field])),
+    rawRecord: {
+      [codeId]: name,
+      [title]: name,
+      ...Object.fromEntries(extraFields.flatMap((field) => [
+        [field.codeId, field.rawValue ?? field.value],
+        [field.title, field.value],
+      ])),
+    },
+  };
+}
+
+function createVisitPrepCompanyResearchDetail(input: {
+  companyName: string;
+  artifactId?: string;
+  version?: number;
+  markdown?: string;
+  customerId?: string;
+  customerName?: string;
+}) {
+  const artifactId = input.artifactId ?? 'artifact-company-research-001';
+  const version = input.version ?? 1;
+  const anchors = [
+    ...(input.customerId
+      ? [{
+          type: 'customer' as const,
+          id: input.customerId,
+          name: input.customerName ?? input.companyName,
+          role: 'primary' as const,
+        }]
+      : []),
+    {
+      type: 'company' as const,
+      id: input.companyName,
+      name: input.companyName,
+      role: input.customerId ? 'related' as const : 'primary' as const,
+    },
+  ];
+  return {
+    artifact: {
+      artifactId,
+      versionId: `${artifactId}-v${version}`,
+      kind: 'company_research' as const,
+      title: `${input.companyName} 公司研究`,
+      version,
+      sourceToolCode: 'ext.company_research_pm',
+      vectorStatus: 'indexed' as const,
+      anchors,
+      chunkCount: 3,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    markdown: input.markdown ?? `# ${input.companyName} 公司研究\n\n## 公司概览\n贝斯美是化工制造企业。`,
+    summary: `${input.companyName} 公司研究摘要`,
+  };
+}
+
+function createReadyPreviewResponse(objectKey: ShadowObjectKey, input: any) {
+  return {
+    objectKey,
+    operation: 'upsert',
+    unresolvedDictionaries: [],
+    resolvedDictionaryMappings: [],
+    missingRequiredParams: [],
+    blockedReadonlyParams: [],
+    missingRuntimeInputs: [],
+    validationErrors: [],
+    readyToSend: true,
+    requestBody: {
+      formCodeId: `${objectKey}-form`,
+      data: [{ widgetValue: input.params ?? {} }],
+    },
+  };
+}
+
+function createUpdateScenarioService(input: {
+  objectKey: ShadowObjectKey;
+  intentName?: string;
+  fields: ShadowStandardizedField[];
+  searchRecords?: any[];
+  searchRecordsByObject?: Partial<Record<ShadowObjectKey, any[]>>;
+  getRecordsById?: Record<string, any>;
+  executeGetThrows?: boolean;
+  orgEmployees?: OrgEmployeeCandidate[];
+}) {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const searchInputs: Array<{ objectKey: ShadowObjectKey; input: any }> = [];
+  const previewInputs: any[] = [];
+  const recordsByObject: Partial<Record<ShadowObjectKey, any[]>> = {
+    [input.objectKey]: input.searchRecords ?? [],
+    ...(input.searchRecordsByObject ?? {}),
+  };
+  const fieldsByObject: Partial<Record<ShadowObjectKey, ShadowStandardizedField[]>> = {
+    [input.objectKey]: input.fields,
+    customer: input.objectKey === 'customer' ? input.fields : createCustomerUpdateFields(),
+  };
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent(input.objectKey, 'write', input.intentName ?? ''),
+    shadowMetadataService: {
+      listObjects: () => [
+        { objectKey: 'customer', formCodeId: 'customer-form' },
+        { objectKey: 'contact', formCodeId: 'contact-form' },
+        { objectKey: 'opportunity', formCodeId: 'opportunity-form' },
+        { objectKey: 'followup', formCodeId: 'followup-form' },
+      ],
+      getObject: (objectKey: ShadowObjectKey) => ({ fields: fieldsByObject[objectKey] ?? [] }),
+      executeSearch: async (objectKey: ShadowObjectKey, searchInput: any) => {
+        searchInputs.push({ objectKey, input: searchInput });
+        return { records: recordsByObject[objectKey] ?? [] };
+      },
+      executeGet: async (_objectKey: ShadowObjectKey, getInput: any) => {
+        if (input.executeGetThrows) {
+          throw new Error('get failed');
+        }
+        return { record: input.getRecordsById?.[String(getInput.formInstId ?? '')] ?? null };
+      },
+      previewUpsert: async (objectKey: ShadowObjectKey, previewInput: any) => {
+        previewInputs.push(previewInput);
+        return createReadyPreviewResponse(objectKey, previewInput);
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+    orgSyncRepository: input.orgEmployees ? createEmployeeLookup(input.orgEmployees) : undefined,
+  });
+  return { repository, service, searchInputs, previewInputs };
+}
+
+function assertNoInternalUpdateText(content: string): void {
+  assert.equal(/formInstId|form_inst_id|readyToSend|record\.[a-z_]+\.preview_update/.test(content), false);
+  assert.equal(/[0-9a-f]{20,}/i.test(content), false);
+}
+
+function assertUpdateFieldPicker(
+  response: Awaited<ReturnType<AgentService['chat']>>,
+  targetName: string,
+  paramKeys: string[],
+): void {
+  const questionCard = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard;
+  assert.equal(questionCard?.layout, 'update_field_picker');
+  assert.equal(questionCard?.targetSummary?.value, targetName);
+  for (const paramKey of paramKeys) {
+    assert.ok(
+      questionCard?.questions.some((question) => question.paramKey === paramKey),
+      `expected update field picker question for ${paramKey}`,
+    );
+  }
+  assertNoInternalUpdateText(response.message.content);
+}
+
 function createCustomerLookupFields(): ShadowStandardizedField[] {
   return [
     createSearchField({
@@ -704,6 +996,7 @@ test('Tool Registry exposes generic contracts and rejects scene tools', () => {
     'record.object.commit_create',
     'record.object.commit_update',
     'external.company_research',
+    'external.yunzhijia_visit_prep',
     'artifact.search',
     'artifact.recording_material.prepare',
     'meta.clarify_card',
@@ -1585,7 +1878,6 @@ test('Agent runtime anchors visit demand summary with real customer name and foc
 
   assert.equal(response.executionState.status, 'completed');
   assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'meta.context_summary');
-  assert.match(response.message.content, /拜访需求摘要/);
   assert.match(response.message.content, /客户主要需求/);
   assert.match(response.message.content, /需求 1：云之家与金蝶云星空 ERP 深度集成/);
   assert.match(response.message.content, /需求 2：全流程业务场景线上化覆盖/);
@@ -1593,8 +1885,12 @@ test('Agent runtime anchors visit demand summary with real customer name and foc
   assert.match(response.message.content, /需求 4：多语言与海外分支适配/);
   assert.match(response.message.content, /需求 5：组织架构按投资关系设计，数据权限隔离/);
   assert.match(response.message.content, /需求 6：研发项目费用化管理与财务系统打通/);
-  assert.match(response.message.content, /贝斯美拜访 - 问题陈述/);
-  assert.match(response.message.content, /贝斯美拜访 - 拜访会话理解/);
+  assert.doesNotMatch(response.message.content, /拜访需求摘要/);
+  assert.doesNotMatch(response.message.content, /证据来源/);
+  assert.doesNotMatch(response.message.content, /记录系统补充/);
+  assert.doesNotMatch(response.message.content, /公司研究背景/);
+  assert.doesNotMatch(response.message.content, /贝斯美拜访 - 问题陈述/);
+  assert.doesNotMatch(response.message.content, /贝斯美拜访 - 拜访会话理解/);
   assert.doesNotMatch(response.message.content, /价值定位：云之家可围绕协同办公/);
   assert.doesNotMatch(response.message.content, /项目\/场景背景/);
   assert.doesNotMatch(response.message.content, /待补充的材料\/证据/);
@@ -1686,6 +1982,209 @@ test('Agent runtime falls back to visit demand snippets when full analysis artif
     response.message.extraInfo.agentTrace.toolCalls.some((item) => item.toolCode === 'artifact.get' && item.status === 'failed'),
     true,
   );
+});
+
+test('Agent runtime uses followup records when visit demand evidence snippets are not enough', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'query', '贝斯美'),
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey) => {
+        if (objectKey === 'customer') {
+          return {
+            records: [{ formInstId: 'customer-bsm-001', fields: [{ title: '客户名称', value: '贝斯美' }] }],
+            totalElements: 1,
+          };
+        }
+        if (objectKey === 'followup') {
+          return {
+            records: [{
+              formInstId: 'followup-bsm-001',
+              fields: [{
+                title: '跟进记录',
+                value: '客户明确希望审批流程、采购合同和费用报销能与 ERP 打通，并关注海外多语言支持。',
+              }],
+            }],
+            totalElements: 1,
+          };
+        }
+        return { records: [], totalElements: 0 };
+      },
+      executeGet: async () => ({
+        record: {
+          formInstId: 'customer-bsm-001',
+          fields: [{ title: '客户名称', value: '贝斯美' }],
+        },
+      }),
+    },
+    artifactService: {
+      search: async (input: any) => {
+        const kind = input.kinds?.[0] ?? 'company_research';
+        return {
+          query: input.query,
+          vectorStatus: 'searched',
+          qdrantFilter: {},
+          evidence: kind === 'analysis_material'
+            ? [{
+                artifactId: 'artifact-needs-noise',
+                versionId: 'version-needs-noise',
+                kind: 'analysis_material',
+                title: '贝斯美拜访 - 客户需求工作待办分析',
+                version: 1,
+                sourceToolCode: 'ext.customer_needs_todo_analysis',
+                anchorTypes: ['customer'],
+                anchorIds: ['customer-bsm-001'],
+                snippet: '后续动作建议：可基于本资料包继续执行客户需求工作待办分析。',
+                score: 0.9,
+              }]
+            : [],
+        };
+      },
+      getArtifact: async () => {
+        throw new Error('artifact store offline');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-context-visit-needs-followup-fallback',
+    sceneKey: 'chat',
+    query: '贝斯美上次拜访客户主要提了什么需求',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.match(response.message.content, /审批流程、采购合同和费用报销能与 ERP 打通/);
+  assert.match(response.message.content, /海外多语言支持/);
+  assert.doesNotMatch(response.message.content, /当前资料中没有抽到明确需求条目/);
+  assert.doesNotMatch(response.message.content, /记录系统补充/);
+});
+
+test('Agent runtime does not treat internal maintenance suggestions as customer visit needs', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: {
+      actionType: 'query',
+      goal: '总结客户上次沟通提到的需求和关注点',
+      targetType: 'followup',
+      targets: [{ type: 'followup', id: 'followup-bsm-001', name: '贝斯美上次沟通' }],
+      inputMaterials: [],
+      constraints: ['上次沟通'],
+      missingSlots: [],
+      confidence: 0.88,
+      source: 'llm',
+    },
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey) => {
+        if (objectKey === 'customer') {
+          return {
+            records: [{ formInstId: 'customer-bsm-001', fields: [{ title: '客户名称', value: '贝斯美' }] }],
+            totalElements: 1,
+          };
+        }
+        if (objectKey === 'followup') {
+          return {
+            records: [{
+              formInstId: 'followup-bsm-001',
+              fields: [{ title: '跟进记录', value: '已完成拜访记录整理，暂无明确客户诉求。' }],
+            }],
+            totalElements: 1,
+          };
+        }
+        return { records: [], totalElements: 0 };
+      },
+      executeGet: async () => ({
+        record: {
+          formInstId: 'customer-bsm-001',
+          fields: [
+            { title: '客户名称', value: '贝斯美' },
+            { title: '客户状态', value: '商机阶段客户' },
+          ],
+        },
+      }),
+    },
+    artifactService: {
+      search: async (input: any) => ({
+        query: input.query,
+        vectorStatus: 'searched',
+        qdrantFilter: {},
+        evidence: [],
+      }),
+      getArtifact: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-visit-needs-ignore-internal-maintenance',
+    sceneKey: 'chat',
+    query: '客户上回沟通里最在意哪些事项',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'meta.context_summary');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.input.summaryType, 'visit_needs');
+  assert.match(response.message.content, /暂未抽到明确需求条目/);
+  assert.doesNotMatch(response.message.content, /建议下一步/);
+  assert.doesNotMatch(response.message.content, /建议继续补充省、市、区/);
+});
+
+test('Agent runtime semantic intent keeps next visit planning as next-step summary', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: {
+      actionType: 'query',
+      goal: '规划贝斯美下次拜访的开场、问题和价值点',
+      targetType: 'customer',
+      targets: [{ type: 'customer', id: 'customer-bsm-001', name: '贝斯美' }],
+      inputMaterials: [],
+      constraints: [],
+      missingSlots: [],
+      confidence: 0.9,
+      source: 'llm',
+    },
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey) => {
+        if (objectKey === 'customer') {
+          return {
+            records: [{ formInstId: 'customer-bsm-001', fields: [{ title: '客户名称', value: '贝斯美' }] }],
+            totalElements: 1,
+          };
+        }
+        return { records: [], totalElements: 0 };
+      },
+      executeGet: async () => ({
+        record: {
+          formInstId: 'customer-bsm-001',
+          fields: [{ title: '客户名称', value: '贝斯美' }],
+        },
+      }),
+    },
+    artifactService: {
+      search: async (input: any) => ({
+        query: input.query,
+        vectorStatus: 'searched',
+        qdrantFilter: {},
+        evidence: [],
+      }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-semantic-next-step-visit',
+    sceneKey: 'chat',
+    query: '下次去见这个客户，我应该先聊什么、问什么',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'meta.context_summary');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.input.summaryType, 'next_step');
 });
 
 test('Agent runtime routes visit focus question to context summary without clarification', async () => {
@@ -1785,7 +2284,8 @@ test('Agent runtime routes visit focus question to context summary without clari
   assert.equal(customerSearchValues[0], '贝斯美');
   assert.match(response.message.content, /采购申请、合同审批和费用报销流程自动化/);
   assert.match(response.message.content, /多语言与海外分支适配/);
-  assert.match(response.message.content, /当前未检索到正式拜访分析结果/);
+  assert.doesNotMatch(response.message.content, /当前未检索到正式拜访分析结果/);
+  assert.doesNotMatch(response.message.content, /分析资料状态/);
   assert.doesNotMatch(response.message.content, /目标对象或任务类型/);
 });
 
@@ -2302,6 +2802,56 @@ test('Agent runtime displays customer list fields synthesized from live widget v
   assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '省' && field.value === '江苏'));
   assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '市' && field.value === '南通市'));
   assert.ok(firstRecord?.primaryFields.some((field: any) => field.label === '负责人' && field.value === '已绑定人员'));
+});
+
+test('Record A2UI view model hides ID-derived opportunity titles and department IDs', async () => {
+  const formInstId = '69e75eb5e4b0e65b61c014da';
+  const departmentId = '69faf11ad03e580001fd4508';
+  const response = await buildRecordSearchPageResponse({
+    shadowMetadataService: {
+      executeSearch: async () => ({
+        objectKey: 'opportunity',
+        operation: 'search',
+        mode: 'live',
+        requestBody: {},
+        pageNumber: 1,
+        pageSize: 5,
+        totalPages: 1,
+        totalElements: 1,
+        records: [
+          {
+            formInstId,
+            important: { 标题: `${formInstId}的商机` },
+            fields: [
+              { codeId: '_S_TITLE', title: '标题', value: `${formInstId}的商机` },
+              { codeId: 'De_0', title: '所属部门', value: departmentId },
+              { codeId: 'Bd_0', title: '客户编号', value: { formInstId: 'customer-form-001', id: 'customer-form-001' } },
+            ],
+            rawRecord: {},
+          },
+        ],
+      }),
+    } as any,
+    request: {
+      objectKey: 'opportunity',
+      toolCode: 'record.opportunity.search',
+      queryText: '查询商机',
+      searchInput: {
+        filters: [],
+        operatorOpenId: 'operator-001',
+        pageNumber: 1,
+        pageSize: 5,
+      },
+    },
+  });
+
+  const record = response.result.record;
+  assert.equal(record?.title, '商机记录');
+  assert.equal(record?.primaryFields.some((field) => field.value.includes(formInstId)), false);
+  assert.equal(record?.secondaryFields.some((field) => field.value.includes(departmentId)), false);
+  assert.equal(record?.relationFields.some((field) => /customer-form-001/.test(field.value)), false);
+  assert.ok(record?.relationFields.some((field) => field.label === '客户编号' && field.value === '已关联客户'));
+  assert.ok(record?.secondaryFields.some((field) => field.label === '所属部门' && field.value === '已选择部门'));
 });
 
 test('Record A2UI view model promotes relation fields for associated CRM objects', async () => {
@@ -3571,6 +4121,7 @@ test('Agent runtime cancels pending input interaction by natural language', asyn
 
   assert.equal(cancelled.executionState.status, 'cancelled');
   assert.equal(cancelled.message.extraInfo.agentTrace.pendingInteraction?.status, 'cancelled');
+  assert.equal(cancelled.message.extraInfo.agentTrace.pendingInteraction?.questionCard, undefined);
   assert.equal(cancelled.message.extraInfo.agentTrace.continuationResolution?.action, 'cancel_interaction');
   assert.match(cancelled.message.content, /已取消本次录入/);
 });
@@ -3866,7 +4417,9 @@ test('Agent runtime blocks ready record preview when write payload is empty', as
   });
 
   assert.equal(response.executionState.status, 'waiting_input');
-  assert.match(response.message.content, /写入预览被守卫阻断/);
+  assert.match(response.message.content, /还没有识别到可写入内容/);
+  assert.equal(response.message.content.includes('record.customer.preview_create'), false);
+  assert.equal(response.message.content.includes('readyToSend'), false);
   assert.equal(response.message.extraInfo.agentTrace.pendingConfirmation, null);
   assert.equal(
     response.message.extraInfo.agentTrace.policyDecisions?.some((item) => item.policyCode === 'record.preview_empty_payload_guard'),
@@ -4096,11 +4649,15 @@ test('Agent runtime binds contextual record id for update preview without asking
 test('Agent runtime hides internal formInstId requirement when update has no record context', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   let previewCalled = false;
+  let searchCalled = false;
   const { service } = createAgentTestService({
     repository,
-    intentFrame: recordIntent('customer', 'write', '测试客户'),
+    intentFrame: recordIntent('customer', 'write', '客户'),
     shadowMetadataService: {
-      executeSearch: async () => ({ records: [] }),
+      executeSearch: async () => {
+        searchCalled = true;
+        return { records: [] };
+      },
       executeGet: async () => ({ record: null }),
       previewUpsert: async () => {
         previewCalled = true;
@@ -4120,10 +4677,839 @@ test('Agent runtime hides internal formInstId requirement when update has no rec
   });
 
   assert.equal(response.executionState.status, 'waiting_input');
-  assert.match(response.message.content, /需要先确定要修改的记录/);
+  assert.match(response.message.content, /需要先确定要更新的客户/);
+  assert.equal(response.message.content.includes('record.customer.preview_update'), false);
   assert.equal(response.message.content.includes('form_inst_id'), false);
   assert.equal(response.message.extraInfo.agentTrace.pendingInteraction?.questionCard, undefined);
+  assert.equal(searchCalled, false);
   assert.equal(previewCalled, false);
+});
+
+test('Agent runtime locates customer by name before update preview when no record context exists', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const searchInputs: any[] = [];
+  const previewInputs: any[] = [];
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '绍兴贝斯美化工股份有限公司'),
+    shadowMetadataService: {
+      executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
+        searchInputs.push(input);
+        return {
+          records: [{
+            formInstId: 'customer-bsm-001',
+            important: { 客户名称: '绍兴贝斯美化工股份有限公司' },
+            fields: [
+              { codeId: '_S_NAME', title: '客户名称', type: 'textWidget', value: '绍兴贝斯美化工股份有限公司', rawValue: '绍兴贝斯美化工股份有限公司', parentCodeId: null },
+            ],
+            fieldMap: {},
+            rawRecord: { _S_NAME: '绍兴贝斯美化工股份有限公司' },
+          }],
+        };
+      },
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewInputs.push(input);
+        return {
+          objectKey: 'customer',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: [],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: true,
+          requestBody: {
+            formCodeId: 'customer-form',
+            data: [{ widgetValue: { industry: input.params?.industry } }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-name-lookup',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美化工股份有限公司 将行业更新为电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_confirmation');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.preview_update');
+  assert.equal(searchInputs.at(-1)?.filters?.[0]?.value, '绍兴贝斯美化工股份有限公司');
+  assert.equal(previewInputs.at(-1)?.formInstId, 'customer-bsm-001');
+  assert.deepEqual(previewInputs.at(-1)?.params, { industry: '电子' });
+  assert.equal(response.message.content.includes('record.customer.preview_update'), false);
+  assert.equal(response.message.content.includes('formInstId'), false);
+});
+
+test('Agent runtime binds named customer and asks for update fields before preview', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const searchInputs: any[] = [];
+  const previewInputs: any[] = [];
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '客户'),
+    shadowMetadataService: {
+      executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
+        searchInputs.push(input);
+        return {
+          records: [{
+            formInstId: 'customer-bsm-001',
+            important: { 客户名称: '绍兴贝斯美化工股份有限公司' },
+            fields: [
+              { codeId: '_S_NAME', title: '客户名称', type: 'textWidget', value: '绍兴贝斯美化工股份有限公司', rawValue: '绍兴贝斯美化工股份有限公司', parentCodeId: null },
+            ],
+            fieldMap: {},
+            rawRecord: { _S_NAME: '绍兴贝斯美化工股份有限公司' },
+          }],
+        };
+      },
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewInputs.push(input);
+        return {
+          objectKey: 'customer',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: [],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: true,
+          requestBody: {
+            formCodeId: 'customer-form',
+            data: [{ widgetValue: { industry: input.params?.industry } }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const start = await service.chat({
+    conversationKey: 'conv-update-name-then-fields',
+    sceneKey: 'chat',
+    query: '更新客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(start.executionState.status, 'waiting_input');
+  assert.match(start.message.content, /需要先确定要更新的客户/);
+  assert.equal(searchInputs.length, 0);
+  assert.equal(previewInputs.length, 0);
+
+  const named = await service.chat({
+    conversationKey: 'conv-update-name-then-fields',
+    sceneKey: 'chat',
+    query: '绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(named.executionState.status, 'waiting_input');
+  assert.match(named.message.content, /还需要说明要修改什么/);
+  assert.match(named.message.content, /绍兴贝斯美化工股份有限公司/);
+  assert.equal(named.message.content.includes('record.customer.preview_update'), false);
+  assert.equal(named.message.content.includes('readyToSend'), false);
+  assert.equal(named.message.extraInfo.agentTrace.pendingInteraction?.kind, 'input_required');
+  assert.equal(searchInputs.at(-1)?.filters?.[0]?.value, '绍兴贝斯美');
+  assert.equal(previewInputs.length, 0);
+
+  const fieldProvided = await service.chat({
+    conversationKey: 'conv-update-name-then-fields',
+    sceneKey: 'chat',
+    query: '将行业更新为电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(fieldProvided.executionState.status, 'waiting_confirmation');
+  assert.equal(fieldProvided.message.extraInfo.agentTrace.continuationResolution?.action, 'resume_pending_interaction');
+  assert.equal(previewInputs.at(-1)?.formInstId, 'customer-bsm-001');
+  assert.deepEqual(previewInputs.at(-1)?.params, { industry: '电子' });
+});
+
+test('Agent runtime keeps update preview blocked when named customer is not found', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  let previewCalled = false;
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '不存在客户'),
+    shadowMetadataService: {
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async () => {
+        previewCalled = true;
+        throw new Error('not used');
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-name-not-found',
+    sceneKey: 'chat',
+    query: '更新客户 不存在客户 将行业更新为电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.match(response.message.content, /没有找到这个客户/);
+  assert.equal(response.message.content.includes('record.customer.preview_update'), false);
+  assert.equal(previewCalled, false);
+});
+
+test('Agent runtime asks user to choose when update target name matches multiple customers', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const previewInputs: any[] = [];
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '绍兴贝斯美化工股份有限公司'),
+    shadowMetadataService: {
+      executeSearch: async () => ({
+        records: [
+          {
+            formInstId: 'customer-bsm-001',
+            important: { 客户名称: '绍兴贝斯美化工股份有限公司' },
+            fields: [{ codeId: '_S_NAME', title: '客户名称', type: 'textWidget', value: '绍兴贝斯美化工股份有限公司', rawValue: '绍兴贝斯美化工股份有限公司', parentCodeId: null }],
+            fieldMap: {},
+            rawRecord: { _S_NAME: '绍兴贝斯美化工股份有限公司' },
+          },
+          {
+            formInstId: 'customer-bsm-002',
+            important: { 客户名称: '绍兴贝斯美化工股份有限公司华东分公司' },
+            fields: [{ codeId: '_S_NAME', title: '客户名称', type: 'textWidget', value: '绍兴贝斯美化工股份有限公司华东分公司', rawValue: '绍兴贝斯美化工股份有限公司华东分公司', parentCodeId: null }],
+            fieldMap: {},
+            rawRecord: { _S_NAME: '绍兴贝斯美化工股份有限公司华东分公司' },
+          },
+        ],
+      }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewInputs.push(input);
+        return {
+          objectKey: 'customer',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: [],
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: true,
+          requestBody: { formCodeId: 'customer-form', data: [{ widgetValue: { industry: input.params?.industry } }] },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-name-multiple',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美化工股份有限公司 将行业更新为电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(waiting.executionState.status, 'waiting_selection');
+  assert.equal(waiting.message.extraInfo.agentTrace.pendingInteraction?.kind, 'candidate_selection');
+  assert.match(waiting.message.content, /找到多个可能的客户/);
+  assert.equal(waiting.message.content.includes('customer-bsm-001'), false);
+  assert.equal(waiting.message.content.includes('record.customer.preview_update'), false);
+  assert.equal(previewInputs.length, 0);
+
+  const selected = await service.chat({
+    conversationKey: 'conv-update-name-multiple',
+    sceneKey: 'chat',
+    query: '选择第 2 条',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(selected.executionState.status, 'waiting_confirmation');
+  assert.equal(selected.message.extraInfo.agentTrace.continuationResolution?.action, 'select_candidate');
+  assert.equal(previewInputs.at(-1)?.formInstId, 'customer-bsm-002');
+  assert.deepEqual(previewInputs.at(-1)?.params, { industry: '电子' });
+});
+
+test('Agent runtime update scenario 01 asks for target when customer update has no name or field', async () => {
+  const { service, searchInputs, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-s01-no-target',
+    sceneKey: 'chat',
+    query: '更新客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.match(response.message.content, /需要先确定要更新的客户/);
+  assert.equal(response.message.extraInfo.agentTrace.pendingInteraction?.questionCard, undefined);
+  assert.equal(searchInputs.length, 0);
+  assert.equal(previewInputs.length, 0);
+  assertNoInternalUpdateText(response.message.content);
+});
+
+test('Agent runtime update scenario 02 locates named customer then shows update field picker', async () => {
+  const { service, searchInputs, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    intentName: '客户',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司')],
+  });
+
+  await service.chat({
+    conversationKey: 'conv-update-s02-customer-name',
+    sceneKey: 'chat',
+    query: '更新客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const named = await service.chat({
+    conversationKey: 'conv-update-s02-customer-name',
+    sceneKey: 'chat',
+    query: '绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(named.executionState.status, 'waiting_input');
+  assert.equal(searchInputs.at(-1)?.input?.filters?.[0]?.value, '绍兴贝斯美');
+  assert.equal(previewInputs.length, 0);
+  assertUpdateFieldPicker(named, '绍兴贝斯美化工股份有限公司', ['customer_status', 'industry']);
+  assert.ok(
+    (named.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions.length ?? 0) > 6,
+    'expected update field picker to include non-first-screen writable fields',
+  );
+});
+
+test('Agent runtime update field picker fills current values from executeGet', async () => {
+  const detailRecord = createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司', [
+    { codeId: 'Ra_0', title: '客户状态', type: 'radioWidget', value: '潜在客户' },
+    { codeId: 'Industry_0', title: '行业', value: '制造业' },
+  ]);
+  const { service } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司')],
+    getRecordsById: { 'customer-bsm-001': detailRecord },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-current-values-get',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const questionCard = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard;
+  const statusQuestion = questionCard?.questions.find((question) => question.paramKey === 'customer_status');
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(statusQuestion?.currentValue, 'potential');
+  assert.equal(questionCard?.currentValues.customer_status?.value, '潜在客户');
+  assert.equal(questionCard?.currentValues.industry?.value, '制造业');
+});
+
+test('Agent runtime update field picker falls back to search record when executeGet fails', async () => {
+  const searchRecord = createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司', [
+    { codeId: 'Ra_0', title: '客户状态', type: 'radioWidget', value: '成交' },
+  ]);
+  const { service } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [searchRecord],
+    executeGetThrows: true,
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-current-values-search-fallback',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const questionCard = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard;
+  const statusQuestion = questionCard?.questions.find((question) => question.paramKey === 'customer_status');
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(statusQuestion?.currentValue, 'won');
+  assert.equal(questionCard?.currentValues.customer_status?.value, '成交');
+});
+
+test('Agent runtime update field picker includes metadata writable fields and searchable public options', async () => {
+  const fields = [
+    ...createCustomerUpdateFields(),
+    createSearchField({
+      fieldCode: 'Ta_remark',
+      label: '备注',
+      widgetType: 'textAreaWidget',
+      writeParameterKey: 'Ta_remark',
+    }),
+    createSearchField({
+      fieldCode: 'Pw_0',
+      label: '省',
+      widgetType: 'publicOptBoxWidget',
+      searchParameterKey: 'province',
+      writeParameterKey: 'province',
+      options: [
+        { title: '安徽', dicId: 'dic-province-ah' },
+        { title: '浙江', dicId: 'dic-province-zj' },
+      ],
+    }),
+  ];
+  const { service } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields,
+    searchRecords: [createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司')],
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-field-picker-metadata-fields',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const questions = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions ?? [];
+  const remarkQuestion = questions.find((question) => question.paramKey === 'Ta_remark');
+  const provinceQuestion = questions.find((question) => question.paramKey === 'province');
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(remarkQuestion?.label, '备注');
+  assert.equal(provinceQuestion?.lookup?.source, 'field_option');
+  assert.equal(provinceQuestion?.options, undefined);
+});
+
+test('Agent runtime update field picker masks reference and person current identifiers', async () => {
+  const internalPersonId = 'abcdefabcdefabcdefabcdefabcdefab';
+  const detailRecord = createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司', [
+    { codeId: 'Ps_owner', title: '负责人', type: 'personSelectWidget', value: internalPersonId },
+  ]);
+  const { service } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司')],
+    getRecordsById: { 'customer-bsm-001': detailRecord },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-current-values-mask-person',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const serializedCard = JSON.stringify(response.message.extraInfo.agentTrace.pendingInteraction?.questionCard);
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(response.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.currentValues.owner_open_id?.value, '已绑定人员');
+  assert.equal(serializedCard.includes(internalPersonId), false);
+});
+
+test('Agent runtime update scenario 03 submits customer status from update field picker', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司')],
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s03-customer-status',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assertUpdateFieldPicker(waiting, '绍兴贝斯美化工股份有限公司', ['customer_status']);
+
+  const submitted = await service.chat({
+    conversationKey: 'conv-update-s03-customer-status',
+    sceneKey: 'chat',
+    query: '客户状态=成交',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: waiting.message.extraInfo.agentTrace.pendingInteraction!.interactionId,
+      answers: { customer_status: 'won' },
+    },
+  });
+
+  assert.equal(submitted.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInputs.at(-1)?.formInstId, 'customer-bsm-001');
+  assert.deepEqual(previewInputs.at(-1)?.params, { customer_status: 'won' });
+});
+
+test('Agent runtime update scenario 04 submits customer industry from update field picker', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司')],
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s04-customer-industry',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const submitted = await service.chat({
+    conversationKey: 'conv-update-s04-customer-industry',
+    sceneKey: 'chat',
+    query: '行业=电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: waiting.message.extraInfo.agentTrace.pendingInteraction!.interactionId,
+      answers: { industry: '电子' },
+    },
+  });
+
+  assert.equal(submitted.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInputs.at(-1)?.formInstId, 'customer-bsm-001');
+  assert.deepEqual(previewInputs.at(-1)?.params, { industry: '电子' });
+});
+
+test('Agent runtime update scenario 05 submits multiple customer fields from update field picker', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司')],
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s05-customer-multi-fields',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const submitted = await service.chat({
+    conversationKey: 'conv-update-s05-customer-multi-fields',
+    sceneKey: 'chat',
+    query: '客户状态=成交，行业=电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: waiting.message.extraInfo.agentTrace.pendingInteraction!.interactionId,
+      answers: { customer_status: 'won', industry: '电子' },
+    },
+  });
+
+  assert.equal(submitted.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInputs.at(-1)?.params?.customer_status, 'won');
+  assert.equal(previewInputs.at(-1)?.params?.industry, '电子');
+});
+
+test('Agent runtime update scenario 06 accepts natural-language field after customer field picker', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司')],
+  });
+
+  await service.chat({
+    conversationKey: 'conv-update-s06-customer-natural-language',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const continued = await service.chat({
+    conversationKey: 'conv-update-s06-customer-natural-language',
+    sceneKey: 'chat',
+    query: '将行业改为电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(continued.executionState.status, 'waiting_confirmation');
+  assert.equal(continued.message.extraInfo.agentTrace.continuationResolution?.action, 'resume_pending_interaction');
+  assert.deepEqual(previewInputs.at(-1)?.params, { industry: '电子' });
+});
+
+test('Agent runtime update scenario 07 keeps recognized fields while selecting among duplicate customers', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [
+      createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司'),
+      createUpdateLiveRecord('customer', 'customer-bsm-002', '绍兴贝斯美化工股份有限公司华东分公司'),
+    ],
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s07-customer-multiple-with-field',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美 将行业改为电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.equal(waiting.executionState.status, 'waiting_selection');
+  assert.equal(previewInputs.length, 0);
+
+  const selected = await service.chat({
+    conversationKey: 'conv-update-s07-customer-multiple-with-field',
+    sceneKey: 'chat',
+    query: '选择第 2 条',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(selected.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInputs.at(-1)?.formInstId, 'customer-bsm-002');
+  assert.deepEqual(previewInputs.at(-1)?.params, { industry: '电子' });
+});
+
+test('Agent runtime update scenario 08 shows field picker after selecting duplicate customer without fields', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [
+      createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司'),
+      createUpdateLiveRecord('customer', 'customer-bsm-002', '绍兴贝斯美化工股份有限公司华东分公司'),
+    ],
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s08-customer-multiple-no-field',
+    sceneKey: 'chat',
+    query: '更新客户 绍兴贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.equal(waiting.executionState.status, 'waiting_selection');
+
+  const selected = await service.chat({
+    conversationKey: 'conv-update-s08-customer-multiple-no-field',
+    sceneKey: 'chat',
+    query: '选择第 2 条',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(selected.executionState.status, 'waiting_input');
+  assert.equal(previewInputs.length, 0);
+  assertUpdateFieldPicker(selected, '绍兴贝斯美化工股份有限公司华东分公司', ['customer_status', 'industry']);
+});
+
+test('Agent runtime update scenario 09 blocks preview when named customer is not found', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'customer',
+    fields: createCustomerUpdateFields(),
+    searchRecords: [],
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-s09-customer-not-found',
+    sceneKey: 'chat',
+    query: '更新客户 不存在客户 将行业改为电子',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.match(response.message.content, /没有找到这个客户/);
+  assert.equal(response.message.extraInfo.agentTrace.pendingInteraction?.questionCard, undefined);
+  assert.equal(previewInputs.length, 0);
+  assertNoInternalUpdateText(response.message.content);
+});
+
+test('Agent runtime update scenario 10 locates contact then shows contact field picker', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'contact',
+    fields: createContactUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('contact', 'contact-liling-001', '李玲玲')],
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-s10-contact-picker',
+    sceneKey: 'chat',
+    query: '更新联系人 李玲玲',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(previewInputs.length, 0);
+  assertUpdateFieldPicker(response, '李玲玲', ['mobile_phone', 'enabled_state', 'linked_customer_form_inst_id']);
+});
+
+test('Agent runtime update scenario 11 submits contact mobile phone from field picker', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'contact',
+    fields: createContactUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('contact', 'contact-liling-001', '李玲玲')],
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s11-contact-mobile',
+    sceneKey: 'chat',
+    query: '更新联系人 李玲玲',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const submitted = await service.chat({
+    conversationKey: 'conv-update-s11-contact-mobile',
+    sceneKey: 'chat',
+    query: '手机号=13800138000',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: waiting.message.extraInfo.agentTrace.pendingInteraction!.interactionId,
+      answers: { mobile_phone: '13800138000' },
+    },
+  });
+
+  assert.equal(submitted.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInputs.at(-1)?.formInstId, 'contact-liling-001');
+  assert.deepEqual(previewInputs.at(-1)?.params, { mobile_phone: '13800138000' });
+});
+
+test('Agent runtime update scenario 12 treats contact linked customer as reference, not province text', async () => {
+  const { service, searchInputs, previewInputs } = createUpdateScenarioService({
+    objectKey: 'contact',
+    fields: createContactUpdateFields(),
+    searchRecords: [createUpdateLiveRecord('contact', 'contact-liling-001', '李玲玲')],
+    searchRecordsByObject: { customer: [] },
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s12-contact-linked-customer',
+    sceneKey: 'chat',
+    query: '更新联系人 李玲玲',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const blocked = await service.chat({
+    conversationKey: 'conv-update-s12-contact-linked-customer',
+    sceneKey: 'chat',
+    query: '关联客户=安徽',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: waiting.message.extraInfo.agentTrace.pendingInteraction!.interactionId,
+      answers: { linked_customer_form_inst_id: '安徽' },
+    },
+  });
+  const pendingParams = blocked.message.extraInfo.agentTrace.pendingInteraction?.partialInput?.params as Record<string, unknown> | undefined;
+  const question = blocked.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions[0];
+
+  assert.equal(blocked.executionState.status, 'waiting_input');
+  assert.equal(question?.paramKey, 'linked_customer_form_inst_id');
+  assert.equal(question?.type, 'reference');
+  assert.equal(question?.lookup?.targetObjectKey, 'customer');
+  assert.equal(searchInputs.at(-1)?.objectKey, 'customer');
+  assert.equal(previewInputs.length, 0);
+  assert.equal(pendingParams?.province, undefined);
+  assert.equal(pendingParams?.linked_customer_form_inst_id, '安徽');
+});
+
+test('Agent runtime update scenario 13 locates opportunity then shows opportunity field picker', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'opportunity',
+    fields: createOpportunityWriteFields(),
+    searchRecords: [createUpdateLiveRecord('opportunity', 'opportunity-digital-001', '数字化经营项目')],
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-update-s13-opportunity-picker',
+    sceneKey: 'chat',
+    query: '更新商机 数字化经营项目',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(previewInputs.length, 0);
+  assertUpdateFieldPicker(response, '数字化经营项目', ['sales_stage', 'opportunity_budget', 'expected_close_date', 'owner_open_id']);
+});
+
+test('Agent runtime update scenario 14 asks employee clarification for ambiguous opportunity owner', async () => {
+  const employees = [
+    createEmployeeCandidate({
+      openId: 'open-chen-weirong',
+      name: '陈伟荣',
+      phone: '13800000002',
+      email: 'chenweirong@example.com',
+    }),
+    createEmployeeCandidate({
+      openId: 'open-chen-weigang',
+      name: '陈伟刚',
+      phone: '13800000003',
+      email: 'chenweigang@example.com',
+    }),
+  ];
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'opportunity',
+    fields: createOpportunityWriteFields(),
+    searchRecords: [createUpdateLiveRecord('opportunity', 'opportunity-digital-001', '数字化经营项目')],
+    orgEmployees: employees,
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s14-opportunity-owner',
+    sceneKey: 'chat',
+    query: '更新商机 数字化经营项目',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  const blocked = await service.chat({
+    conversationKey: 'conv-update-s14-opportunity-owner',
+    sceneKey: 'chat',
+    query: '负责人=陈伟',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: waiting.message.extraInfo.agentTrace.pendingInteraction!.interactionId,
+      answers: { owner_open_id: '陈伟' },
+    },
+  });
+  const question = blocked.message.extraInfo.agentTrace.pendingInteraction?.questionCard?.questions[0];
+
+  assert.equal(blocked.executionState.status, 'waiting_input');
+  assert.equal(previewInputs.length, 0);
+  assert.equal(question?.paramKey, 'owner_open_id');
+  assert.equal(question?.lookup?.source, 'employee');
+  assert.equal(question?.options?.some((option) => option.label.includes('open-chen')), false);
+  assert.equal(blocked.message.content.includes('open-chen'), false);
+});
+
+test('Agent runtime update scenario 15 locates followup then updates method and content', async () => {
+  const { service, previewInputs } = createUpdateScenarioService({
+    objectKey: 'followup',
+    fields: createFollowupWriteFields(),
+    searchRecords: [createUpdateLiveRecord('followup', 'followup-quote-001', '报价回访')],
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-update-s15-followup-picker',
+    sceneKey: 'chat',
+    query: '更新拜访记录 报价回访',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+  assert.equal(waiting.executionState.status, 'waiting_input');
+  assertUpdateFieldPicker(waiting, '报价回访', ['followup_record', 'followup_method']);
+
+  const submitted = await service.chat({
+    conversationKey: 'conv-update-s15-followup-picker',
+    sceneKey: 'chat',
+    query: '跟进方式=电话，跟进记录=客户让下周带方案',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: waiting.message.extraInfo.agentTrace.pendingInteraction!.interactionId,
+      answers: {
+        followup_method: 'phone',
+        followup_record: '客户让下周带方案',
+      },
+    },
+  });
+
+  assert.equal(submitted.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInputs.at(-1)?.formInstId, 'followup-quote-001');
+  assert.equal(previewInputs.at(-1)?.params?.followup_method, 'phone');
+  assert.equal(previewInputs.at(-1)?.params?.followup_record, '客户让下周带方案');
 });
 
 test('Agent runtime extracts metadata-driven opportunity update fields from current record context', async () => {
@@ -4588,10 +5974,15 @@ test('Agent meta question options search employees and customer records', async 
   const shadowMetadataService = {
     listObjects: () => [
       { objectKey: 'customer', formCodeId: 'customer-form' },
+      { objectKey: 'contact', formCodeId: 'contact-form' },
       { objectKey: 'followup', formCodeId: 'followup-form' },
     ],
     getObject: (objectKey: ShadowObjectKey) => ({
-      fields: objectKey === 'followup' ? createFollowupWriteFields() : createCustomerLookupFields(),
+      fields: objectKey === 'followup'
+        ? createFollowupWriteFields()
+        : objectKey === 'contact'
+          ? createContactUpdateFields()
+          : createCustomerLookupFields(),
     }),
     executeSearch: async (_objectKey: ShadowObjectKey, input: any) => {
       searchInputs.push(input);
@@ -4653,6 +6044,20 @@ test('Agent meta question options search employees and customer records', async 
   assert.equal(customerResponse.options.every((option) => option.source === 'record'), true);
   assert.equal(searchInputs.some((input) => input.filters?.some((filter: any) => filter.field === 'province')), true);
   assert.equal(searchInputs.some((input) => input.filters?.some((filter: any) => filter.field === 'customer_name')), true);
+
+  const publicOptionResponse = await buildMetaQuestionOptionsResponse({
+    config: createTestConfig(),
+    shadowMetadataService: shadowMetadataService as any,
+    orgSyncRepository: createEmployeeLookup([]),
+    request: {
+      toolCode: 'record.contact.preview_update',
+      paramKey: 'province',
+      keyword: '安',
+      pageSize: 10,
+    },
+  });
+  assert.deepEqual(publicOptionResponse.options.map((option) => option.label), ['安徽']);
+  assert.equal(publicOptionResponse.options[0]?.source, 'field_option');
 });
 
 test('Agent runtime requires selecting basicDataWidget candidates before followup preview', async () => {
@@ -5205,4 +6610,444 @@ test('Agent runtime summarizes customer journey from current context', async () 
   assert.match(response.message.content, /商机：1 条/);
   assert.match(response.message.content, /跟进记录：1 条/);
   assert.match(response.message.content, /建议继续补充省、市、区/);
+});
+
+test('Agent runtime blocks visit prep when selected customer has no company research markdown', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const calls: Array<{ tool: string; input?: unknown }> = [];
+  const customer = createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司');
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: companyIntent('贝斯美'),
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey, searchInput: any) => {
+        calls.push({ tool: `record.${objectKey}.search`, input: searchInput });
+        return { records: [customer], totalElements: 1 };
+      },
+    },
+    externalSkillService: {
+      createSkillJob: async () => {
+        calls.push({ tool: 'ext.yunzhijia_visit_prep' });
+        throw new Error('should not invoke visit prep without customer company research');
+      },
+      getSkillJob: async () => {
+        throw new Error('not used');
+      },
+      getSkillJobArtifact: async () => {
+        throw new Error('not used');
+      },
+    },
+    artifactService: {
+      findCompanyResearchArtifactsForVisitPrep: async (input: any) => {
+        calls.push({ tool: 'artifact.company_research.lookup', input });
+        return [];
+      },
+      createCompanyResearchArtifact: async () => {
+        throw new Error('not used');
+      },
+      createAnalysisMaterialArtifact: async () => {
+        throw new Error('not used');
+      },
+      search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-visit-prep-missing-research',
+    sceneKey: 'chat',
+    query: '/拜访准备 贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'external.yunzhijia_visit_prep');
+  assert.equal(calls.some((item) => item.tool === 'record.customer.search'), true);
+  assert.equal(calls.some((item) => item.tool === 'ext.yunzhijia_visit_prep'), false);
+  assert.equal(calls.some((item) => item.tool === 'artifact.company_research.lookup'), true);
+  assert.match(response.message.content, /\/公司研究 绍兴贝斯美化工股份有限公司/);
+});
+
+test('Agent runtime invokes visit prep with selected customer research and does not save analysis material', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const calls: Array<{ tool: string; input?: any }> = [];
+  const companyName = '绍兴贝斯美化工股份有限公司';
+  const visitPrepMarkdown = `# ${companyName} 拜访讲解准备\n\n## 一、客户画像速览\n贝斯美关注统一门户和流程审批。\n\n## 二、需求理解与方案匹配\n统一门户与统一流程管理匹配客户关注点。`;
+  const customer = createUpdateLiveRecord('customer', 'customer-bsm-001', companyName);
+  const { service } = createAgentTestService({
+    repository,
+    config: createTestConfig({ envFilePath: '/tmp/yzj-ai-crm-admin-api-test/.env' }),
+    companyResearchMaxWaitMs: 0,
+    intentFrame: companyIntent('贝斯美'),
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey, searchInput: any) => {
+        calls.push({ tool: `record.${objectKey}.search`, input: searchInput });
+        return { records: [customer], totalElements: 1 };
+      },
+    },
+    externalSkillService: {
+      getSkillAssetMaterialization: () => ({
+        enabled: false,
+        label: '本轮对话结果',
+        description: '客户拜访准备仅返回本轮对话 Markdown，不沉淀为资料资产。',
+      }),
+      createSkillJob: async (toolCode: string, payload: any) => {
+        calls.push({ tool: toolCode, input: payload });
+        return { jobId: 'job-visit-prep-001', status: 'running', artifacts: [] };
+      },
+      getSkillJob: async () => ({
+        jobId: 'job-visit-prep-001',
+        skillCode: 'ext.yunzhijia_visit_prep',
+        runtimeSkillName: 'yunzhijia-visit-prep',
+        model: null,
+        status: 'succeeded',
+        finalText: '拜访准备摘要',
+        events: [],
+        artifacts: [{
+          artifactId: 'visit-prep-md-001',
+          jobId: 'job-visit-prep-001',
+          fileName: 'yunzhijia-visit-prep-job-visit-prep-001.md',
+          mimeType: 'text/markdown',
+          byteSize: Buffer.byteLength(visitPrepMarkdown),
+          createdAt: new Date().toISOString(),
+          downloadPath: '/api/external-skills/jobs/job-visit-prep-001/artifacts/visit-prep-md-001',
+        }],
+        error: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      getSkillJobArtifact: async () => ({
+        artifact: {
+          artifactId: 'visit-prep-md-001',
+          jobId: 'job-visit-prep-001',
+          fileName: 'yunzhijia-visit-prep-job-visit-prep-001.md',
+          mimeType: 'text/markdown',
+          byteSize: Buffer.byteLength(visitPrepMarkdown),
+          createdAt: new Date().toISOString(),
+          downloadPath: '/api/external-skills/jobs/job-visit-prep-001/artifacts/visit-prep-md-001',
+        },
+        content: Buffer.from(visitPrepMarkdown),
+      }),
+    },
+    artifactService: {
+      findCompanyResearchArtifactsForVisitPrep: async (input: any) => {
+        calls.push({ tool: 'artifact.company_research.lookup', input });
+        return [createVisitPrepCompanyResearchDetail({
+          companyName,
+          customerId: 'customer-bsm-001',
+          customerName: companyName,
+        })];
+      },
+      createCompanyResearchArtifact: async () => {
+        throw new Error('not used');
+      },
+      createAnalysisMaterialArtifact: async (input: any) => {
+        calls.push({ tool: 'artifact.analysis_material', input });
+        throw new Error('visit prep should not create analysis material when materialization is disabled');
+      },
+      search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-visit-prep-success',
+    sceneKey: 'chat',
+    query: '/拜访准备 贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  const skillCall = calls.find((item) => item.tool === 'ext.yunzhijia_visit_prep');
+  const artifactCall = calls.find((item) => item.tool === 'artifact.analysis_material');
+  assert.equal(response.executionState.status, 'completed');
+  assert.equal(response.message.extraInfo.agentTrace.selectedTool?.toolCode, 'external.yunzhijia_visit_prep');
+  assert.ok(skillCall);
+  assert.match(skillCall.input.requestText, /客户初步需求：未提供/);
+  assert.equal(skillCall.input.attachments.length, 1);
+  assert.match(skillCall.input.attachments[0], /company-research\.md$/);
+  assert.doesNotThrow(() => readFileSync(skillCall.input.attachments[0], 'utf8'));
+  assert.equal(artifactCall, undefined);
+  assert.deepEqual(response.message.extraInfo.evidence ?? [], []);
+  assert.equal(response.message.attachments?.[0]?.name, 'yunzhijia-visit-prep-job-visit-prep-001.md');
+  assert.equal(response.message.attachments?.[0]?.type, 'text/markdown');
+  assert.match(response.message.content, /客户拜访准备已生成/);
+  assert.match(response.message.content, /资料沉淀：本轮对话结果/);
+  assert.match(response.message.content, /客户画像速览/);
+});
+
+test('Agent runtime blocks visit prep when skill job fails without degraded material', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const calls: Array<{ tool: string; input?: any }> = [];
+  const companyName = '绍兴贝斯美化工股份有限公司';
+  const customer = createUpdateLiveRecord('customer', 'customer-bsm-001', companyName);
+  const { service } = createAgentTestService({
+    repository,
+    config: createTestConfig({ envFilePath: '/tmp/yzj-ai-crm-admin-api-test/.env' }),
+    companyResearchMaxWaitMs: 0,
+    intentFrame: companyIntent('贝斯美'),
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey, searchInput: any) => {
+        calls.push({ tool: `record.${objectKey}.search`, input: searchInput });
+        return { records: [customer], totalElements: 1 };
+      },
+    },
+    externalSkillService: {
+      getSkillAssetMaterialization: () => ({
+        enabled: false,
+        label: '本轮对话结果',
+        description: '客户拜访准备仅返回本轮对话 Markdown，不沉淀为资料资产。',
+      }),
+      createSkillJob: async (toolCode: string, payload: any) => {
+        calls.push({ tool: toolCode, input: payload });
+        return { jobId: 'job-visit-prep-failed', status: 'running', artifacts: [] };
+      },
+      getSkillJob: async () => ({
+        jobId: 'job-visit-prep-failed',
+        skillCode: 'ext.yunzhijia_visit_prep',
+        runtimeSkillName: 'yunzhijia-visit-prep',
+        model: null,
+        status: 'failed',
+        finalText: null,
+        events: [],
+        artifacts: [],
+        error: { message: '模型服务超时' },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      getSkillJobArtifact: async () => {
+        throw new Error('not used');
+      },
+    },
+    artifactService: {
+      findCompanyResearchArtifactsForVisitPrep: async (input: any) => {
+        calls.push({ tool: 'artifact.company_research.lookup', input });
+        return [createVisitPrepCompanyResearchDetail({
+          companyName,
+          customerId: 'customer-bsm-001',
+          customerName: companyName,
+        })];
+      },
+      createCompanyResearchArtifact: async () => {
+        throw new Error('not used');
+      },
+      createAnalysisMaterialArtifact: async () => {
+        throw new Error('visit prep failure should not create analysis material');
+      },
+      search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-visit-prep-failed',
+    sceneKey: 'chat',
+    query: '/拜访准备 贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(response.executionState.status, 'tool_unavailable');
+  assert.match(response.message.content, /客户拜访准备执行失败/);
+  assert.match(response.message.content, /模型服务超时/);
+  assert.doesNotMatch(response.message.content, /客户拜访准备已生成/);
+  assert.equal(response.message.extraInfo.evidence?.length ?? 0, 0);
+  assert.equal(response.message.attachments?.length ?? 0, 0);
+});
+
+test('Agent runtime shows single-select customer card when visit prep matches multiple customers', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const calls: Array<{ tool: string; input?: any }> = [];
+  const customerA = createUpdateLiveRecord('customer', 'customer-bsm-001', '绍兴贝斯美化工股份有限公司');
+  const customerB = createUpdateLiveRecord('customer', 'customer-bsm-002', '浙江贝斯美材料有限公司');
+  const { service } = createAgentTestService({
+    repository,
+    config: createTestConfig({ envFilePath: '/tmp/yzj-ai-crm-admin-api-test/.env' }),
+    intentFrame: companyIntent('贝斯美'),
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey, searchInput: any) => {
+        calls.push({ tool: `record.${objectKey}.search`, input: searchInput });
+        return { records: [customerA, customerB], totalElements: 2 };
+      },
+    },
+    externalSkillService: {
+      getSkillAssetMaterialization: () => ({ enabled: false, label: '本轮对话结果' }),
+      createSkillJob: async (toolCode: string, payload: any) => {
+        calls.push({ tool: toolCode, input: payload });
+        return { jobId: 'job-visit-prep-multi-customer', status: 'running', artifacts: [] };
+      },
+      getSkillJob: async () => ({
+        jobId: 'job-visit-prep-multi-customer',
+        skillCode: 'ext.yunzhijia_visit_prep',
+        runtimeSkillName: 'yunzhijia-visit-prep',
+        model: null,
+        status: 'succeeded',
+        finalText: '# 浙江贝斯美材料有限公司 拜访准备\n\n## 客户画像速览\n已生成。',
+        events: [],
+        artifacts: [],
+        error: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      getSkillJobArtifact: async () => {
+        throw new Error('not used');
+      },
+    },
+    artifactService: {
+      findCompanyResearchArtifactsForVisitPrep: async (input: any) => {
+        calls.push({ tool: 'artifact.company_research.lookup', input });
+        return [createVisitPrepCompanyResearchDetail({
+          companyName: '浙江贝斯美材料有限公司',
+          customerId: input.customerId,
+          customerName: input.customerName,
+        })];
+      },
+      createCompanyResearchArtifact: async () => {
+        throw new Error('not used');
+      },
+      createAnalysisMaterialArtifact: async () => {
+        throw new Error('not used');
+      },
+      search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
+    },
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-visit-prep-multi-customer',
+    sceneKey: 'chat',
+    query: '/拜访准备 贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
+  const question = pending?.questionCard?.questions[0];
+  assert.equal(waiting.executionState.status, 'waiting_input');
+  assert.equal(question?.type, 'single_select');
+  assert.equal(question?.paramKey, 'customerChoice');
+  assert.deepEqual(question?.options?.map((item) => item.label), [
+    '绍兴贝斯美化工股份有限公司',
+    '浙江贝斯美材料有限公司',
+  ]);
+
+  const continued = await service.chat({
+    conversationKey: 'conv-visit-prep-multi-customer',
+    sceneKey: 'chat',
+    query: '选择浙江贝斯美材料有限公司',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: pending!.interactionId,
+      answers: {
+        customerChoice: 'customer:customer-bsm-002',
+      },
+    },
+  });
+
+  const researchCall = calls.find((item) => item.tool === 'artifact.company_research.lookup');
+  assert.equal(continued.executionState.status, 'completed');
+  assert.equal(researchCall?.input.customerId, 'customer-bsm-002');
+  assert.equal(calls.some((item) => item.tool === 'ext.yunzhijia_visit_prep'), true);
+});
+
+test('Agent runtime shows single-select research card when selected customer has multiple company research materials', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const calls: Array<{ tool: string; input?: any }> = [];
+  const companyName = '绍兴贝斯美化工股份有限公司';
+  const customer = createUpdateLiveRecord('customer', 'customer-bsm-001', companyName);
+  const researchA = createVisitPrepCompanyResearchDetail({
+    companyName,
+    artifactId: 'artifact-company-research-old',
+    version: 1,
+    customerId: 'customer-bsm-001',
+    customerName: companyName,
+    markdown: `# ${companyName} 公司研究旧版\n\n旧版材料。`,
+  });
+  const researchB = createVisitPrepCompanyResearchDetail({
+    companyName,
+    artifactId: 'artifact-company-research-new',
+    version: 2,
+    customerId: 'customer-bsm-001',
+    customerName: companyName,
+    markdown: `# ${companyName} 公司研究新版\n\n新版材料。`,
+  });
+  const { service } = createAgentTestService({
+    repository,
+    config: createTestConfig({ envFilePath: '/tmp/yzj-ai-crm-admin-api-test/.env' }),
+    intentFrame: companyIntent('贝斯美'),
+    shadowMetadataService: {
+      executeSearch: async (objectKey: ShadowObjectKey, searchInput: any) => {
+        calls.push({ tool: `record.${objectKey}.search`, input: searchInput });
+        return { records: [customer], totalElements: 1 };
+      },
+    },
+    externalSkillService: {
+      getSkillAssetMaterialization: () => ({ enabled: false, label: '本轮对话结果' }),
+      createSkillJob: async (toolCode: string, payload: any) => {
+        calls.push({ tool: toolCode, input: payload });
+        return { jobId: 'job-visit-prep-research-choice', status: 'running', artifacts: [] };
+      },
+      getSkillJob: async () => ({
+        jobId: 'job-visit-prep-research-choice',
+        skillCode: 'ext.yunzhijia_visit_prep',
+        runtimeSkillName: 'yunzhijia-visit-prep',
+        model: null,
+        status: 'succeeded',
+        finalText: '# 绍兴贝斯美化工股份有限公司 拜访准备\n\n## 客户画像速览\n已基于新版材料生成。',
+        events: [],
+        artifacts: [],
+        error: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      getSkillJobArtifact: async () => {
+        throw new Error('not used');
+      },
+    },
+    artifactService: {
+      findCompanyResearchArtifactsForVisitPrep: async (input: any) => {
+        calls.push({ tool: 'artifact.company_research.lookup', input });
+        return [researchA, researchB];
+      },
+      getArtifact: async (artifactId: string) => {
+        calls.push({ tool: 'artifact.get', input: { artifactId } });
+        return artifactId === researchB.artifact.artifactId ? researchB : researchA;
+      },
+      createCompanyResearchArtifact: async () => {
+        throw new Error('not used');
+      },
+      createAnalysisMaterialArtifact: async () => {
+        throw new Error('not used');
+      },
+      search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
+    },
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-visit-prep-research-choice',
+    sceneKey: 'chat',
+    query: '/拜访准备 贝斯美',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  const pending = waiting.message.extraInfo.agentTrace.pendingInteraction;
+  const question = pending?.questionCard?.questions[0];
+  assert.equal(waiting.executionState.status, 'waiting_input');
+  assert.equal(question?.type, 'single_select');
+  assert.equal(question?.paramKey, 'companyResearchArtifactId');
+  assert.equal(question?.options?.length, 2);
+
+  const continued = await service.chat({
+    conversationKey: 'conv-visit-prep-research-choice',
+    sceneKey: 'chat',
+    query: '使用新版材料',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: pending!.interactionId,
+      answers: {
+        companyResearchArtifactId: 'research:artifact-company-research-new',
+      },
+    },
+  });
+
+  assert.equal(continued.executionState.status, 'completed');
+  assert.equal(calls.some((item) => item.tool === 'artifact.get' && item.input.artifactId === 'artifact-company-research-new'), true);
+  assert.equal(calls.some((item) => item.tool === 'ext.yunzhijia_visit_prep'), true);
 });
