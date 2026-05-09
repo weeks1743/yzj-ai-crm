@@ -43,6 +43,7 @@ export type ExternalSkillImplementationType =
   | 'placeholder';
 export type ExternalSkillDebugMode = 'none' | 'image_generate' | 'skill_job';
 export type ExternalSkillDebugArtifactKind = 'image' | 'markdown' | 'presentation';
+export type ExternalSkillAssetArtifactKind = 'company_research' | 'recording_material' | 'analysis_material';
 export type SkillRuntimeModelName = 'deepseek-v4-pro' | 'deepseek-v4-flash';
 export type ImageGenerationSize = 'auto' | '1024x1024' | '1536x1024' | '1024x1536';
 export type ImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high';
@@ -67,6 +68,13 @@ export interface ExternalSkillDebugConfig {
   supportsWorkingDirectory?: boolean;
   requestPlaceholder?: string;
   artifactKind?: ExternalSkillDebugArtifactKind;
+}
+
+export interface ExternalSkillAssetMaterializationConfig {
+  enabled: boolean;
+  artifactKind?: ExternalSkillAssetArtifactKind;
+  label: string;
+  description?: string;
 }
 export type ShadowSemanticSlot =
   | 'customer_name'
@@ -273,7 +281,7 @@ export interface AnalysisMaterialArtifactRequest {
   anchors: ArtifactAnchor[];
   createdBy?: string;
   summary?: string;
-  recordingTaskId: string;
+  recordingTaskId?: string;
   skillCode: string;
   sourceJobId?: string;
   sourceFile?: {
@@ -306,6 +314,7 @@ export interface ArtifactDetailResponse {
   artifact: ArtifactVersionSummary;
   markdown: string;
   summary?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ArtifactSearchRequest {
@@ -600,7 +609,7 @@ export interface AgentFieldOptionHint {
 export interface AgentMetaQuestionLookup {
   kind: 'remote_select';
   endpoint: '/api/agent/meta-question-options';
-  source: 'employee' | 'record';
+  source: 'employee' | 'record' | 'field_option';
   targetObjectKey?: ShadowObjectKey;
   minKeywordLength: 1;
   pageSize: number;
@@ -633,6 +642,11 @@ export interface AgentMetaQuestion {
 export interface AgentMetaQuestionCard {
   title: string;
   description?: string;
+  layout?: 'missing_fields' | 'update_field_picker';
+  targetSummary?: {
+    label: string;
+    value: string;
+  };
   toolCode: string;
   submitLabel: string;
   currentValues: Record<string, {
@@ -1193,6 +1207,7 @@ export interface ExternalSkillCatalogItem {
   runtimeSkillName?: string;
   debugMode: ExternalSkillDebugMode;
   debugConfig?: ExternalSkillDebugConfig;
+  assetMaterialization?: ExternalSkillAssetMaterializationConfig;
   provider?: string | null;
   model?: string | null;
   missingDependencies?: string[];
@@ -1212,6 +1227,13 @@ export interface ArtifactImageGenerationRequest {
   quality?: ImageGenerationQuality;
 }
 
+export interface MarkdownImageGenerationRequest {
+  title?: string;
+  markdown: string;
+  size?: ImageGenerationSize;
+  quality?: ImageGenerationQuality;
+}
+
 export interface ImageGenerationResponse {
   skillCode: 'ext.image_generate';
   model: string;
@@ -1222,6 +1244,13 @@ export interface ImageGenerationResponse {
   mimeType: string;
   latencyMs: number;
   generatedAt: string;
+}
+
+export interface MarkdownImageGenerationResponse extends ImageGenerationResponse {
+  title: string;
+  fileName: string;
+  byteSize: number;
+  downloadDataUrl: string;
 }
 
 export interface ExternalSkillJobRequest {

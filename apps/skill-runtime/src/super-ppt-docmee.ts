@@ -12,7 +12,7 @@ import { ExternalServiceError } from './errors.js';
 
 export const DOCMEE_PROMPT_MAX_LENGTH = 50;
 export const DEFAULT_SUPER_PPT_PROMPT =
-  '请基于完整材料生成专业、清晰、适合管理层汇报的科技行业PPT';
+  '请生成8页以内管理层汇报PPT';
 const DOCMEE_RUNTIME_TOKEN_HOURS = 1;
 const DOCMEE_RUNTIME_TOKEN_LIMIT = 50;
 const DOCMEE_AI_LAYOUT_WARMUP_MS = 3_000;
@@ -126,6 +126,65 @@ function isDocmeeLayoutFailed(status: string | null): boolean {
   return status === 'error' || status === 'failed';
 }
 
+function isRecoverableDocmeeLayoutStreamError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /terminated|socket|econnreset|fetch failed|network/i.test(message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function toPositiveInteger(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    return parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+function countRenderedHtmlPages(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === 'string' && item.trim()).length;
+  }
+  if (!isRecord(value)) {
+    return 0;
+  }
+  return Object.values(value).filter((item) => typeof item === 'string' && item.trim()).length;
+}
+
+function resolveHtmlMapCompletion(value: unknown): {
+  source: 'ai_layout' | 'latest_data' | 'convert_result';
+  total: number;
+  renderedPages: number;
+} | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const candidates = [
+    value,
+    isRecord(value.payload) ? value.payload : null,
+    isRecord(value.data) ? value.data : null,
+  ].filter((item): item is Record<string, unknown> => Boolean(item));
+  for (const candidate of candidates) {
+    const total = toPositiveInteger(candidate.total ?? candidate.totalPage ?? candidate.pageTotal);
+    const renderedPages = countRenderedHtmlPages(candidate.htmlMap);
+    if (total && renderedPages >= total) {
+      return {
+        source: 'latest_data',
+        total,
+        renderedPages,
+      };
+    }
+  }
+
+  return null;
+}
+
 export interface DocmeeLayoutState {
   status: string | null;
   source: 'ai_layout' | 'latest_data' | 'convert_result' | null;
@@ -170,6 +229,29 @@ export function resolveOfficialLayoutState(input: {
       source: failed.source,
       isCompleted: false,
       isFailed: true,
+    };
+  }
+
+  const htmlCompleted = [
+    {
+      source: 'convert_result' as const,
+      completion: resolveHtmlMapCompletion(input.convertResult),
+    },
+    {
+      source: 'latest_data' as const,
+      completion: resolveHtmlMapCompletion(input.latestData),
+    },
+    {
+      source: 'ai_layout' as const,
+      completion: resolveHtmlMapCompletion(input.aiLayout.finalEventData),
+    },
+  ].find((item) => item.completion);
+  if (htmlCompleted) {
+    return {
+      status: 'completed',
+      source: htmlCompleted.source,
+      isCompleted: true,
+      isFailed: false,
     };
   }
 
@@ -300,7 +382,9 @@ export async function runOfficialDocmeeLayoutFlow(input: {
   ]);
 
   if (warmupResult.kind === 'error') {
-    throw warmupResult.error;
+    if (!isRecoverableDocmeeLayoutStreamError(warmupResult.error)) {
+      throw warmupResult.error;
+    }
   }
 
   if (warmupResult.kind === 'ai_layout') {
@@ -359,6 +443,19 @@ export async function runOfficialDocmeeLayoutFlow(input: {
   }));
 
   if (aiLayoutResult.kind === 'error') {
+    if (polledState?.layoutState.isCompleted) {
+      return {
+        aiLayout: createEmptyAiLayoutResponse(),
+        latestData: polledState.latestData,
+        convertResult: polledState.convertResult,
+        latestDataError: polledState.latestDataError,
+        convertResultError: polledState.convertResultError,
+        layoutState: polledState.layoutState,
+      };
+    }
+    if (pollError) {
+      throw pollError;
+    }
     throw aiLayoutResult.error;
   }
 

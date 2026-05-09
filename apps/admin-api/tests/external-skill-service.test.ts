@@ -70,6 +70,14 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
             summary: 'needs todo summary',
           },
           {
+            skillName: 'yunzhijia-visit-prep',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DEEPSEEK_API_KEY'],
+            missingDependencies: [],
+            summary: 'visit prep summary',
+          },
+          {
             skillName: 'super-ppt',
             status: 'available',
             supportsInvoke: true,
@@ -92,6 +100,7 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
   const skills = await service.listSkills();
   const companySkill = skills.find((item) => item.skillCode === 'ext.company_research_pm');
   const needsTodoSkill = skills.find((item) => item.skillCode === 'ext.customer_needs_todo_analysis');
+  const visitPrepSkill = skills.find((item) => item.skillCode === 'ext.yunzhijia_visit_prep');
   const superPptSkill = skills.find((item) => item.skillCode === 'ext.super_ppt');
 
   assert.ok(companySkill);
@@ -101,11 +110,25 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
   assert.equal(companySkill.runtimeSkillName, 'company-research');
   assert.equal(companySkill.debugMode, 'skill_job');
   assert.equal(companySkill.debugConfig?.defaultModel, 'deepseek-v4-flash');
+  assert.equal(companySkill.assetMaterialization?.enabled, true);
+  assert.equal(companySkill.assetMaterialization?.artifactKind, 'company_research');
 
   assert.ok(needsTodoSkill);
   assert.equal(needsTodoSkill.status, '告警中');
   assert.deepEqual(needsTodoSkill.missingDependencies, ['env:DEEPSEEK_API_KEY']);
   assert.match(needsTodoSkill.summary, /缺少依赖/);
+  assert.equal(needsTodoSkill.assetMaterialization?.enabled, true);
+  assert.equal(needsTodoSkill.assetMaterialization?.artifactKind, 'analysis_material');
+
+  assert.ok(visitPrepSkill);
+  assert.equal(visitPrepSkill.status, '运行中');
+  assert.equal(visitPrepSkill.implementationType, 'skill');
+  assert.equal(visitPrepSkill.supportsInvoke, true);
+  assert.equal(visitPrepSkill.runtimeSkillName, 'yunzhijia-visit-prep');
+  assert.equal(visitPrepSkill.debugMode, 'skill_job');
+  assert.equal(visitPrepSkill.debugConfig?.artifactKind, 'markdown');
+  assert.equal(visitPrepSkill.assetMaterialization?.enabled, false);
+  assert.equal(service.getSkillAssetMaterialization('ext.yunzhijia_visit_prep')?.enabled, false);
 
   assert.ok(superPptSkill);
   assert.equal(superPptSkill.status, '运行中');
@@ -252,7 +275,7 @@ test('ExternalSkillService lists runtime jobs for downstream recording repair', 
   assert.equal(result.jobs[0]?.runtimeSkillName, 'problem-statement');
 });
 
-test('ExternalSkillService injects active enterprise template for ext.super_ppt jobs', async () => {
+test('ExternalSkillService skips enterprise template for ext.super_ppt jobs while keeping prompt', async () => {
   let receivedTemplateId: string | undefined;
   let receivedPresentationPrompt: string | undefined;
   const service = new ExternalSkillService({
@@ -303,7 +326,7 @@ test('ExternalSkillService injects active enterprise template for ext.super_ppt 
 
   assert.equal(created.skillCode, 'ext.super_ppt');
   assert.equal(created.runtimeSkillName, 'super-ppt');
-  assert.equal(receivedTemplateId, 'tpl-enterprise-001');
+  assert.equal(receivedTemplateId, undefined);
   assert.equal(receivedPresentationPrompt, '请基于完整材料生成专业科技行业管理层汇报PPT');
 });
 

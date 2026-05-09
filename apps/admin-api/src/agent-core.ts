@@ -213,7 +213,7 @@ export interface FieldOptionHint {
 export interface MetaQuestionLookup {
   kind: 'remote_select';
   endpoint: '/api/agent/meta-question-options';
-  source: 'employee' | 'record';
+  source: 'employee' | 'record' | 'field_option';
   targetObjectKey?: ShadowObjectKey;
   minKeywordLength: 1;
   pageSize: number;
@@ -254,6 +254,11 @@ export interface MetaQuestion {
 export interface MetaQuestionCard {
   title: string;
   description?: string;
+  layout?: 'missing_fields' | 'update_field_picker';
+  targetSummary?: {
+    label: string;
+    value: string;
+  };
   toolCode: string;
   submitLabel: string;
   currentValues: Record<string, {

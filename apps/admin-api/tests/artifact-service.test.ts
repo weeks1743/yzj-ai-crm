@@ -44,6 +44,17 @@ test('buildAnchorIdentity keeps recording and analysis artifacts stable by forma
     }),
     'analysis_material:followup:followup-bsm:skill:ext.problem_statement_pm',
   );
+  assert.equal(
+    buildAnchorIdentity(
+      [{ type: 'company' as const, id: '绍兴贝斯美化工股份有限公司', role: 'primary' as const }],
+      {
+        kind: 'analysis_material',
+        sourceToolCode: 'ext.yunzhijia_visit_prep',
+        metadata: { skillCode: 'ext.yunzhijia_visit_prep' },
+      },
+    ),
+    'analysis_material:company:绍兴贝斯美化工股份有限公司:skill:ext.yunzhijia_visit_prep',
+  );
 });
 
 test('createCompanyResearchArtifact saves markdown when embedding key is missing', async () => {
@@ -64,7 +75,7 @@ test('createCompanyResearchArtifact saves markdown when embedding key is missing
     artifact,
     markdown: '# 星海精工股份\n\n公司正在推进产线升级。',
     eid: config.yzj.eid,
-    appId: config.yzj.appId,
+    appId: config.yzj.lightCloud.appId,
   };
   const repository = {
     saveCompanyResearchArtifact: async () => saved,
@@ -130,7 +141,7 @@ test('createCompanyResearchArtifact upserts qdrant payload with tenant and ancho
         artifact,
         markdown: '# 远澜生物科技\n\n关注信息化预算。',
         eid: config.yzj.eid,
-        appId: config.yzj.appId,
+        appId: config.yzj.lightCloud.appId,
       }),
       updateVectorStatus: async (
         _artifactId: string,
@@ -165,7 +176,7 @@ test('createCompanyResearchArtifact upserts qdrant payload with tenant and ancho
 
   assert.equal(result.artifact.vectorStatus, 'indexed');
   assert.equal(upsertInput.eid, config.yzj.eid);
-  assert.equal(upsertInput.appId, config.yzj.appId);
+  assert.equal(upsertInput.appId, config.yzj.lightCloud.appId);
   assert.deepEqual(upsertInput.anchors, artifact.anchors);
   assert.equal(upsertInput.chunks.length, 1);
 });
@@ -215,7 +226,7 @@ test('findLatestCompanyResearchArtifact returns latest valid markdown by company
   });
 
   assert.equal(lookupInput.eid, config.yzj.eid);
-  assert.equal(lookupInput.appId, config.yzj.appId);
+  assert.equal(lookupInput.appId, config.yzj.lightCloud.appId);
   assert.equal(lookupInput.companyName, '上海松井机械有限公司');
   assert.equal(result?.artifact.artifactId, 'artifact-songjing-001');
 });
@@ -337,12 +348,166 @@ test('search falls back to metadata artifact when abbreviation anchor has no vec
   });
 
   assert.equal(metadataInput.eid, config.yzj.eid);
-  assert.equal(metadataInput.appId, config.yzj.appId);
+  assert.equal(metadataInput.appId, config.yzj.lightCloud.appId);
   assert.deepEqual(metadataInput.terms, ['江苏友升']);
   assert.equal(result.vectorStatus, 'searched');
   assert.equal(result.evidence[0]?.title, '江苏友升汽车科技有限公司 公司研究');
   assert.equal(result.evidence[0]?.anchorIds[0], '江苏友升汽车科技有限公司');
   assert.match(result.evidence[0]?.snippet ?? '', /汽车零部件|轻量化/);
+});
+
+test('search metadata fallback allows same-tenant app bridge only with exact business anchors', async () => {
+  const config = createTestConfig({ embeddingApiKey: 'test-key', embeddingDimensions: 3 });
+  let metadataInput: any = null;
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findCompanyResearchArtifactsByMetadata: async (input: any) => {
+        metadataInput = input;
+        return [buildArtifactDetail('绍兴贝斯美化工股份有限公司', 'lightcloud')];
+      },
+    } as any,
+    embeddingService: {
+      isConfigured: () => true,
+      embedTexts: async () => [[0.1, 0.2, 0.3]],
+    } as any,
+    vectorService: {
+      buildFilter: () => ({ must: ['ai-app-filter'] }),
+      upsertChunks: async () => {
+        throw new Error('should not upsert during search');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.search({
+    query: '贝斯美上次拜访客户主要提了什么需求',
+    kinds: ['analysis_material'],
+    anchors: [{ type: 'customer', id: 'customer-bsm-001', name: '绍兴贝斯美化工股份有限公司', role: 'primary' }],
+  });
+
+  assert.equal(metadataInput.eid, config.yzj.eid);
+  assert.equal(metadataInput.appId, config.yzj.lightCloud.appId);
+  assert.deepEqual(metadataInput.exactAnchorKeys, ['customer:customer-bsm-001']);
+  assert.equal(metadataInput.allowSameTenantAppFallback, true);
+  assert.equal(result.evidence.length, 1);
+});
+
+test('findCompanyResearchArtifactsForVisitPrep prefers customer anchored research before same-app name fallback', async () => {
+  const config = createTestConfig({ embeddingApiKey: null });
+  const calls: any[] = [];
+  const anchored = buildArtifactDetail('绍兴贝斯美化工股份有限公司', 'anchored');
+  anchored.artifact.anchors = [
+    { type: 'customer', id: 'customer-bsm-001', name: '绍兴贝斯美化工股份有限公司', role: 'primary' },
+    { type: 'company', id: '绍兴贝斯美化工股份有限公司', name: '绍兴贝斯美化工股份有限公司', role: 'related' },
+  ];
+  const fallback = buildArtifactDetail('绍兴贝斯美化工股份有限公司', 'fallback');
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findCompanyResearchArtifactsByMetadata: async (input: any) => {
+        calls.push(input);
+        return calls.length === 1 ? [fallback, anchored] : [fallback];
+      },
+    } as any,
+    embeddingService: {
+      isConfigured: () => false,
+      embedTexts: async () => [],
+    } as any,
+    vectorService: {
+      buildFilter: () => ({}),
+      upsertChunks: async () => {
+        throw new Error('not used');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.findCompanyResearchArtifactsForVisitPrep({
+    customerId: 'customer-bsm-001',
+    customerName: '绍兴贝斯美化工股份有限公司',
+    companyName: '绍兴贝斯美化工股份有限公司',
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.artifact.artifactId, 'artifact-anchored');
+  assert.deepEqual(calls[0].exactAnchorKeys, ['customer:customer-bsm-001']);
+  assert.equal(calls.length, 1);
+});
+
+test('findCompanyResearchArtifactsForVisitPrep fallback includes original abbreviation and legal-name variants', async () => {
+  const config = createTestConfig({ embeddingApiKey: null });
+  const calls: any[] = [];
+  const fallback = buildArtifactDetail('绍兴贝斯美化工', 'short-name');
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findCompanyResearchArtifactsByMetadata: async (input: any) => {
+        calls.push(input);
+        return calls.length === 1 ? [] : [fallback];
+      },
+    } as any,
+    embeddingService: {
+      isConfigured: () => false,
+      embedTexts: async () => [],
+    } as any,
+    vectorService: {
+      buildFilter: () => ({}),
+      upsertChunks: async () => {
+        throw new Error('not used');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.findCompanyResearchArtifactsForVisitPrep({
+    customerId: 'customer-bsm-001',
+    customerName: '绍兴贝斯美化工股份有限公司',
+    companyName: '绍兴贝斯美化工股份有限公司',
+    lookupTerms: ['贝斯美'],
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.artifact.artifactId, 'artifact-short-name');
+  assert.ok(calls[1].terms.includes('贝斯美'));
+  assert.ok(calls[1].terms.includes('绍兴贝斯美化工'));
+});
+
+test('findCompanyResearchArtifactsForVisitPrep falls back to legacy ai app id for old company research', async () => {
+  const config = createTestConfig({ embeddingApiKey: null });
+  const calls: any[] = [];
+  const fallback = buildArtifactDetail('绍兴贝斯美化工股份有限公司', 'legacy-ai-app');
+  const service = new ArtifactService({
+    config,
+    repository: {
+      findCompanyResearchArtifactsByMetadata: async (input: any) => {
+        calls.push(input);
+        return input.appId === config.yzj.appId ? [fallback] : [];
+      },
+    } as any,
+    embeddingService: {
+      isConfigured: () => false,
+      embedTexts: async () => [],
+    } as any,
+    vectorService: {
+      buildFilter: () => ({}),
+      upsertChunks: async () => {
+        throw new Error('not used');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.findCompanyResearchArtifactsForVisitPrep({
+    customerId: '69fc74340dbe3400010f0942',
+    customerName: '绍兴贝斯美化工股份有限公司',
+    lookupTerms: ['贝斯美'],
+  });
+
+  assert.equal(result[0]?.artifact.artifactId, 'artifact-legacy-ai-app');
+  assert.equal(calls[0].appId, config.yzj.lightCloud.appId);
+  assert.equal(calls[1].appId, config.yzj.lightCloud.appId);
+  assert.equal(calls[2].appId, config.yzj.appId);
 });
 
 test('search returns metadata fallback when embedding is not configured', async () => {

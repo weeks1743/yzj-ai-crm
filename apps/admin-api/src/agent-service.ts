@@ -10,6 +10,7 @@ import type { MainAgentRuntime } from './agent-runtime.js';
 import type { AgentRuntimeOutput } from './agent-core.js';
 import { createTraceId } from './agent-utils.js';
 import { getErrorMessage } from './errors.js';
+import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 export class AgentService {
   constructor(
@@ -24,8 +25,10 @@ export class AgentService {
     const runId = request.resume?.runId || randomUUID();
     const traceId = createTraceId();
     const startedAt = new Date().toISOString();
-    const eid = request.tenantContext?.eid?.trim() || this.options.config.yzj.eid;
-    const appId = request.tenantContext?.appId?.trim() || this.options.config.yzj.appId;
+    const tenant = resolveAgentIsolationTenant(this.options.config, {
+      eid: request.tenantContext?.eid,
+    });
+    const { eid, appId } = tenant;
     const operatorOpenId = request.tenantContext?.operatorOpenId?.trim() || null;
     const contextFrame = await this.options.repository.findContextFrame(request.conversationKey);
     const contextCandidates = await this.options.repository.findContextCandidates(request.conversationKey);

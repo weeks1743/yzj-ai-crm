@@ -10,6 +10,7 @@ import type {
 import { getErrorMessage, SyncAlreadyRunningError } from './errors.js';
 import { OrgSyncRepository } from './org-sync-repository.js';
 import { YzjClient } from './yzj-client.js';
+import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 const PAGE_SIZE = 1000;
 
@@ -42,7 +43,10 @@ export class OrgSyncService {
       syncMode: 'manual_full_active_only',
       schedulerEnabled: false,
       pageSize: PAGE_SIZE,
-      employeeCount: await this.repository.countEmployees(this.config.yzj.eid, this.config.yzj.appId),
+      employeeCount: await this.repository.countEmployees(
+        this.agentIsolationTenant.eid,
+        this.agentIsolationTenant.appId,
+      ),
       isSyncing: Boolean(activeRun),
       lastRun,
       recentRuns: await this.repository.getRecentRuns(10),
@@ -60,8 +64,8 @@ export class OrgSyncService {
 
     await this.repository.createRun({
       id: runId,
-      eid: this.config.yzj.eid,
-      appId: this.config.yzj.appId,
+      eid: this.agentIsolationTenant.eid,
+      appId: this.agentIsolationTenant.appId,
       triggerType: 'manual',
       status: 'running',
       startedAt,
@@ -145,8 +149,8 @@ export class OrgSyncService {
     }
 
     await this.repository.upsertEmployee({
-      eid: this.config.yzj.eid,
-      appId: this.config.yzj.appId,
+      eid: this.agentIsolationTenant.eid,
+      appId: this.agentIsolationTenant.appId,
       openId: employee.openId,
       uid: employee.uid ?? null,
       name: employee.name ?? null,
@@ -159,6 +163,10 @@ export class OrgSyncService {
     });
 
     progress.upsertedCount += 1;
+  }
+
+  private get agentIsolationTenant() {
+    return resolveAgentIsolationTenant(this.config);
   }
 }
 

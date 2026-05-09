@@ -12,7 +12,7 @@ import { EnterprisePptTemplateRepository } from './enterprise-ppt-template-repos
 
 const DOCMEE_TOKEN_TTL_HOURS = 1;
 const DEFAULT_ENTERPRISE_PPT_PROMPT =
-  '请基于完整材料生成专业、清晰、适合管理层汇报的科技行业PPT';
+  '请生成8页以内管理层汇报PPT';
 const DOCMEE_PROMPT_MAX_LENGTH = 50;
 
 function resolvePromptState(prompt: string | null | undefined): EnterprisePptTemplatePromptResponse {

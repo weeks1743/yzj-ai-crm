@@ -8,7 +8,7 @@ import { SkillCatalogService } from '../src/skill-catalog-service.js';
 test('skill catalog computes available, blocked, and unsupported_yet states', () => {
   const tempDir = createTempDir('skill-catalog-');
   try {
-    for (const skillName of ['company-research', 'visit-conversation-understanding', 'customer-needs-todo-analysis', 'super-ppt', 'discovery-interview-prep']) {
+    for (const skillName of ['company-research', 'visit-conversation-understanding', 'customer-needs-todo-analysis', 'yunzhijia-visit-prep', 'super-ppt', 'discovery-interview-prep']) {
       writeSkillFixture(
         tempDir,
         skillName,
@@ -32,6 +32,7 @@ description: ${skillName} description
     assert.equal(catalog.find((item) => item.skillName === 'company-research')?.status, 'available');
     assert.equal(catalog.find((item) => item.skillName === 'visit-conversation-understanding')?.status, 'available');
     assert.equal(catalog.find((item) => item.skillName === 'customer-needs-todo-analysis')?.status, 'available');
+    assert.equal(catalog.find((item) => item.skillName === 'yunzhijia-visit-prep')?.status, 'available');
     assert.equal(catalog.find((item) => item.skillName === 'super-ppt')?.status, 'blocked');
     assert.equal(catalog.find((item) => item.skillName === 'discovery-interview-prep')?.status, 'unsupported_yet');
   } finally {

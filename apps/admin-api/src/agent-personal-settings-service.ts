@@ -7,6 +7,7 @@ import type {
 import type { DatabaseConnection } from './database.js';
 import { BadRequestError } from './errors.js';
 import type { OrgSyncRepository } from './org-sync-repository.js';
+import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 export const DEFAULT_SOUL_PROMPT = `我是金蝶云之家的销售，主推“制造业一体化协同办公平台解决方案”。当我研究客户公司、生成销售速览、拜访建议或后续跟进内容时，请始终站在金蝶云之家销售推进视角，而不是只做中立公司百科摘要。
 
@@ -42,13 +43,14 @@ export class AgentPersonalSettingsService {
 
   async getSettings(operatorOpenId?: string): Promise<AgentPersonalSettingsResponse> {
     const normalizedOpenId = normalizeOperatorOpenId(operatorOpenId);
+    const tenant = resolveAgentIsolationTenant(this.options.config);
     const row = await this.options.database.queryMaybeOne<AgentPersonalSettingsRow>(
       `
         SELECT soul_prompt, updated_at
         FROM ${this.options.database.table('agent_personal_settings')}
         WHERE eid = $1 AND operator_open_id = $2
       `,
-      [this.options.config.yzj.eid, normalizedOpenId],
+      [tenant.eid, normalizedOpenId],
     );
 
     return this.buildResponse(normalizedOpenId, row);
@@ -58,6 +60,7 @@ export class AgentPersonalSettingsService {
     const normalizedOpenId = normalizeOperatorOpenId(request.operatorOpenId);
     const soulPrompt = request.soulPrompt?.trim() ?? '';
     const now = new Date().toISOString();
+    const tenant = resolveAgentIsolationTenant(this.options.config);
 
     if (!soulPrompt) {
       await this.options.database.query(
@@ -65,7 +68,7 @@ export class AgentPersonalSettingsService {
           DELETE FROM ${this.options.database.table('agent_personal_settings')}
           WHERE eid = $1 AND operator_open_id = $2
         `,
-        [this.options.config.yzj.eid, normalizedOpenId],
+        [tenant.eid, normalizedOpenId],
       );
       return this.buildResponse(normalizedOpenId, null);
     }
@@ -88,8 +91,8 @@ export class AgentPersonalSettingsService {
         RETURNING soul_prompt, updated_at
       `,
       [
-        this.options.config.yzj.eid,
-        this.options.config.yzj.appId,
+        tenant.eid,
+        tenant.appId,
         normalizedOpenId,
         soulPrompt,
         now,
@@ -104,8 +107,7 @@ export class AgentPersonalSettingsService {
     row: AgentPersonalSettingsRow | null,
   ): Promise<AgentPersonalSettingsResponse> {
     return {
-      eid: this.options.config.yzj.eid,
-      appId: this.options.config.yzj.appId,
+      ...resolveAgentIsolationTenant(this.options.config),
       operatorOpenId,
       displayName: await this.resolveDisplayName(operatorOpenId),
       roleLabel: DEFAULT_ROLE_LABEL,
@@ -117,8 +119,7 @@ export class AgentPersonalSettingsService {
 
   private async resolveDisplayName(operatorOpenId: string): Promise<string> {
     const candidates = await this.options.orgSyncRepository?.findEmployees({
-      eid: this.options.config.yzj.eid,
-      appId: this.options.config.yzj.appId,
+      ...resolveAgentIsolationTenant(this.options.config),
       keyword: operatorOpenId,
       limit: 5,
     }) ?? [];

@@ -69,6 +69,8 @@ export interface CompanyResearchArtifactMetadataSearchInput {
   terms: string[];
   limit: number;
   kinds?: ArtifactKind[];
+  exactAnchorKeys?: string[];
+  allowSameTenantAppFallback?: boolean;
 }
 
 type ArtifactCreateInput =
@@ -117,14 +119,14 @@ export class ArtifactRepository {
 
   async saveAnalysisMaterialArtifact(
     input: Required<Pick<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>> &
-      Omit<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>,
+      Omit<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'> & { recordingTaskId?: string },
   ): Promise<SavedArtifactVersion> {
     return this.saveArtifact({
       ...input,
       kind: 'analysis_material',
       versionPolicy: 'replace_current',
       metadata: {
-        recordingTaskId: input.recordingTaskId,
+        recordingTaskId: input.recordingTaskId ?? null,
         skillCode: input.skillCode,
         sourceJobId: input.sourceJobId ?? null,
         sourceFile: input.sourceFile ?? null,
@@ -301,6 +303,7 @@ export class ArtifactRepository {
       artifact: toSummary(artifact),
       markdown: version.markdown,
       summary: version.summary,
+      metadata: version.metadata,
     };
   }
 
@@ -324,12 +327,30 @@ export class ArtifactRepository {
         { 'anchors.name': pattern },
       ];
     });
-    const artifactDocs = await artifacts.find({
+    const kinds: ArtifactKind[] = input.kinds?.length
+      ? input.kinds
+      : ['company_research', 'recording_material', 'analysis_material'];
+    const kindFilter = { $in: kinds };
+    const limit = Math.min(Math.max(input.limit, 1), 10);
+    let artifactDocs = await artifacts.find({
       eid: input.eid,
       appId: input.appId,
-      kind: { $in: input.kinds?.length ? input.kinds : ['company_research', 'recording_material', 'analysis_material'] },
+      kind: kindFilter,
       $or: regexClauses,
-    }).sort({ updatedAt: -1 }).limit(Math.min(Math.max(input.limit, 1), 10)).toArray();
+    }).sort({ updatedAt: -1 }).limit(limit).toArray();
+
+    if (!artifactDocs.length && input.allowSameTenantAppFallback) {
+      const anchorClauses = buildExactAnchorClauses(input.exactAnchorKeys ?? []);
+      if (anchorClauses.length) {
+        artifactDocs = await artifacts.find({
+          eid: input.eid,
+          appId: { $ne: input.appId },
+          kind: kindFilter,
+          $or: regexClauses,
+          $and: [{ $or: anchorClauses }],
+        }).sort({ updatedAt: -1 }).limit(limit).toArray();
+      }
+    }
     if (!artifactDocs.length) {
       return [];
     }
@@ -349,6 +370,7 @@ export class ArtifactRepository {
         artifact: toSummary(artifact),
         markdown: version.markdown,
         summary: version.summary,
+        metadata: version.metadata,
       });
     }
     return details;
@@ -374,6 +396,7 @@ export class ArtifactRepository {
       artifact: toSummary(artifact),
       markdown: version.markdown,
       summary: version.summary,
+      metadata: version.metadata,
     };
   }
 
@@ -440,6 +463,22 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function buildExactAnchorClauses(anchorKeys: string[]): Array<{ anchors: { $elemMatch: { type: string; id: string } } }> {
+  const clauses: Array<{ anchors: { $elemMatch: { type: string; id: string } } }> = [];
+  const seen = new Set<string>();
+  for (const key of anchorKeys) {
+    const separatorIndex = key.indexOf(':');
+    const type = key.slice(0, separatorIndex).trim();
+    const id = key.slice(separatorIndex + 1).trim();
+    if (separatorIndex <= 0 || !type || !id || seen.has(`${type}:${id}`)) {
+      continue;
+    }
+    seen.add(`${type}:${id}`);
+    clauses.push({ anchors: { $elemMatch: { type, id } } });
+  }
+  return clauses;
+}
+
 export function buildAnchorIdentity(
   anchors: ArtifactAnchor[],
   options?: {
@@ -450,9 +489,13 @@ export function buildAnchorIdentity(
 ): string {
   if (options?.kind === 'analysis_material') {
     const followup = anchors.find((item) => item.type === 'followup' && item.id);
+    const primary = anchors.find((item) => item.role === 'primary') ?? anchors[0];
     const skillCode = String(options.metadata?.skillCode || options.sourceToolCode || '').trim();
     if (followup && skillCode) {
       return `analysis_material:followup:${followup.id}:skill:${skillCode}`;
+    }
+    if (primary && skillCode) {
+      return `analysis_material:${primary.type}:${primary.id}:skill:${skillCode}`;
     }
   }
 

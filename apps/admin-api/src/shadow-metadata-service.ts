@@ -45,6 +45,7 @@ import {
   type ShadowMergedTemplateSnapshot,
   type ShadowPublicTemplateProvider,
 } from './shadow-template-providers.js';
+import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 const SUPPORTED_WRITABLE_WIDGET_TYPES = new Set([
   'textWidget',
@@ -464,6 +465,123 @@ function hasAutoDerivedTitle(widget: YzjApprovalWidget): boolean {
 
   const defaultTitle = extendFieldMap.defaultTitle;
   return Boolean(defaultTitle) || Boolean(parseTitleEntity(widget));
+}
+
+function isLikelyInternalDisplayId(value: string): boolean {
+  const normalized = value.replace(/\s+/g, '').trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^[0-9a-f]{16,64}$/i.test(normalized)
+    || /^[0-9a-f]{16,64}的(?:商机|机会|商机跟进记录|跟进记录|拜访记录|回访记录)$/i.test(normalized)
+    || /^(?:customer|contact|opportunity|followup|form|record|dept|department)[-_][A-Za-z0-9_-]+$/i.test(normalized);
+}
+
+function readDisplayTextFromUnknown(value: unknown): string {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const text = String(value).trim();
+    return text && !isLikelyInternalDisplayId(text) ? text : '';
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(readDisplayTextFromUnknown).filter(Boolean).join('、');
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const key of [
+      'showName',
+      '_S_TITLE',
+      '_S_NAME',
+      '_name_',
+      'name',
+      'title',
+      'displayName',
+      'deptName',
+      'departmentName',
+      'orgName',
+      'fullName',
+      'label',
+    ]) {
+      const text = readDisplayTextFromUnknown(record[key]);
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return '';
+}
+
+function sanitizeDerivedTitle(title: string): string {
+  const trimmed = title.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const internalId = '[0-9a-f]{16,64}';
+  return trimmed
+    .replace(new RegExp(`^${internalId}的(?=商机|机会|商机跟进记录|跟进记录|拜访记录|回访记录$)`, 'i'), '')
+    .replace(new RegExp(`((?:负责人|销售负责人|所有者|所属人|跟进人|跟进负责人|服务代表|售后服务代表|申请人|创建人|openId|open_id)\\s*[：:]\\s*)${internalId}`, 'gi'), '$1已绑定人员')
+    .replace(new RegExp(`((?:所属部门|部门|组织|部门ID|deptId|departmentId)\\s*[：:]\\s*)${internalId}`, 'gi'), '$1已选择部门')
+    .trim();
+}
+
+function compactDerivedTitle(title: string): string {
+  const normalized = title.replace(/\s+/g, ' ').trim();
+  return normalized.length > 60 ? `${normalized.slice(0, 60)}...` : normalized;
+}
+
+function isGenericDerivedTitle(title: string, objectKey: ShadowObjectKey): boolean {
+  const normalized = title.replace(/\s+/g, '').trim();
+  const objectLabel = mapShadowObjectLabel(objectKey);
+  return normalized === objectLabel
+    || normalized === `${objectLabel}记录`
+    || /^的(?:商机|机会|商机跟进记录|跟进记录|拜访记录|回访记录)$/.test(normalized);
+}
+
+function scoreDerivedTitleFallbackField(field: ShadowStandardizedField): number {
+  const label = field.label.replace(/\s+/g, '');
+  const slot = field.semanticSlot ?? '';
+  if (field.fieldCode === '_S_TITLE' || field.writePolicy === 'derived') {
+    return -1;
+  }
+  if (/name$/i.test(slot) || /record$/i.test(slot)) {
+    return 100;
+  }
+  if (/客户名称|公司名称|联系人姓名|商机名称|机会名称|跟进记录|跟进内容|拜访记录|回访记录|主题|标题/.test(label)) {
+    return 90;
+  }
+  if (/摘要|内容|说明|备注|描述/.test(label)) {
+    return 70;
+  }
+  if (field.relationBinding && /客户|商机|机会|联系人/.test(label)) {
+    return 50;
+  }
+  return 0;
+}
+
+function deriveReadableTitleFallback(
+  snapshot: ShadowObjectSnapshotRecord,
+  widgetValue: Record<string, unknown>,
+): string {
+  const candidates = snapshot.normalizedFields
+    .map((field, index) => ({ field, index, score: scoreDerivedTitleFallbackField(field) }))
+    .filter((item) => item.score > 0 && Object.prototype.hasOwnProperty.call(widgetValue, item.field.fieldCode))
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+
+  for (const candidate of candidates) {
+    const displayText = readDisplayTextFromUnknown(widgetValue[candidate.field.fieldCode]);
+    if (displayText && !isLikelyInternalDisplayId(displayText)) {
+      return compactDerivedTitle(displayText);
+    }
+  }
+
+  return '';
 }
 
 function resolveWritePolicy(widget: YzjApprovalWidget): ShadowFieldWritePolicy {
@@ -3170,6 +3288,10 @@ export class ShadowMetadataService {
       return this.formatLivePersonValue(rawValue);
     }
 
+    if (field.widgetType === 'departmentSelectWidget') {
+      return this.formatLiveDepartmentValue(rawValue);
+    }
+
     if (field.widgetType === 'dateWidget') {
       return this.formatLiveDateValue(rawValue);
     }
@@ -3249,6 +3371,15 @@ export class ShadowMetadataService {
     return values.filter((item) => typeof item === 'string' && item.trim()).length ? '已绑定人员' : '';
   }
 
+  private formatLiveDepartmentValue(rawValue: unknown): unknown {
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+    const labels = values.map(readDisplayTextFromUnknown).filter(Boolean);
+    if (labels.length) {
+      return labels;
+    }
+    return values.some((item) => item !== null && item !== undefined && item !== '') ? '已选择部门' : '';
+  }
+
   private async resolveLivePersonFieldNames(records: ShadowLiveRecord[]): Promise<void> {
     if (!this.orgSyncRepository || records.length === 0) {
       return;
@@ -3271,8 +3402,7 @@ export class ShadowMetadataService {
     await Promise.all([...openIds].map(async (openId) => {
       try {
         const candidates = await this.orgSyncRepository?.findEmployees({
-          eid: this.config.yzj.eid,
-          appId: this.config.yzj.appId,
+          ...resolveAgentIsolationTenant(this.config),
           keyword: openId,
           limit: 5,
         }) ?? [];
@@ -3485,11 +3615,15 @@ export class ShadowMetadataService {
       })
       .filter((value): value is string => Boolean(value?.trim()));
 
-    if (segments.length === 0) {
-      return undefined;
+    const title = sanitizeDerivedTitle(segments.join('').trim());
+    const fallbackTitle = deriveReadableTitleFallback(params.snapshot, params.widgetValue);
+    if (!title || isLikelyInternalDisplayId(title)) {
+      return fallbackTitle || undefined;
     }
-
-    return segments.join('').trim() || undefined;
+    if (fallbackTitle && isGenericDerivedTitle(title, params.snapshot.objectKey)) {
+      return fallbackTitle;
+    }
+    return title;
   }
 
   private getSnapshotTemplateTitle(snapshot: ShadowObjectSnapshotRecord): string | null {
@@ -3584,13 +3718,11 @@ export class ShadowMetadataService {
       record._name_,
       record._S_TITLE,
       record._S_NAME,
-      record.open_id,
-      record.formInstId,
-      record.id,
     ];
     for (const candidate of candidates) {
-      if (typeof candidate === 'string' && candidate.trim()) {
-        return candidate.trim();
+      const displayText = readDisplayTextFromUnknown(candidate);
+      if (displayText) {
+        return displayText;
       }
     }
 
@@ -3775,7 +3907,7 @@ export class ShadowMetadataService {
       this.readLiveFieldString(record, '_S_TITLE') ||
       this.readLiveFieldString(record, '_S_NAME') ||
       (typeof record.rawRecord.title === 'string' ? record.rawRecord.title.trim() : '') ||
-      record.formInstId;
+      this.getBasicDataFallbackTitle(relationBinding);
     const personName = this.readLiveFieldString(record, '_S_NAME') || title;
     const item: Record<string, unknown> = {
       id: record.formInstId,
@@ -3801,6 +3933,14 @@ export class ShadowMetadataService {
     }
 
     return item;
+  }
+
+  private getBasicDataFallbackTitle(relationBinding: NonNullable<ShadowStandardizedField['relationBinding']>): string {
+    const modelName = relationBinding.modelName?.trim();
+    if (modelName) {
+      return `已关联${modelName}`;
+    }
+    return '已关联记录';
   }
 
   private buildBasicDataSearchTokenFromRecord(params: {
@@ -3830,12 +3970,14 @@ export class ShadowMetadataService {
       return '';
     }
 
-    if (typeof field.rawValue === 'string' && field.rawValue.trim()) {
-      return field.rawValue.trim();
+    const rawDisplay = readDisplayTextFromUnknown(field.rawValue);
+    if (rawDisplay) {
+      return rawDisplay;
     }
 
-    if (typeof field.value === 'string' && field.value.trim()) {
-      return field.value.trim();
+    const valueDisplay = readDisplayTextFromUnknown(field.value);
+    if (valueDisplay) {
+      return valueDisplay;
     }
 
     return '';

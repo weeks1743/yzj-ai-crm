@@ -4,19 +4,22 @@ import type {
   YzjAuthSettingsResponse,
 } from './contracts.js';
 import { maskValue } from './mask.js';
+import { buildAgentIsolationKey, resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 export function getTenantAppSettings(config: AppConfig): TenantAppSettingsResponse {
+  const isolationTenant = resolveAgentIsolationTenant(config);
+  const isolationKey = buildAgentIsolationKey(config);
   return {
-    eid: config.yzj.eid,
-    appId: config.yzj.appId,
-    appName: 'AI销售助手',
+    eid: isolationTenant.eid,
+    appId: isolationTenant.appId,
+    appName: '轻云AI销售助手记录系统',
     enabled: true,
     configSource: config.meta.configSource,
-    isolationKey: `${config.yzj.eid}:${config.yzj.appId}`,
+    isolationKey,
     aiApp: {
       appId: config.yzj.appId,
       appName: 'AI销售助手',
-      isolationKey: `${config.yzj.eid}:${config.yzj.appId}`,
+      isolationKey,
     },
     lightCloudRecordApp: {
       appId: config.yzj.lightCloud.appId,
@@ -44,7 +47,7 @@ export function getYzjAuthSettings(config: AppConfig): YzjAuthSettingsResponse {
         label: 'AI轻应用 App ID',
         configured: Boolean(config.yzj.appId),
         maskedValue: maskValue(config.yzj.appId),
-        description: '用于云之家轻应用 SSO、AI 会话和 Agent 运行隔离。',
+        description: '用于云之家轻应用 SSO 与一次性 ticket 解析；Agent 资料隔离统一使用记录系统 App ID。',
         group: 'ai_app',
       },
       {
@@ -68,7 +71,7 @@ export function getYzjAuthSettings(config: AppConfig): YzjAuthSettingsResponse {
         label: '记录系统 App ID',
         configured: Boolean(config.yzj.lightCloud.appId),
         maskedValue: maskValue(config.yzj.lightCloud.appId),
-        description: '轻云AI销售助手记录系统应用，用于记录对象读写。',
+        description: '轻云AI销售助手记录系统应用，用于记录对象读写，并作为 Agent 运行、资料资产和向量检索隔离 App ID。',
         group: 'lightcloud_record_app',
       },
       {

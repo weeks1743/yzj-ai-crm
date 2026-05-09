@@ -117,3 +117,32 @@ test('ArtifactPresentationService allows retry after failed PPT generation', asy
   assert.equal(retried.status, 'succeeded');
   assert.equal(createCalls, 2);
 });
+
+test('ArtifactPresentationService maps Docmee template failures to actionable product message', async () => {
+  const database = createInMemoryDatabase();
+  const service = new ArtifactPresentationService({
+    config: createTestConfig(),
+    repository: new ArtifactPresentationRepository(database),
+    artifactService: {
+      getArtifact: async () => buildArtifactDetail(),
+    } as any,
+    externalSkillService: {
+      createSkillJob: async () => buildJob('queued'),
+      getSkillJob: async () => ({
+        ...buildJob('failed'),
+        error: {
+          code: 'EXTERNAL_SERVICE_ERROR',
+          message: 'Docmee 模板解析失败：Classification result must include at least one content page',
+        },
+      }),
+    } as any,
+  });
+
+  const response = await service.ensurePresentation('artifact-001');
+
+  assert.equal(response.status, 'failed');
+  assert.equal(
+    response.errorMessage,
+    '当前企业 PPT 模板未被 Docmee 识别出内容页，请在后台更换或修复模板后重试。',
+  );
+});

@@ -350,21 +350,37 @@ function resolveCandidateSelection(
   query: string,
 ): PendingContinuationResult | null {
   const baseInput = cloneRecord(pending.partialInput ?? input.selectedTool?.input ?? {});
-  const formInstId = extractFormInstId(query);
-  const wantsUpdate = /(更新|修改|用已有|选择已有|选已有|第一条|第1条|这条|已有记录)/.test(query);
+  const sourceToolCode = pending.toolCode ?? input.selectedTool?.toolCode ?? '';
+  const formInstId = extractFormInstId(query) ?? resolveCandidateSelectionFormInstId(query, baseInput);
   const wantsCreate = /(仍要新建|继续新建|还是新建|新建一条|创建新|保留新建)/.test(query);
+  const wantsUpdate = !wantsCreate
+    && /(更新|修改|用已有|选择已有|选已有|选择|选|第一条|第\s*\d+\s*条|第\s*[一二三四五六七八九十]\s*条|这条|已有记录)/.test(query);
 
   if (!wantsUpdate && !wantsCreate) {
     return null;
   }
+  if (wantsCreate && sourceToolCode.endsWith('.preview_update')) {
+    return null;
+  }
 
-  const sourceToolCode = pending.toolCode ?? input.selectedTool?.toolCode ?? '';
   const toolCode = wantsUpdate
     ? sourceToolCode.replace('.preview_create', '.preview_update')
     : sourceToolCode;
-  const mergedInput = wantsUpdate
+  const selectedCandidate = wantsUpdate && formInstId
+    ? readUpdateTargetCandidates(baseInput).find((candidate) => candidate.formInstId === formInstId)
+    : undefined;
+  const selectedUpdateInput = selectedCandidate?.name
     ? {
         ...baseInput,
+        agentControl: {
+          ...readObject(baseInput.agentControl),
+          subjectName: selectedCandidate.name,
+        },
+      }
+    : baseInput;
+  const mergedInput = wantsUpdate
+    ? {
+        ...selectedUpdateInput,
         mode: 'update',
         ...(formInstId ? { formInstId } : {}),
       }
@@ -396,6 +412,66 @@ function resolveCandidateSelection(
   };
 }
 
+function resolveCandidateSelectionFormInstId(query: string, baseInput: Record<string, unknown>): string | undefined {
+  const candidates = readUpdateTargetCandidates(baseInput);
+  if (!candidates.length) {
+    return undefined;
+  }
+  const ordinal = readCandidateOrdinal(query);
+  if (ordinal !== null) {
+    return candidates[ordinal - 1]?.formInstId;
+  }
+  const normalizedQuery = normalizeComparableText(query);
+  const matched = candidates.find((candidate) => {
+    const name = normalizeComparableText(candidate.name ?? '');
+    return name && normalizedQuery.includes(name);
+  });
+  return matched?.formInstId;
+}
+
+function readUpdateTargetCandidates(baseInput: Record<string, unknown>): Array<{ formInstId?: string; name?: string }> {
+  const agentControl = readObject(baseInput.agentControl);
+  const lookup = readObject(agentControl.updateTargetLookup);
+  const rawCandidates = Array.isArray(lookup.candidates) ? lookup.candidates : [];
+  return rawCandidates
+    .map((candidate) => readObject(candidate))
+    .map((candidate) => ({
+      formInstId: typeof candidate.formInstId === 'string' && candidate.formInstId.trim()
+        ? candidate.formInstId.trim()
+        : undefined,
+      name: typeof candidate.name === 'string' && candidate.name.trim()
+        ? candidate.name.trim()
+        : undefined,
+    }))
+    .filter((candidate) => candidate.formInstId);
+}
+
+function readCandidateOrdinal(query: string): number | null {
+  const digit = query.match(/(?:第|选择|选)\s*(\d{1,2})\s*(?:条|个|项)?/);
+  if (digit?.[1]) {
+    const value = Number.parseInt(digit[1], 10);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  const normalized = query.replace(/\s+/g, '');
+  const chineseOrdinals: Array<[RegExp, number]> = [
+    [/(第一条|第一个|第一项|选一|选第一个|选择第一)/, 1],
+    [/(第二条|第二个|第二项|选二|选第二个|选择第二)/, 2],
+    [/(第三条|第三个|第三项|选三|选第三个|选择第三)/, 3],
+    [/(第四条|第四个|第四项|选四|选第四个|选择第四)/, 4],
+    [/(第五条|第五个|第五项|选五|选第五个|选择第五)/, 5],
+  ];
+  for (const [pattern, value] of chineseOrdinals) {
+    if (pattern.test(normalized)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function normalizeComparableText(value: string): string {
+  return value.replace(/\s+/g, '').trim().toLowerCase();
+}
+
 function mergeContinuationInput(input: {
   request: AgentChatRequest;
   pending: PendingInteraction;
@@ -406,13 +482,17 @@ function mergeContinuationInput(input: {
   const tool = input.pending.toolCode ? input.registry.get(input.pending.toolCode) : undefined;
   const capability = tool?.recordCapability;
   const params = cloneRecord(readObject(baseInput.params));
+  const questionParams = new Set(
+    input.pending.questionCard?.questions
+      .map((question) => question.paramKey)
+      .filter(Boolean) ?? [],
+  );
+  const genericAnswers = Object.fromEntries(
+    Object.entries(input.answers ?? {})
+      .filter(([paramKey, value]) => questionParams.has(paramKey) && !isEmptyAnswer(value)),
+  );
 
   if (capability) {
-    const questionParams = new Set(
-      input.pending.questionCard?.questions
-        .map((question) => question.paramKey)
-        .filter(Boolean) ?? [],
-    );
     const answeredParams = new Set(
       Object.entries(input.answers ?? {})
         .filter(([, value]) => !isEmptyAnswer(value))
@@ -435,6 +515,7 @@ function mergeContinuationInput(input: {
 
   return {
     ...baseInput,
+    ...(capability ? {} : genericAnswers),
     ...(Object.keys(params).length ? { params } : {}),
     ...(input.request.tenantContext?.operatorOpenId
       ? { operatorOpenId: input.request.tenantContext.operatorOpenId }
@@ -549,7 +630,21 @@ function extractLabeledParamValue(query: string, paramKey: string, capability: R
 
   const labelText = labels.join('|');
   if (/手机|电话|联系方式|phone/i.test(labelText)) {
-    return query.match(/1[3-9]\d{9}/)?.[0];
+    const phone = query.match(/1[3-9]\d{9}/)?.[0];
+    if (!phone) {
+      return undefined;
+    }
+    const isMobileParam = /mobile|contact_phone/i.test(paramKey) || /手机/.test(labelText);
+    const isOfficePhoneParam = /office_phone/i.test(paramKey) || /办公电话/.test(labelText);
+    if (isMobileParam && /手机|手机号|联系方式|mobile/i.test(query)) {
+      return phone;
+    }
+    if (isOfficePhoneParam && /办公电话|office/i.test(query)) {
+      return phone;
+    }
+    if (!isMobileParam && !isOfficePhoneParam && /电话|联系方式|phone/i.test(query)) {
+      return phone;
+    }
   }
 
   return undefined;
@@ -565,12 +660,17 @@ function buildLabelVariants(label?: string): string[] {
   if (!label) {
     return [];
   }
+  const isMobileLabel = label.includes('手机');
+  const isPhoneLabel = label.includes('电话');
+  const isOfficePhoneLabel = label.includes('办公') && isPhoneLabel;
   return [
     label.replace(/姓名$/, ''),
     label.includes('姓名') ? '姓名' : '',
-    label.includes('手机') ? '手机' : '',
-    label.includes('手机') || label.includes('电话') ? '电话' : '',
-    label.includes('手机') || label.includes('电话') ? '手机号' : '',
+    isMobileLabel ? '手机' : '',
+    isMobileLabel ? '手机号' : '',
+    isMobileLabel ? '联系方式' : '',
+    isPhoneLabel && !isOfficePhoneLabel ? '电话' : '',
+    isOfficePhoneLabel ? '办公电话' : '',
     label.includes('客户') ? '客户信息' : '',
     label.includes('客户') ? '客户名称' : '',
     label.includes('客户') ? '客户编号' : '',
@@ -582,8 +682,14 @@ function buildLabelVariants(label?: string): string[] {
 }
 
 function buildParamKeyVariants(paramKey: string): string[] {
-  if (/phone|mobile|tel/i.test(paramKey)) {
-    return ['电话', '手机号', '联系方式'];
+  if (/mobile|contact_phone/i.test(paramKey)) {
+    return ['手机', '手机号', '联系方式'];
+  }
+  if (/office_phone/i.test(paramKey)) {
+    return ['办公电话'];
+  }
+  if (/phone|tel/i.test(paramKey)) {
+    return ['电话', '联系方式'];
   }
   return [];
 }

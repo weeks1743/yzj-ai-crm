@@ -6,7 +6,11 @@ import {
   extractDocmeeMarkdownCandidate,
   extractDocmeeStatusCandidate,
 } from '../src/docmee-client.js';
-import { createSuperPptDocmeeUid } from '../src/super-ppt-docmee.js';
+import {
+  createSuperPptDocmeeUid,
+  resolveOfficialLayoutState,
+  runOfficialDocmeeLayoutFlow,
+} from '../src/super-ppt-docmee.js';
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -349,6 +353,91 @@ test('createSuperPptDocmeeUid is deterministic for the same job seed', () => {
   assert.equal(uidA, uidB);
   assert.notEqual(uidA, uidC);
   assert.match(uidA, /^sp-[a-z0-9]+$/);
+});
+
+test('resolveOfficialLayoutState accepts complete Docmee htmlMap even when status is still running', () => {
+  const completed = resolveOfficialLayoutState({
+    aiLayout: {
+      streamLog: '',
+      events: [],
+      finalEventData: undefined,
+      inferredMarkdown: null,
+      inferredHtml: null,
+      inferredStatus: null,
+      aborted: false,
+    },
+    latestData: {
+      status: 'running',
+      payload: {
+        total: 2,
+        htmlMap: {
+          0: '<html>page 1</html>',
+          1: '<html>page 2</html>',
+        },
+      },
+    },
+  });
+
+  assert.equal(completed.isCompleted, true);
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.source, 'latest_data');
+
+  const partial = resolveOfficialLayoutState({
+    aiLayout: {
+      streamLog: '',
+      events: [],
+      finalEventData: undefined,
+      inferredMarkdown: null,
+      inferredHtml: null,
+      inferredStatus: null,
+      aborted: false,
+    },
+    latestData: {
+      status: 'running',
+      payload: {
+        total: 2,
+        htmlMap: {
+          0: '<html>page 1</html>',
+        },
+      },
+    },
+  });
+
+  assert.equal(partial.isCompleted, false);
+  assert.equal(partial.status, 'running');
+});
+
+test('runOfficialDocmeeLayoutFlow polls latestData after recoverable SSE termination', async () => {
+  const flow = await runOfficialDocmeeLayoutFlow({
+    docmeeClient: {
+      generatePptxByAi: async () => {
+        throw new Error('terminated');
+      },
+      latestData: async () => ({
+        status: 'running',
+        payload: {
+          total: 1,
+          htmlMap: {
+            0: '<html>page 1</html>',
+          },
+        },
+      }),
+      getConvertResult: async () => ({
+        status: 1,
+      }),
+    } as any,
+    taskId: 'task-001',
+    runtimeToken: 'sk-session',
+    data: { title: '研究报告', slides: [{ headline: '公司概况' }] },
+    templateId: 'tpl-enterprise-001',
+    warmupMs: 0,
+    timeoutMs: 10,
+    intervalMs: 1,
+  });
+
+  assert.equal(flow.layoutState.isCompleted, true);
+  assert.equal(flow.layoutState.source, 'latest_data');
+  assert.equal(flow.aiLayout.aborted, false);
 });
 
 test('Docmee payload helpers extract markdown, html, and status from nested structures', () => {

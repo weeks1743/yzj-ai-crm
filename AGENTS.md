@@ -72,14 +72,22 @@
   - 相关设计文档
   - 对应版本迭代说明
 
-## 6. 实施要求
+## 6. 租户隔离与应用 ID 约定
+
+- Agent 运行、资料资产、录音任务、向量检索和对话观测的隔离标识统一使用 `eid + config.yzj.lightCloud.appId`。
+- `config.yzj.lightCloud.appId` 对应轻云 AI 销售助手记录系统 APPID，例如当前记录系统 APPID 为 `501037649`。
+- `config.yzj.appId` 只用于 AI 轻应用 SSO、ticket 解析和 app 级凭证，不得作为 Agent 资料空间隔离键。
+- 前端或云之家 ticket 返回的 `appId` 不能直接作为服务端资料隔离 appId；服务端必须归一到 `lightCloud.appId`。
+- 如发现历史数据误落到非 `lightCloud.appId` 命名空间，必须通过版本化修复脚本迁移或兼容读取，不允许在业务编排中硬编码单个客户或单个资料特例。
+
+## 7. 实施要求
 
 - 修改前端页面时，先核对对应 `3rd/` 参考实现，再动手。
 - 用户 AI 端新增页面或重构页面时，优先复用 `independent` 的布局、Welcome、Prompts、Bubble.List、Sender.Header、Sender 等组合关系。
 - 管理员后台新增页面或重构页面时，优先复用 Pro 的路由组织、PageContainer、ProTable、ProDescriptions、ProForm、分析页布局等模式。
 - 若业务需要定制，只允许在官方壳体和官方交互骨架之上做业务化延展，不允许改回玩具化页面。
 
-## 7. 交付与验证要求
+## 8. 交付与验证要求
 
 - 所有前端改动完成后，至少验证受影响应用可构建：
   - 管理员后台：`pnpm --filter @yzj-ai-crm/admin-pro build`
@@ -91,13 +99,13 @@
   - 是否已更新 `iterations/<version>/README.md`
   - 是否已完成构建验证
 
-## 8. 默认执行原则
+## 9. 默认执行原则
 
 - 默认优先做“正式产品原型”，不是“临时 demo”。
 - 默认优先保持与官方框架一致的结构和气质，而不是追求个人化发挥。
 - 默认优先保证页面像真实管理员/用户产品，而不是像 Codex 自动生成页面。
 
-## 9. GitHub 推送约定
+## 10. GitHub 推送约定
 
 - 若推送或拉取 GitHub 远端时遇到网络问题，默认优先尝试本地代理，而不是反复重试裸连。
 - 当前仓库可使用以下代理环境变量进行 GitHub 推送：

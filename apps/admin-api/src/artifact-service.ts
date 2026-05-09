@@ -1,6 +1,7 @@
 import type {
   AnalysisMaterialArtifactRequest,
   AppConfig,
+  ArtifactAnchor,
   ArtifactCreateResponse,
   ArtifactDetailResponse,
   ArtifactEvidenceRef,
@@ -12,9 +13,10 @@ import type {
 } from './contracts.js';
 import { chunkMarkdown } from './artifact-chunker.js';
 import type { DashScopeEmbeddingService } from './dashscope-embedding-service.js';
-import type { ArtifactRepository, SavedArtifactVersion } from './artifact-repository.js';
+import { buildAnchorKeys, type ArtifactRepository, type SavedArtifactVersion } from './artifact-repository.js';
 import type { QdrantVectorService } from './qdrant-vector-service.js';
 import { BadRequestError, getErrorMessage } from './errors.js';
+import { resolveAgentIsolationTenant, resolveLegacyAgentAppIds } from './tenant-isolation.js';
 
 export class ArtifactService {
   constructor(
@@ -74,13 +76,111 @@ export class ArtifactService {
       throw new BadRequestError('companyName 不能为空');
     }
 
+    const tenant = resolveAgentIsolationTenant(this.options.config, { eid: input.eid });
     const detail = await this.options.repository.findLatestCompanyResearchArtifactByAnchor({
-      eid: input.eid?.trim() || this.options.config.yzj.eid,
-      appId: input.appId?.trim() || this.options.config.yzj.appId,
+      eid: tenant.eid,
+      appId: tenant.appId,
       companyName,
     });
+    if (detail?.markdown.trim()) {
+      return detail;
+    }
 
-    return detail?.markdown.trim() ? detail : null;
+    for (const legacyAppId of resolveLegacyAgentAppIds(this.options.config)) {
+      const legacyDetail = await this.options.repository.findLatestCompanyResearchArtifactByAnchor({
+        eid: tenant.eid,
+        appId: legacyAppId,
+        companyName,
+      });
+      if (legacyDetail?.markdown.trim()) {
+        return legacyDetail;
+      }
+    }
+
+    return null;
+  }
+
+  async findCompanyResearchArtifactsForVisitPrep(input: {
+    eid?: string;
+    appId?: string;
+    customerId: string;
+    customerName: string;
+    companyName?: string;
+    lookupTerms?: string[];
+    limit?: number;
+  }): Promise<ArtifactDetailResponse[]> {
+    const customerId = input.customerId.trim();
+    const customerName = input.customerName.trim();
+    const companyName = input.companyName?.trim() || customerName;
+    if (!customerId) {
+      throw new BadRequestError('customerId 不能为空');
+    }
+    if (!customerName) {
+      throw new BadRequestError('customerName 不能为空');
+    }
+
+    const repository = this.options.repository as ArtifactRepository & {
+      findCompanyResearchArtifactsByMetadata?: ArtifactRepository['findCompanyResearchArtifactsByMetadata'];
+    };
+    if (typeof repository.findCompanyResearchArtifactsByMetadata !== 'function') {
+      return [];
+    }
+
+    const tenant = resolveAgentIsolationTenant(this.options.config, { eid: input.eid });
+    const { eid, appId } = tenant;
+    const limit = Math.min(Math.max(input.limit ?? 5, 1), 10);
+    const customerAnchorKey = `customer:${customerId}`;
+    const lookupTerms = buildCompanyResearchVisitPrepTerms({
+      customerId,
+      customerName,
+      companyName,
+      lookupTerms: input.lookupTerms,
+    });
+    const anchoredCandidates = await repository.findCompanyResearchArtifactsByMetadata({
+      eid,
+      appId,
+      terms: lookupTerms.withCustomerAnchorTerms,
+      kinds: ['company_research'],
+      limit,
+      exactAnchorKeys: [customerAnchorKey],
+      allowSameTenantAppFallback: false,
+    });
+    const anchored = anchoredCandidates.filter((detail) =>
+      detail.artifact.anchors.some((anchor) => anchor.type === 'customer' && anchor.id === customerId),
+    );
+    if (anchored.length) {
+      return anchored;
+    }
+
+    const sameAppFallback = await repository.findCompanyResearchArtifactsByMetadata({
+      eid,
+      appId,
+      terms: lookupTerms.fallbackTerms,
+      kinds: ['company_research'],
+      limit,
+      exactAnchorKeys: [customerAnchorKey],
+      allowSameTenantAppFallback: false,
+    });
+    if (sameAppFallback.length) {
+      return sameAppFallback;
+    }
+
+    for (const legacyAppId of resolveLegacyAgentAppIds(this.options.config)) {
+      const legacyFallback = await repository.findCompanyResearchArtifactsByMetadata({
+        eid,
+        appId: legacyAppId,
+        terms: lookupTerms.fallbackTerms,
+        kinds: ['company_research'],
+        limit,
+        exactAnchorKeys: [customerAnchorKey],
+        allowSameTenantAppFallback: false,
+      });
+      if (legacyFallback.length) {
+        return legacyFallback;
+      }
+    }
+
+    return [];
   }
 
   async search(input: ArtifactSearchRequest): Promise<ArtifactSearchResponse> {
@@ -147,12 +247,15 @@ export class ArtifactService {
       return [];
     }
 
+    const exactAnchorKeys = buildAnchorKeys(input.anchors ?? []);
     const details = await repository.findCompanyResearchArtifactsByMetadata({
       eid: input.eid,
       appId: input.appId,
       terms,
       kinds: input.kinds,
       limit: input.limit ?? 5,
+      exactAnchorKeys,
+      allowSameTenantAppFallback: shouldAllowSameTenantAppArtifactFallback(input.anchors ?? []),
     });
 
     return details.map((detail, index) => buildFallbackEvidence(detail, index));
@@ -227,8 +330,7 @@ export class ArtifactService {
       title: input.title.trim(),
       markdown: input.markdown.trim(),
       sourceToolCode: input.sourceToolCode.trim(),
-      eid: input.eid?.trim() || this.options.config.yzj.eid,
-      appId: input.appId?.trim() || this.options.config.yzj.appId,
+      ...resolveAgentIsolationTenant(this.options.config, { eid: input.eid }),
       createdBy: input.createdBy?.trim() || 'assistant-web',
       anchors: input.anchors.map((item) => ({
         ...item,
@@ -269,10 +371,7 @@ export class ArtifactService {
   private normalizeAnalysisMaterialInput(
     input: AnalysisMaterialArtifactRequest,
   ): Required<Pick<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'>> &
-    Omit<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'> {
-    if (!input.recordingTaskId?.trim()) {
-      throw new BadRequestError('recordingTaskId 不能为空');
-    }
+    Omit<AnalysisMaterialArtifactRequest, 'eid' | 'appId' | 'createdBy'> & { recordingTaskId?: string } {
     if (!input.skillCode?.trim()) {
       throw new BadRequestError('skillCode 不能为空');
     }
@@ -284,7 +383,7 @@ export class ArtifactService {
     return {
       ...input,
       ...normalized,
-      recordingTaskId: input.recordingTaskId.trim(),
+      recordingTaskId: input.recordingTaskId?.trim(),
       skillCode: input.skillCode.trim(),
       sourceJobId: input.sourceJobId?.trim(),
       sourceFile: input.sourceFile
@@ -309,8 +408,7 @@ export class ArtifactService {
     return {
       ...input,
       query: input.query.trim(),
-      eid: input.eid?.trim() || this.options.config.yzj.eid,
-      appId: input.appId?.trim() || this.options.config.yzj.appId,
+      ...resolveAgentIsolationTenant(this.options.config, { eid: input.eid }),
       limit: Math.min(Math.max(input.limit ?? 5, 1), 10),
     };
   }
@@ -334,6 +432,70 @@ function buildMetadataSearchTerms(
       seen.add(term);
       return true;
     });
+}
+
+function buildUniqueMetadataTerms(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  return values
+    .map((value) => value?.replace(/\s+/g, '').trim() ?? '')
+    .filter((value) => {
+      if (value.length < 2 || seen.has(value)) {
+        return false;
+      }
+      seen.add(value);
+      return true;
+    });
+}
+
+function buildCompanyResearchVisitPrepTerms(input: {
+  customerId: string;
+  customerName: string;
+  companyName: string;
+  lookupTerms?: string[];
+}): {
+  withCustomerAnchorTerms: string[];
+  fallbackTerms: string[];
+} {
+  const fallbackTerms = buildUniqueMetadataTerms([
+    input.customerName,
+    input.companyName,
+    ...(input.lookupTerms ?? []),
+    ...buildCompanyNameLookupVariants(input.customerName),
+    ...buildCompanyNameLookupVariants(input.companyName),
+    ...(input.lookupTerms ?? []).flatMap((term) => buildCompanyNameLookupVariants(term)),
+  ]);
+  return {
+    withCustomerAnchorTerms: buildUniqueMetadataTerms([input.customerId, ...fallbackTerms]),
+    fallbackTerms,
+  };
+}
+
+function buildCompanyNameLookupVariants(value: string | undefined): string[] {
+  const normalized = value?.replace(/\s+/g, '').trim() ?? '';
+  if (!normalized) {
+    return [];
+  }
+
+  const withoutStockSuffix = normalized.replace(/[（(][^)）]*(?:股票|代码|SZ|SH|BJ|\.SZ|\.SH|\.BJ)[^)）]*[)）]/gi, '');
+  const withoutLegalSuffix = withoutStockSuffix
+    .replace(/(?:股份有限公司|有限责任公司|集团股份有限公司|集团有限公司|有限公司|公司)$/g, '')
+    .trim();
+  const variants = [
+    withoutStockSuffix,
+    withoutLegalSuffix,
+  ];
+  const coreMatch = withoutLegalSuffix.match(/([\u4e00-\u9fa5A-Za-z0-9]{2,20}?(?:美|科技|化工|机械|材料|生物|医药|电气|精工|集团))/);
+  if (coreMatch?.[1]) {
+    variants.push(coreMatch[1]);
+  }
+  return variants;
+}
+
+function shouldAllowSameTenantAppArtifactFallback(anchors: ArtifactAnchor[]): boolean {
+  return anchors.some((anchor) => (
+    (anchor.type === 'customer' || anchor.type === 'opportunity' || anchor.type === 'followup' || anchor.type === 'company')
+    && Boolean(anchor.id?.trim())
+  ));
 }
 
 function normalizeMetadataQueryTerm(query: string): string {

@@ -20,6 +20,39 @@ import { getErrorMessage } from './errors.js';
 const SUPER_PPT_SKILL_CODE = 'ext.super_ppt';
 const PPT_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
+function normalizeArtifactPresentationErrorMessage(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return 'PPT 生成失败，请稍后重试。';
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (
+    normalized.includes('模板解析失败') ||
+    normalized.includes('未识别到可用内容页') ||
+    normalized.includes('classification result must include at least one content page')
+  ) {
+    return '当前企业 PPT 模板未被 Docmee 识别出内容页，请在后台更换或修复模板后重试。';
+  }
+
+  if (
+    normalized.includes('官方链路未完成') ||
+    normalized.includes('排版链路未完成') ||
+    normalized.includes('未执行降级 ppt') ||
+    normalized.includes('默认模板降级') ||
+    normalized.includes('排版任务未在预期时间内完成') ||
+    normalized.includes('智能布局未在预期时间内完成')
+  ) {
+    return 'PPT 排版任务未完成，已停止本次生成。请稍后重试；如持续失败，请在后台检查企业 PPT 模板。';
+  }
+
+  if (normalized.includes('未返回 .pptx') || normalized.includes('未返回 pptx')) {
+    return 'PPT 生成完成但未返回可下载文件，请稍后重试或联系管理员查看任务产物。';
+  }
+
+  return trimmed;
+}
+
 export class ArtifactPresentationService {
   constructor(
     private readonly options: {
@@ -79,7 +112,7 @@ export class ArtifactPresentationService {
       const failed = await this.options.repository.updateStatus({
         versionId: detail.artifact.versionId,
         status: 'failed',
-        errorMessage: getErrorMessage(error),
+        errorMessage: normalizeArtifactPresentationErrorMessage(getErrorMessage(error)),
       });
       return this.toResponse(detail, failed);
     }
@@ -99,7 +132,7 @@ export class ArtifactPresentationService {
       return this.options.repository.updateStatus({
         versionId: record.versionId,
         status: 'failed',
-        errorMessage: getErrorMessage(error),
+        errorMessage: normalizeArtifactPresentationErrorMessage(getErrorMessage(error)),
       });
     }
   }
@@ -112,7 +145,7 @@ export class ArtifactPresentationService {
       return this.options.repository.updateStatus({
         versionId: record.versionId,
         status: 'failed',
-        errorMessage: job.error?.message ?? 'super-ppt 生成失败',
+        errorMessage: normalizeArtifactPresentationErrorMessage(job.error?.message ?? 'super-ppt 生成失败'),
       });
     }
 
@@ -128,7 +161,7 @@ export class ArtifactPresentationService {
       return this.options.repository.updateStatus({
         versionId: record.versionId,
         status: 'failed',
-        errorMessage: 'super-ppt 未返回 .pptx 产物',
+        errorMessage: normalizeArtifactPresentationErrorMessage('super-ppt 未返回 .pptx 产物'),
       });
     }
 

@@ -1736,7 +1736,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
       lightCloudRecordApp: { appId: string; configured: boolean };
     };
     assert.equal(tenantPayload.eid, '21024647');
-    assert.equal(tenantPayload.appId, '501037729');
+    assert.equal(tenantPayload.appId, 'lightcloud-app-id');
     assert.equal(tenantPayload.aiApp.appId, '501037729');
     assert.equal(tenantPayload.lightCloudRecordApp.configured, true);
 
@@ -1773,7 +1773,7 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     };
     assert.equal(localIdentityPayload.source, 'local_fixed');
     assert.equal(localIdentityPayload.eid, '21024647');
-    assert.equal(localIdentityPayload.appId, '501037729');
+    assert.equal(localIdentityPayload.appId, 'lightcloud-app-id');
     assert.equal(localIdentityPayload.operatorOpenId, '69e75eb5e4b0e65b61c014da');
 
     const ticketIdentityResponse = await fetch(`${runtime.baseUrl}/api/yzj/auth/resolve-ticket`, {
@@ -2417,12 +2417,15 @@ test('HTTP endpoints expose external skill catalog and readable config errors', 
       implementationType: string;
       supportsInvoke: boolean;
       debugMode?: string;
+      assetMaterialization?: { enabled: boolean; artifactKind?: string };
     }>;
     const imageSkill = skillsPayload.find((item) => item.skillCode === 'ext.image_generate');
     const companySkill = skillsPayload.find((item) => item.skillCode === 'ext.company_research_pm');
+    const visitPrepSkill = skillsPayload.find((item) => item.skillCode === 'ext.yunzhijia_visit_prep');
     const superPptSkill = skillsPayload.find((item) => item.skillCode === 'ext.super_ppt');
     assert.ok(imageSkill);
     assert.ok(companySkill);
+    assert.ok(visitPrepSkill);
     assert.ok(superPptSkill);
     assert.equal(imageSkill.status, '告警中');
     assert.equal(imageSkill.implementationType, 'http_request');
@@ -2430,6 +2433,12 @@ test('HTTP endpoints expose external skill catalog and readable config errors', 
     assert.equal(companySkill.implementationType, 'skill');
     assert.equal(companySkill.supportsInvoke, true);
     assert.equal(companySkill.debugMode, 'skill_job');
+    assert.equal(companySkill.assetMaterialization?.enabled, true);
+    assert.equal(companySkill.assetMaterialization?.artifactKind, 'company_research');
+    assert.equal(visitPrepSkill.implementationType, 'skill');
+    assert.equal(visitPrepSkill.supportsInvoke, true);
+    assert.equal(visitPrepSkill.debugMode, 'skill_job');
+    assert.equal(visitPrepSkill.assetMaterialization?.enabled, false);
     assert.equal(superPptSkill.implementationType, 'skill');
     assert.equal(superPptSkill.supportsInvoke, true);
 

@@ -522,7 +522,7 @@ export class MainAgentRuntime {
           return {
             selectedTool: state.selectedTool,
             pendingInteraction: state.pendingInteraction
-              ? { ...state.pendingInteraction, status: 'cancelled' as const }
+              ? { ...state.pendingInteraction, status: 'cancelled' as const, questionCard: undefined }
               : null,
             resumeDecision: decision,
             continuationResolution: {
@@ -626,7 +626,7 @@ export class MainAgentRuntime {
           selectedTool: undefined,
           pendingConfirmation: null,
           pendingInteraction: state.pendingInteraction
-            ? { ...state.pendingInteraction, status: 'cancelled' as const }
+            ? { ...state.pendingInteraction, status: 'cancelled' as const, questionCard: undefined }
             : null,
           resumeDecision: decision,
           resolvedContext: null,
@@ -808,7 +808,7 @@ function buildRecoveredCancelCommand(input: {
   resolution: AgentRuntimeOutput['continuationResolution'];
 }) {
   const pendingInteraction = input.pendingInteraction
-    ? { ...input.pendingInteraction, status: 'cancelled' as const }
+    ? { ...input.pendingInteraction, status: 'cancelled' as const, questionCard: undefined }
     : null;
   return new Command({
     update: {

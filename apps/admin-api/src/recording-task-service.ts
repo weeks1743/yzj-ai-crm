@@ -20,6 +20,7 @@ import {
   type RecordingTaskRecord,
 } from './recording-task-repository.js';
 import { TongyiAudioServiceClient, type TongyiAudioServiceTask } from './tongyi-audio-service-client.js';
+import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 const RECORDING_MATERIAL_TOOL_CODE = 'tongyi.audio.recording_material';
 const DOWNSTREAM_RECORDING_SKILLS = {
@@ -158,8 +159,7 @@ export class RecordingTaskService {
     anchors?: RecordingAnchorInput;
     createdBy?: string;
   }): Promise<RecordingTaskResponse> {
-    const eid = input.eid?.trim() || this.options.config.yzj.eid;
-    const appId = input.appId?.trim() || this.options.config.yzj.appId;
+    const { eid, appId } = resolveAgentIsolationTenant(this.options.config, { eid: input.eid });
     const fileName = input.fileName.trim();
     if (!fileName) {
       throw new BadRequestError('录音文件名不能为空');
@@ -939,8 +939,7 @@ export class RecordingTaskService {
     Omit<RecordingTaskCreateRequest, 'eid' | 'appId' | 'createdBy' | 'anchors'> {
     return {
       ...input,
-      eid: input.eid?.trim() || this.options.config.yzj.eid,
-      appId: input.appId?.trim() || this.options.config.yzj.appId,
+      ...resolveAgentIsolationTenant(this.options.config, { eid: input.eid }),
       anchors: normalizeAnchors(input.anchors),
       createdBy: input.createdBy?.trim() || 'assistant-web',
     };

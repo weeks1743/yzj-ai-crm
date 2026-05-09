@@ -314,8 +314,8 @@ const SettingsPage = () => {
           <>
             {renderMetrics([
               { key: 'eid', label: '租户编号', value: realPageData.eid, helper: '当前接入租户识别键' },
-              { key: 'aiAppId', label: 'AI轻应用', value: realPageData.aiApp.appId, helper: '负责 SSO、会话和 Agent 运行隔离' },
-              { key: 'recordAppId', label: '记录系统', value: realPageData.lightCloudRecordApp.appId, helper: '负责轻云记录对象读写' },
+              { key: 'recordAppId', label: '记录系统', value: realPageData.lightCloudRecordApp.appId, helper: '负责轻云记录对象读写和 Agent 资料隔离' },
+              { key: 'aiAppId', label: 'AI轻应用', value: realPageData.aiApp.appId, helper: '负责 SSO 与 ticket 解析' },
               { key: 'configSource', label: '配置来源', value: realPageData.configSource, helper: '当前阶段统一从本地 .env 读取' },
             ])}
 
@@ -330,7 +330,7 @@ const SettingsPage = () => {
                     {realPageData.aiApp.isolationKey}
                   </ProDescriptions.Item>
                   <ProDescriptions.Item label="用途">
-                    云之家轻应用登录、AI 会话、资料资产与 Agent 运行隔离。
+                    云之家轻应用登录与一次性 ticket 解析；资料资产与 Agent 运行隔离使用记录系统 App ID。
                   </ProDescriptions.Item>
                 </ProDescriptions>
               </ProCard>
@@ -346,7 +346,7 @@ const SettingsPage = () => {
                     </Tag>
                   </ProDescriptions.Item>
                   <ProDescriptions.Item label="用途">
-                    通过轻云 team AccessToken 读取和写回客户、联系人、商机、跟进记录。
+                    通过轻云 team AccessToken 读取和写回客户、联系人、商机、跟进记录，并作为 Agent 运行、资料资产和向量检索隔离空间。
                   </ProDescriptions.Item>
                 </ProDescriptions>
               </ProCard>
@@ -364,7 +364,7 @@ const SettingsPage = () => {
                   )}
                 />
                 <ProDescriptions.Item label="租户编号" dataIndex="eid" />
-                <ProDescriptions.Item label="主应用编号" dataIndex="appId" />
+                <ProDescriptions.Item label="隔离应用编号" dataIndex="appId" />
                 <ProDescriptions.Item label="隔离键" dataIndex="isolationKey" />
                 <ProDescriptions.Item label="配置来源" dataIndex="configSource" />
               </ProDescriptions>

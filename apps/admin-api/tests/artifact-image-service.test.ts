@@ -67,7 +67,9 @@ function buildArtifactDetail(): ArtifactDetailResponse {
 }
 
 function extractPromptMarkdown(prompt: string): string {
-  const startMarker = '资料原文（已去除元信息和来源引用，控制在3800字以内）：\n';
+  const startMarker = prompt.includes('资料原文（已去除元信息、来源引用和内部提醒，控制在3800字以内）：\n')
+    ? '资料原文（已去除元信息、来源引用和内部提醒，控制在3800字以内）：\n'
+    : '资料原文（已去除元信息和来源引用，控制在3800字以内）：\n';
   const start = prompt.indexOf(startMarker);
   const end = prompt.indexOf('\n\n画面要求：', start);
   assert.notEqual(start, -1);
@@ -247,7 +249,7 @@ test('ArtifactImageService marks stale queued image generations as failed on sta
   try {
     await repository.reserve({
       eid: config.yzj.eid,
-      appId: config.yzj.appId,
+      appId: config.yzj.lightCloud.appId,
       artifactId: detail.artifact.artifactId,
       versionId: detail.artifact.versionId,
       title: detail.artifact.title,
@@ -300,6 +302,112 @@ test('ArtifactImageService rejects image generation when artifact markdown is em
         quality: 'auto',
       }),
       /公司研究资料为空，无法生成图片/,
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactImageService generates image from runtime markdown without materializing asset', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-markdown-image-'));
+  const database = createInMemoryDatabase();
+  let capturedPrompt = '';
+  let artifactServiceCalls = 0;
+  const service = new ArtifactImageService({
+    config: buildConfig(tempDir),
+    repository: new ArtifactImageRepository(database),
+    artifactService: {
+      getArtifact: async () => {
+        artifactServiceCalls += 1;
+        return buildArtifactDetail();
+      },
+    } as any,
+    externalSkillService: {
+      generateImage: async (input: any) => {
+        capturedPrompt = input.prompt;
+        return {
+          skillCode: 'ext.image_generate',
+          model: 'gpt-image-2',
+          provider: 'linkapi_images_provider',
+          size: input.size,
+          quality: input.quality,
+          previewDataUrl: `data:image/png;base64,${Buffer.from('runtime-markdown-image').toString('base64')}`,
+          mimeType: 'image/png',
+          latencyMs: 456,
+          generatedAt: '2026-04-28T09:30:00.000Z',
+        };
+      },
+    } as any,
+  });
+
+  try {
+    const generated = await service.generateMarkdownImage({
+      title: 'yunzhijia-visit-prep-job.md',
+      markdown: [
+        '# 绍兴贝斯美化工股份有限公司 拜访准备',
+        '',
+        '本报告基于贝斯美化工公开研究资料及云之家产品能力库生成，供销售拜访前内部参考。',
+        '',
+        '## 客户画像',
+        '贝斯美是农药中间体和环保配套业务相关客户，图片需要保留这些业务洞察。',
+        '',
+        '## 方案匹配',
+        '- 围绕统一门户、流程审批、移动协同展开价值讲解。',
+        '',
+        '⚠️ 本文档中标注"待销售确认"的内容，拜访前/拜访中请务必与客户核实确认。',
+        '',
+        '## 待销售确认',
+        '- 具体组织架构待确认。',
+      ].join('\n'),
+      size: '1536x1024',
+      quality: 'auto',
+    });
+
+    assert.equal(artifactServiceCalls, 0);
+    assert.equal(generated.title, 'yunzhijia-visit-prep-job.md');
+    assert.equal(generated.mimeType, 'image/png');
+    assert.equal(generated.byteSize, Buffer.byteLength('runtime-markdown-image'));
+    assert.match(generated.fileName, /^yunzhijia-visit-prep-job_md-[0-9a-f]{8}\.png$/);
+    assert.equal(generated.downloadDataUrl, generated.previewDataUrl);
+
+    const promptMarkdown = extractPromptMarkdown(capturedPrompt);
+    assert.match(promptMarkdown, /## 客户画像/);
+    assert.match(promptMarkdown, /图片需要保留这些业务洞察/);
+    assert.match(promptMarkdown, /## 方案匹配/);
+    assert.doesNotMatch(promptMarkdown, /本报告基于|产品能力库|内部参考/);
+    assert.doesNotMatch(promptMarkdown, /待销售确认|待确认|核实确认/);
+    assert.doesNotMatch(capturedPrompt, /待销售确认|待确认|核实确认|免责声明/);
+
+    const stored = await database.query(`SELECT * FROM ${database.table('artifact_image_generations')}`);
+    assert.equal(stored.length, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactImageService rejects runtime markdown image generation when markdown is empty', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-markdown-image-'));
+  const database = createInMemoryDatabase();
+  const service = new ArtifactImageService({
+    config: buildConfig(tempDir),
+    repository: new ArtifactImageRepository(database),
+    artifactService: {
+      getArtifact: async () => buildArtifactDetail(),
+    } as any,
+    externalSkillService: {
+      generateImage: async () => {
+        throw new Error('should not call image provider without markdown');
+      },
+    } as any,
+  });
+
+  try {
+    await assert.rejects(
+      service.generateMarkdownImage({
+        title: 'empty.md',
+        markdown: '   ',
+      }),
+      /Markdown 内容为空，无法生成图片/,
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

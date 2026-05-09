@@ -14,7 +14,7 @@ test('assistant auth cache restores resolved ticket identity for internal naviga
     source: 'ticket',
     eid: '21024647',
     displayEid: '21024647',
-    appId: '501037729',
+    appId: '501037649',
     operatorOpenId: 'openid-1',
     userId: 'user-1',
     userName: '云之家用户',

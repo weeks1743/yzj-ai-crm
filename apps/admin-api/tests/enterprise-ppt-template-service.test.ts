@@ -107,7 +107,7 @@ test('EnterprisePptTemplateService manages upload, rename, activate, download, a
 
   assert.equal(
     await service.getDefaultPrompt(),
-    '请基于完整材料生成专业、清晰、适合管理层汇报的科技行业PPT',
+    '请生成8页以内管理层汇报PPT',
   );
   const updatedPrompt = await service.updateDefaultPrompt('请基于完整材料生成专业董事会汇报PPT');
   assert.equal(updatedPrompt.defaultPrompt, '请基于完整材料生成专业董事会汇报PPT');
@@ -174,7 +174,7 @@ test('EnterprisePptTemplateService exposes fallback info for historical overlong
 
   const state = await service.getPromptState();
   assert.equal(state.isFallbackApplied, true);
-  assert.equal(state.effectivePrompt, '请基于完整材料生成专业、清晰、适合管理层汇报的科技行业PPT');
+  assert.equal(state.effectivePrompt, '请生成8页以内管理层汇报PPT');
   assert.match(state.fallbackReason || '', /50 字限制/);
 
   await assert.rejects(

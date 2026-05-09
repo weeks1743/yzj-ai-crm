@@ -7,6 +7,7 @@ import type {
   ArtifactDetailResponse,
   ArtifactImageResponse,
   ArtifactImageStatus,
+  ImageGenerationResponse,
   ImageGenerationQuality,
   ImageGenerationSize,
 } from './contracts.js';
@@ -17,6 +18,7 @@ import type {
 import type { ArtifactService } from './artifact-service.js';
 import type { ExternalSkillService } from './external-skill-service.js';
 import { BadRequestError, NotFoundError, getErrorMessage } from './errors.js';
+import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 const IMAGE_STALE_QUEUE_BUFFER_MS = 30_000;
 const IMAGE_PROMPT_MARKDOWN_MAX_CHARS = 3_800;
@@ -24,6 +26,13 @@ export interface ArtifactImageFile {
   fileName: string;
   mimeType: string;
   content: Buffer;
+}
+
+export interface MarkdownImageGenerationResponse extends ImageGenerationResponse {
+  title: string;
+  fileName: string;
+  byteSize: number;
+  downloadDataUrl: string;
 }
 
 interface ParsedImageData {
@@ -59,8 +68,7 @@ export class ArtifactImageService {
     const size = (input.size ?? 'auto') as ImageGenerationSize;
     const quality = (input.quality ?? 'auto') as ImageGenerationQuality;
     await this.options.repository.reserve({
-      eid: this.options.config.yzj.eid,
-      appId: this.options.config.yzj.appId,
+      ...resolveAgentIsolationTenant(this.options.config),
       artifactId: detail.artifact.artifactId,
       versionId: detail.artifact.versionId,
       title: detail.artifact.title,
@@ -101,6 +109,36 @@ export class ArtifactImageService {
       });
       return this.toResponse(detail, record);
     }
+  }
+
+  async generateMarkdownImage(input: {
+    title?: string;
+    markdown?: string;
+    size?: ImageGenerationSize;
+    quality?: ImageGenerationQuality;
+  }): Promise<MarkdownImageGenerationResponse> {
+    const title = input.title?.trim() || 'Markdown 配图';
+    const markdown = normalizePromptMarkdown(input.markdown ?? '');
+    if (!markdown) {
+      throw new BadRequestError('Markdown 内容为空，无法生成图片');
+    }
+
+    const size = (input.size ?? 'auto') as ImageGenerationSize;
+    const quality = (input.quality ?? 'auto') as ImageGenerationQuality;
+    const prompt = buildMarkdownImagePrompt({ title, markdown });
+    const generated = await this.options.externalSkillService.generateImage({
+      prompt,
+      size,
+      quality,
+    });
+    const parsed = parseImageDataUrl(generated.previewDataUrl, generated.mimeType);
+    return {
+      ...generated,
+      title,
+      fileName: buildMarkdownImageFileName(title, parsed.extension),
+      byteSize: parsed.content.byteLength,
+      downloadDataUrl: generated.previewDataUrl,
+    };
   }
 
   private async resolveStaleQueuedRecord(
@@ -256,11 +294,25 @@ function buildCompanyResearchImagePrompt(detail: ArtifactDetailResponse): string
   ].join('\n');
 }
 
+function buildMarkdownImagePrompt(input: { title: string; markdown: string }): string {
+  return [
+    '请基于下面 Markdown 正文生成一张适合销售汇报或客户拜访准备页使用的商务配图。',
+    `资料标题：${input.title}`,
+    '',
+    '资料原文（已去除元信息、来源引用和内部提醒，控制在3800字以内）：',
+    input.markdown,
+    '',
+    '画面要求：专业、清晰、偏真实商务视觉，优先覆盖正文中的客户画像、行业洞察、业务痛点、方案匹配、推进建议和关键风险；可以用信息分区、图标、标题和标签组织重点；只呈现业务事实、拜访策略和方案重点，避免底部脚注、警示横幅、来源链接、引用表或技术界面截图。',
+  ].join('\n');
+}
+
 function normalizePromptMarkdown(markdown: string): string {
   return truncatePromptMarkdown(
-    removeStandaloneSourceLines(
-      removeSourceReferenceSections(
-        removeOpeningMetadata(markdown.trim()),
+    removePromptNoiseLines(
+      removePromptNoiseSections(
+        removeSourceReferenceSections(
+          removeOpeningMetadata(markdown.trim()),
+        ),
       ),
     ),
   );
@@ -330,15 +382,55 @@ function isSourceReferenceHeading(title: string): boolean {
   return /^(来源引用|引用来源|数据来源|信息来源|参考来源|参考资料)$/.test(normalized);
 }
 
-function removeStandaloneSourceLines(markdown: string): string {
+function removePromptNoiseSections(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const kept: string[] = [];
+  let skippingLevel: number | null = null;
+
+  for (const line of lines) {
+    const heading = line.match(/^(#{2,6})\s*(.+?)\s*$/);
+    if (heading) {
+      const level = heading[1].length;
+      if (skippingLevel !== null && level <= skippingLevel) {
+        skippingLevel = null;
+      }
+      if (isPromptNoiseHeading(heading[2])) {
+        skippingLevel = level;
+        continue;
+      }
+    }
+
+    if (skippingLevel === null) {
+      kept.push(line);
+    }
+  }
+
+  return kept.join('\n').trim();
+}
+
+function isPromptNoiseHeading(title: string): boolean {
+  const normalized = title
+    .replace(/^[一二三四五六七八九十百\d]+[、.．]?\s*/, '')
+    .replace(/[⚠️!！]/g, '')
+    .trim();
+  return /^(待(?:销售|客户)?确认(?:事项|问题)?|需(?:销售|客户)?确认(?:事项|问题)?|待核实(?:事项|问题)?|需核实(?:事项|问题)?|内部提醒|使用说明|说明|注意事项)$/.test(normalized);
+}
+
+function removePromptNoiseLines(markdown: string): string {
   return markdown
     .split(/\r?\n/)
     .filter((line) => {
       const trimmed = line.trim();
       return !/^[-*]?\s*(?:\*{0,2})?来源[:：]/.test(trimmed)
-        && !/仅供参考|不构成投资建议/.test(trimmed);
+        && !/仅供参考|不构成投资建议/.test(trimmed)
+        && !/本报告基于.*(?:公开研究资料|产品能力库|公开信息)/.test(trimmed)
+        && !/待(?:销售|客户)?确认|待核实|需核实|核实确认/.test(trimmed)
+        && !/拜访前\/拜访中请务必与客户核实确认/.test(trimmed)
+        && !/^>?\s*[⚠️!！]?\s*(?:说明|注意|提示)[:：].*(?:待确认|核实确认|错误假设)/.test(trimmed);
     })
     .join('\n')
+    .replace(/「?⚠️?\s*待(?:销售)?确认」?/g, '')
+    .replace(/【?⚠️?\s*待(?:销售)?确认】?/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -362,4 +454,10 @@ function truncatePromptMarkdown(markdown: string): string {
   }
 
   return sliced.trim();
+}
+
+function buildMarkdownImageFileName(title: string, extension: string): string {
+  const titleHash = createHash('sha256').update(title).digest('hex').slice(0, 8);
+  const safeExtension = extname(`image${extension}`) || '.png';
+  return `${safePathSegment(title)}-${titleHash}${safeExtension}`;
 }
