@@ -8438,17 +8438,7 @@ async function executeYunzhijiaVisitPrep(
 
   return {
     status: 'completed',
-    content: [
-      '## 客户拜访准备已生成',
-      `- 客户：**${customerName}**`,
-      `- 公司：**${companyName}**`,
-      `- 客户初步需求：${customerNeed || '未提供，已按通用拜访准备生成并标注待销售确认事项。'}`,
-      visitAudience ? `- 拜访对象：${visitAudience}` : '',
-      `- 公司研究资料：${companyResearchArtifact.artifact.title} 第 ${companyResearchArtifact.artifact.version} 版`,
-      `- 资料沉淀：${assetMaterialization.label}，未创建资料资产。`,
-      '',
-      markdown,
-    ].filter(Boolean).join('\n'),
+    content: markdown,
     headline: '客户拜访准备已生成',
     references: [COMPANY_RESEARCH_MATERIAL_LABEL, YUNZHIJIA_VISIT_PREP_SERVICE_LABEL],
     evidence: [],

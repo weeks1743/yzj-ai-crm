@@ -309,16 +309,8 @@ function markTaskPlanCompleted(plan: TaskPlan): TaskPlan {
   };
 }
 
-function buildCompletedVisitPrepContent(row: StuckRunRow, markdown: string): string {
-  const subject = readJsonObject<{ name?: string } | null>(row.context_subject_json, null);
-  const companyName = subject?.name?.trim();
-  return [
-    '## 客户拜访准备已生成',
-    companyName ? `- 公司：**${companyName}**` : '',
-    '- 资料沉淀：本轮对话结果，未创建资料资产。',
-    '',
-    markdown,
-  ].filter(Boolean).join('\n');
+function buildCompletedVisitPrepContent(_row: StuckRunRow, markdown: string): string {
+  return markdown;
 }
 
 function buildRepairedExtraInfo(input: {

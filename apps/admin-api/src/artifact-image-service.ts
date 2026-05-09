@@ -279,18 +279,18 @@ function buildCompanyResearchImagePrompt(detail: ArtifactDetailResponse): string
     || detail.artifact.title;
   const markdown = normalizePromptMarkdown(detail.markdown);
   if (!markdown) {
-    throw new BadRequestError('公司研究资料为空，无法生成图片');
+    throw new BadRequestError('Markdown 资料为空，无法生成图片');
   }
 
   return [
-    '请基于下面公司研究正文生成一张适合销售汇报或客户洞察页使用的商务配图。',
+    '请基于下面 Markdown 正文生成一张适合销售汇报或客户洞察页使用的商务配图。',
     `公司：${company}`,
     `资料标题：${detail.artifact.title}`,
     '',
     '资料原文（已去除元信息和来源引用，控制在3800字以内）：',
     markdown,
     '',
-    '画面要求：专业、清晰、偏真实商务视觉，优先覆盖资料中的行业洞察、业务定位、成长驱动、核心风险和销售推进信息；可以用信息分区、图标、标题和标签组织重点；不要展示URL、引用表或技术界面截图。',
+    '画面要求：专业、清晰、偏真实商务视觉，优先覆盖资料中的客户画像、行业洞察、业务定位、成长驱动、核心风险和销售推进信息；可以用信息分区、图标、标题和标签组织重点；避免底部脚注、警示横幅、来源链接、引用表或技术界面截图。',
   ].join('\n');
 }
 

@@ -66,8 +66,9 @@ test('repairVisitPrepStuckRuns dry-runs, applies, and is idempotent', async () =
     `SELECT content, attachments_json, extra_info_json FROM ${database.table('agent_messages')} WHERE message_id = $1`,
     [fixture.assistantMessageId],
   );
-  assert.match(assistantMessage.content, /客户拜访准备已生成/);
+  assert.doesNotMatch(assistantMessage.content, /客户拜访准备已生成/);
   assert.match(assistantMessage.content, /客户画像速览/);
+  assert.equal(assistantMessage.content, markdown);
   assert.equal(assistantMessage.attachments_json[0]?.name, 'yunzhijia-visit-prep-job-visit-prep-stuck.md');
   assert.equal(assistantMessage.extra_info_json.headline, '客户拜访准备已生成');
   assert.equal(assistantMessage.extra_info_json.agentTrace.executionState.status, 'completed');

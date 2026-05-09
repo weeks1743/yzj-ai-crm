@@ -55,7 +55,7 @@ test('recording evidence cards use recording-facing title fallback and disable i
   assert.equal(getEvidenceCardTitle(card), '贝斯美拜访 录音资料包');
 });
 
-test('analysis material opens as research content and does not offer image generation', () => {
+test('analysis material opens as research content and offers image generation', () => {
   const card = {
     artifactId: 'artifact-analysis-001',
     versionId: 'version-analysis-001',
@@ -69,6 +69,6 @@ test('analysis material opens as research content and does not offer image gener
 
   assert.equal(isRecordingEvidenceCard(card), false);
   assert.equal(isRecordingMaterialEvidenceCard(card), false);
-  assert.equal(canGenerateEvidenceImage(card), false);
+  assert.equal(canGenerateEvidenceImage(card), true);
   assert.equal(getEvidenceCardTitle(card), '贝斯美拜访 - 拜访会话理解');
 });

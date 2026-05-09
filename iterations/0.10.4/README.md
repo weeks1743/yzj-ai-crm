@@ -134,6 +134,9 @@
   - 新增 `/api/markdown/image`，复用外部图片生成服务，但不创建资料资产、不写 Artifact 图片生成记录、不进入向量检索。
   - 用户端在 Markdown 附件区恢复“生成图片/重新生成图片”，生成后在附件下方预览并支持下载。
   - 图片生成提示词会先清洗 Markdown，移除来源元信息、免责声明、内部校验提醒、`待销售确认/待确认/核实确认` 行与章节，避免无关内容出现在图片里。
+  - 拜访准备成功正文只展示 Skill 生成的 Markdown 本体，不再在正文前追加“客户拜访准备已生成/资料沉淀”等对用户无价值的说明块。
+  - 拜访准备结果主 Markdown 卡片直接展示“生成图片/重新生成图片”，优先使用 runtime Markdown 附件内容，附件缺失时使用当前正文 Markdown。
+  - Evidence Card 的 `analysis_material` 证据包支持生成图片；录音资料包本体仍保持“打开录音分析”的主操作。
 
 - 本地调试身份：
   - 用户 AI 端在本地开发或 localhost 无 ticket 访问时，直接使用固定 openid 身份，不再请求服务端 `/api/yzj/auth/local-identity`。
@@ -151,6 +154,8 @@
 - `/拜访准备` 返回的运行时 Markdown 附件可直接生成图片；该图片仅作为本轮附件衍生物，不沉淀为 CRM 资料资产。
 - 图片提示词已剔除与业务内容无关的免责声明、内部提醒、待确认章节和待确认标记。
 - 本地开发访问 `/chat` 不再因缺少云之家 ticket 或本地身份接口异常显示“云之家身份解析失败”。
+- `trace-agent-b6a87782` 暴露的正文前置说明块已移除；运行时 Markdown 附件和分析资料证据包均可触发“生成图片”。
+- `trace-agent-b0c2c479` 暴露的拜访准备主正文缺少图片按钮问题已修复；用户无需进入附件区即可生成图片。
 
 ## 验证
 
@@ -166,6 +171,8 @@
 - 已验证：真实 `/api/agent/chat` 请求 `/拜访准备 贝斯美` 在 trace `trace-agent-64fa9f2d` 中等待约 84.5 秒后直接返回 `completed`，未出现“仍在运行/已等待 70 秒”文案，并返回 Markdown 附件 `yunzhijia-visit-prep-b77f2cc3-339f-4cd8-99bf-e985cd6685f0.md`。
 - 已通过：`pnpm --filter @yzj-ai-crm/admin-api test -- artifact-image-service.test.ts`，覆盖运行时 Markdown 图片生成不落库，以及提示词移除免责声明/待确认噪声。
 - 已通过：`pnpm --filter @yzj-ai-crm/assistant-web test`
+- 已通过：`pnpm --filter @yzj-ai-crm/admin-api test -- agent-runtime.test.ts repair-visit-prep-stuck-runs.test.ts artifact-image-service.test.ts`
+- 已通过：`pnpm --filter @yzj-ai-crm/assistant-web test`，覆盖拜访准备消息识别、正文 fallback 和附件优先策略。
 
 ## 未完成项
 

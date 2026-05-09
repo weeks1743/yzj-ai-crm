@@ -115,7 +115,7 @@ test('ArtifactImageService stores image binary on local filesystem and metadata 
     });
 
     assert.equal(generated.status, 'succeeded');
-    assert.match(generated.prompt ?? '', /公司研究正文/);
+    assert.match(generated.prompt ?? '', /Markdown 正文/);
     assert.match(generated.prompt ?? '', /## 公司概览\n测试内容/);
     assert.match(generated.prompt ?? '', /## 业务定位\n主营业务需要进入图片生成上下文。/);
     assert.match(generated.prompt ?? '', /## 核心风险\n风险判断不能被摘要片段裁掉。/);
@@ -301,7 +301,7 @@ test('ArtifactImageService rejects image generation when artifact markdown is em
         size: '1536x1024',
         quality: 'auto',
       }),
-      /公司研究资料为空，无法生成图片/,
+      /Markdown 资料为空，无法生成图片/,
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

@@ -145,6 +145,13 @@ import {
   pickChangedMetaQuestionAnswers,
   shouldRenderMetaQuestionCard,
 } from './meta-question-card-utils';
+import {
+  buildAttachmentImageKey,
+  getVisibleMessageAttachments,
+  isMarkdownAttachment,
+  resolveVisitPrepMarkdownImageTarget,
+  type VisitPrepMarkdownImageTarget,
+} from './visit-prep-markdown-image-utils';
 import { useMarkdownTheme } from './use-markdown-theme';
 import brandLogo from '@shared/assets/logo.png';
 
@@ -324,7 +331,7 @@ type OpenArtifactHandler = (evidence: AssistantEvidenceCard) => void;
 type OpenRecordingEvidenceHandler = (evidence: AssistantEvidenceCard) => void;
 type ArtifactActionTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title' | 'kind' | 'sourceToolCode'>;
 type GenerateImageHandler = (target: ArtifactActionTarget) => void;
-type GenerateAttachmentImageHandler = (attachment: MarkdownAttachmentTarget) => void;
+type GenerateMarkdownImageHandler = (target: VisitPrepMarkdownImageTarget) => void;
 type MetaQuestionSubmitHandler = (input: {
   runId: string;
   interactionId: string;
@@ -392,13 +399,6 @@ interface ArtifactImagePayload {
 }
 
 type MarkdownImageStatus = 'not_started' | 'queued' | 'succeeded' | 'failed';
-
-interface MarkdownAttachmentTarget {
-  key: string;
-  name: string;
-  url: string;
-  type?: string;
-}
 
 interface MarkdownImagePayload extends Partial<MarkdownImageGenerationResponse> {
   key: string;
@@ -1066,6 +1066,11 @@ const useStyles = createStyles(({ token, css }) => ({
   attachmentItem: css`
     min-width: 0;
   `,
+  markdownImageActions: css`
+    margin-top: 14px;
+    border-top: 1px solid ${token.colorBorderSecondary};
+    padding-top: 10px;
+  `,
   assistantMessageShell: css`
     width: min(100%, 840px);
   `,
@@ -1657,20 +1662,6 @@ function getMarkdownImageButtonLabel(image?: MarkdownImagePayload) {
     return '图片生成中';
   }
   return '重新生成图片';
-}
-
-function buildAttachmentImageKey(attachment: Pick<MarkdownAttachmentTarget, 'name' | 'url'>): string {
-  return `${attachment.name}:${attachment.url}`;
-}
-
-function isMarkdownAttachment(attachment: { name?: string; type?: string; url?: string }): boolean {
-  const type = attachment.type?.toLowerCase() ?? '';
-  const name = attachment.name?.toLowerCase() ?? '';
-  const url = attachment.url?.toLowerCase() ?? '';
-  return type.includes('markdown')
-    || name.endsWith('.md')
-    || name.endsWith('.markdown')
-    || url.includes('.md');
 }
 
 function downloadDataUrl(dataUrl: string, fileName: string): void {
@@ -3767,7 +3758,7 @@ function AssistantMessageContent({
   onOpenArtifact,
   onOpenRecordingEvidence,
   onGenerateImage,
-  onGenerateAttachmentImage,
+  onGenerateMarkdownImage,
   onOpenRecord,
   onSubmitQuestionCard,
   onCancelQuestionCard,
@@ -3784,7 +3775,7 @@ function AssistantMessageContent({
   onOpenArtifact: OpenArtifactHandler;
   onOpenRecordingEvidence: OpenRecordingEvidenceHandler;
   onGenerateImage: GenerateImageHandler;
-  onGenerateAttachmentImage: GenerateAttachmentImageHandler;
+  onGenerateMarkdownImage: GenerateMarkdownImageHandler;
   onOpenRecord?: OpenRecordHandler;
   onSubmitQuestionCard?: MetaQuestionSubmitHandler;
   onCancelQuestionCard?: MetaQuestionCancelHandler;
@@ -3799,7 +3790,11 @@ function AssistantMessageContent({
   const pendingConfirmation = info.extraInfo?.agentTrace?.pendingConfirmation as PendingConfirmationView | null | undefined;
   const pendingInteraction = info.extraInfo?.agentTrace?.pendingInteraction as PendingInteractionView | null | undefined;
   const referenceLabels = getVisibleReferenceLabels(info.extraInfo?.references);
-  const visibleAttachments = ((info.attachments as any[]) ?? []).filter((attachment) => attachment?.name);
+  const visibleAttachments = getVisibleMessageAttachments(info);
+  const visitPrepMarkdownImageTarget = resolveVisitPrepMarkdownImageTarget({ content, info });
+  const visitPrepMarkdownImage = visitPrepMarkdownImageTarget
+    ? imageByAttachmentKey[visitPrepMarkdownImageTarget.key]
+    : undefined;
 
   return (
     <div className={styles.assistantMessageShell}>
@@ -3833,6 +3828,48 @@ function AssistantMessageContent({
           >
             {content}
           </XMarkdown>
+          {visitPrepMarkdownImageTarget ? (
+            <div className={styles.markdownImageActions}>
+              <Button
+                type="link"
+                size="small"
+                icon={<PictureOutlined />}
+                loading={isMarkdownImageGenerating(visitPrepMarkdownImage?.status)}
+                disabled={isMarkdownImageGenerating(visitPrepMarkdownImage?.status)}
+                style={{ paddingInline: 0 }}
+                onClick={() => onGenerateMarkdownImage(visitPrepMarkdownImageTarget)}
+              >
+                {getMarkdownImageButtonLabel(visitPrepMarkdownImage)}
+              </Button>
+              {visitPrepMarkdownImage?.status === 'failed' && visitPrepMarkdownImage.errorMessage ? (
+                <div className={styles.evidenceErrorText}>{visitPrepMarkdownImage.errorMessage}</div>
+              ) : null}
+              {visitPrepMarkdownImage?.status === 'succeeded' && visitPrepMarkdownImage.previewDataUrl ? (
+                <div className={styles.evidenceImagePreview}>
+                  <Image
+                    src={visitPrepMarkdownImage.previewDataUrl}
+                    alt={`${visitPrepMarkdownImage.title || '客户拜访准备'} 配图`}
+                    preview={{ mask: '预览图片' }}
+                  />
+                  {visitPrepMarkdownImage.downloadDataUrl ? (
+                    <Button
+                      className={styles.evidenceImageDownload}
+                      type="primary"
+                      shape="circle"
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      aria-label="下载图片"
+                      title="下载图片"
+                      onClick={() => downloadDataUrl(
+                        visitPrepMarkdownImage.downloadDataUrl!,
+                        visitPrepMarkdownImage.fileName || `${visitPrepMarkdownImage.title || '客户拜访准备'}.png`,
+                      )}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -3842,12 +3879,15 @@ function AssistantMessageContent({
           <div className={styles.attachmentList}>
             {visibleAttachments.map((attachment: any) => {
               const canOpen = typeof attachment.url === 'string' && attachment.url && attachment.url !== '#attachment';
-              const attachmentTarget: MarkdownAttachmentTarget | null = canOpen && isMarkdownAttachment(attachment)
+              const attachmentTarget: VisitPrepMarkdownImageTarget | null = canOpen && isMarkdownAttachment(attachment)
                 ? {
                     key: buildAttachmentImageKey({ name: attachment.name, url: attachment.url }),
-                    name: attachment.name,
-                    url: attachment.url,
-                    type: attachment.type,
+                    title: attachment.name,
+                    attachment: {
+                      name: attachment.name,
+                      url: attachment.url,
+                      type: attachment.type,
+                    },
                   }
                 : null;
               const markdownImage = attachmentTarget ? imageByAttachmentKey[attachmentTarget.key] : undefined;
@@ -3874,7 +3914,7 @@ function AssistantMessageContent({
                         loading={isMarkdownImageGenerating(markdownImage?.status)}
                         disabled={isMarkdownImageGenerating(markdownImage?.status)}
                         style={{ paddingInline: 0 }}
-                        onClick={() => onGenerateAttachmentImage(attachmentTarget)}
+                        onClick={() => onGenerateMarkdownImage(attachmentTarget)}
                       >
                         {getMarkdownImageButtonLabel(markdownImage)}
                       </Button>
@@ -4032,7 +4072,7 @@ function AssistantMessageContent({
                           >
                             <Image
                               src={image.previewUrl || image.previewDataUrl}
-                              alt={`${sanitizeEvidenceText(item.anchorLabel) || getEvidenceCardTitle(item)} 公司研究配图`}
+                              alt={`${sanitizeEvidenceText(item.anchorLabel) || getEvidenceCardTitle(item)} 配图`}
                               preview={{ mask: '预览图片' }}
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -4570,7 +4610,7 @@ function buildRole(
   onOpenArtifact: OpenArtifactHandler,
   onOpenRecordingEvidence: OpenRecordingEvidenceHandler,
   onGenerateImage: GenerateImageHandler,
-  onGenerateAttachmentImage: GenerateAttachmentImageHandler,
+  onGenerateMarkdownImage: GenerateMarkdownImageHandler,
   onOpenRecord: OpenRecordHandler,
   onSubmitQuestionCard: MetaQuestionSubmitHandler,
   onCancelQuestionCard: MetaQuestionCancelHandler,
@@ -4632,7 +4672,7 @@ function buildRole(
           onOpenArtifact={onOpenArtifact}
           onOpenRecordingEvidence={onOpenRecordingEvidence}
           onGenerateImage={onGenerateImage}
-          onGenerateAttachmentImage={onGenerateAttachmentImage}
+          onGenerateMarkdownImage={onGenerateMarkdownImage}
           onOpenRecord={onOpenRecord}
           onSubmitQuestionCard={onSubmitQuestionCard}
           onCancelQuestionCard={onCancelQuestionCard}
@@ -5474,30 +5514,36 @@ function AssistantConversationRuntime({
     [imageByArtifactId, messageApi, safeScrollToBottom],
   );
 
-  const handleGenerateAttachmentImage = React.useCallback<GenerateAttachmentImageHandler>(
-    async (attachment) => {
-      const existing = imageByAttachmentKey[attachment.key];
+  const handleGenerateMarkdownImage = React.useCallback<GenerateMarkdownImageHandler>(
+    async (target) => {
+      const existing = imageByAttachmentKey[target.key];
       if (isMarkdownImageGenerating(existing?.status)) {
         return;
       }
 
       setImageByAttachmentKey((current) => ({
         ...current,
-        [attachment.key]: {
-          key: attachment.key,
-          title: attachment.name,
+        [target.key]: {
+          key: target.key,
+          title: target.title,
           status: 'queued',
         },
       }));
 
       try {
-        const markdownResponse = await fetch(attachment.url);
-        if (!markdownResponse.ok) {
-          throw new Error(`Markdown 附件读取失败：${await readApiErrorMessage(markdownResponse)}`);
+        let markdown = target.markdown?.trim() ?? '';
+        if (target.attachment) {
+          const markdownResponse = await fetch(target.attachment.url);
+          if (!markdownResponse.ok) {
+            throw new Error(`Markdown 附件读取失败：${await readApiErrorMessage(markdownResponse)}`);
+          }
+          markdown = (await markdownResponse.text()).trim();
         }
-        const markdown = await markdownResponse.text();
+        if (!markdown) {
+          throw new Error('Markdown 内容为空，无法生成图片');
+        }
         const request: MarkdownImageGenerationRequest = {
-          title: attachment.name,
+          title: target.title,
           markdown,
           size: '1536x1024',
           quality: 'auto',
@@ -5514,10 +5560,10 @@ function AssistantConversationRuntime({
         const payload = (await imageResponse.json()) as MarkdownImageGenerationResponse;
         setImageByAttachmentKey((current) => ({
           ...current,
-          [attachment.key]: {
+          [target.key]: {
             ...payload,
-            key: attachment.key,
-            title: payload.title || attachment.name,
+            key: target.key,
+            title: payload.title || target.title,
             status: 'succeeded',
           },
         }));
@@ -5529,9 +5575,9 @@ function AssistantConversationRuntime({
         const errorMessage = error instanceof Error ? error.message : '图片生成失败';
         setImageByAttachmentKey((current) => ({
           ...current,
-          [attachment.key]: {
-            key: attachment.key,
-            title: attachment.name,
+          [target.key]: {
+            key: target.key,
+            title: target.title,
             status: 'failed',
             errorMessage,
           },
@@ -5814,11 +5860,11 @@ function AssistantConversationRuntime({
   }, [handleOpenRecord, requestFromRecordingTask]);
 
   const role = useMemo(
-    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleOpenRecordingEvidence, handleGenerateImage, handleGenerateAttachmentImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, imageByArtifactId, imageByAttachmentKey),
+    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleOpenRecordingEvidence, handleGenerateImage, handleGenerateMarkdownImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, imageByArtifactId, imageByAttachmentKey),
     [
       activeQuestionInteractionId,
       handleCancelQuestionCard,
-      handleGenerateAttachmentImage,
+      handleGenerateMarkdownImage,
       handleGenerateImage,
       handleOpenArtifactCard,
       handleOpenRecordingEvidence,

@@ -9,6 +9,11 @@ const recordingMaterialSourceToolCodes = new Set([
 const imageEnabledSourceToolCodes = new Set([
   'external.company_research',
   'ext.company_research_pm',
+  'ext.visit_conversation_understanding',
+  'ext.customer_needs_todo_analysis',
+  'ext.problem_statement_pm',
+  'ext.customer_value_positioning_pm',
+  'ext.yunzhijia_visit_prep',
 ]);
 
 export function isLikelyInternalEvidenceId(value?: string | null): boolean {
@@ -51,7 +56,9 @@ export function canGenerateEvidenceImage(
   item: Pick<AssistantEvidenceCard, 'kind' | 'sourceToolCode'>,
 ): boolean {
   const kind = item.kind as EvidenceCardKind | undefined;
-  return kind === 'company_research' || imageEnabledSourceToolCodes.has(item.sourceToolCode.trim());
+  return kind === 'company_research'
+    || kind === 'analysis_material'
+    || imageEnabledSourceToolCodes.has(item.sourceToolCode.trim());
 }
 
 export function compactEvidenceSnippet(value?: string | null): string {

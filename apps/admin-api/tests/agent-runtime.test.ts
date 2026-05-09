@@ -6768,9 +6768,10 @@ test('Agent runtime invokes visit prep with selected customer research and does 
   assert.deepEqual(response.message.extraInfo.evidence ?? [], []);
   assert.equal(response.message.attachments?.[0]?.name, 'yunzhijia-visit-prep-job-visit-prep-001.md');
   assert.equal(response.message.attachments?.[0]?.type, 'text/markdown');
-  assert.match(response.message.content, /客户拜访准备已生成/);
-  assert.match(response.message.content, /资料沉淀：本轮对话结果/);
+  assert.doesNotMatch(response.message.content, /客户拜访准备已生成/);
+  assert.doesNotMatch(response.message.content, /资料沉淀：本轮对话结果/);
   assert.match(response.message.content, /客户画像速览/);
+  assert.equal(response.message.content, visitPrepMarkdown);
 });
 
 test('Agent runtime blocks visit prep when skill job fails without degraded material', async () => {
