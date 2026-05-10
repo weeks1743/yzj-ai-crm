@@ -21,6 +21,7 @@ import { createSkillRuntimeServer } from '../src/app.js';
 import { ArtifactStore } from '../src/artifact-store.js';
 import { openDatabase } from '../src/database.js';
 import { JobRepository } from '../src/job-repository.js';
+import { ReportCanvasClient } from '../src/report-canvas-client.js';
 import { loadSkillsFromDirectories } from '../src/skill-loader.js';
 import { SkillCatalogService } from '../src/skill-catalog-service.js';
 import { SkillExecutor } from '../src/skill-executor.js';
@@ -73,6 +74,8 @@ export function createDependencySnapshot(overrides: Record<string, boolean> = {}
   const keys = [
     'env:DEEPSEEK_API_KEY',
     'env:ARK_API_KEY',
+    'env:DASHSCOPE_API_KEY',
+    'env:REPORT_CANVAS_SERVICE_BASE_URL',
     'command:python3',
     'command:markitdown',
     'command:soffice',
@@ -109,6 +112,10 @@ export function createTestConfig(options: {
   deepseekApiKey?: string | null;
   arkApiKey?: string | null;
   arkWebSearchModel?: string;
+  reportCanvasBaseUrl?: string;
+  reportCanvasPublicBaseUrl?: string;
+  reportCanvasTimeoutMs?: number;
+  reportCanvasPollIntervalMs?: number;
 }): AppConfig {
   const rootDir = options.rootDir ?? createTempDir('skill-runtime-config-');
   const artifactDir = options.artifactDir ?? join(rootDir, 'artifacts');
@@ -136,6 +143,14 @@ export function createTestConfig(options: {
       baseUrl: 'https://ark.example/api/v3',
       apiKey: options.arkApiKey ?? 'test-ark-key',
       webSearchModel: options.arkWebSearchModel ?? 'doubao-seed-2-0-lite-260215',
+    },
+    reportCanvas: {
+      baseUrl: options.reportCanvasBaseUrl ?? 'http://127.0.0.1:3020',
+      publicBaseUrl: options.reportCanvasPublicBaseUrl
+        ?? options.reportCanvasBaseUrl
+        ?? 'http://127.0.0.1:3020',
+      timeoutMs: options.reportCanvasTimeoutMs ?? 600000,
+      pollIntervalMs: options.reportCanvasPollIntervalMs ?? 2000,
     },
     meta: {
       configSource: '.env',
@@ -258,6 +273,10 @@ export async function createRuntimeHarness(options: {
     chatClient: options.chatClient,
     webSearchClient: options.webSearchClient,
     fetchImpl: options.fetchImpl,
+    reportCanvasClient: new ReportCanvasClient({
+      baseUrl: options.config.reportCanvas.baseUrl,
+      fetchImpl: options.fetchImpl,
+    }),
   });
   const service = new SkillRuntimeService({
     config: options.config,

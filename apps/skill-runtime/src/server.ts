@@ -5,6 +5,7 @@ import { openDatabase } from './database.js';
 import { DeepSeekChatCompletionClient } from './deepseek-client.js';
 import { probeDependencies } from './dependency-probe.js';
 import { JobRepository } from './job-repository.js';
+import { ReportCanvasClient } from './report-canvas-client.js';
 import { loadSkillsFromDirectories } from './skill-loader.js';
 import { SkillCatalogService } from './skill-catalog-service.js';
 import { SkillExecutor } from './skill-executor.js';
@@ -71,6 +72,9 @@ const executor = new SkillExecutor({
   artifactStore,
   chatClient,
   webSearchClient,
+  reportCanvasClient: new ReportCanvasClient({
+    baseUrl: config.reportCanvas.baseUrl,
+  }),
 });
 
 const service = new SkillRuntimeService({

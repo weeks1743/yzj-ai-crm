@@ -23,6 +23,8 @@ import { JobRepository } from './job-repository.js';
 import { SkillCatalogService } from './skill-catalog-service.js';
 import { SkillExecutor } from './skill-executor.js';
 
+const MODEL_FREE_SKILLS = new Set(['report-generation']);
+
 function getPostgresDatabaseName(connectionString: string): string {
   try {
     const url = new URL(connectionString);
@@ -99,6 +101,10 @@ export class SkillRuntimeService {
     );
   }
 
+  private requiresModel(skillName: string): boolean {
+    return !MODEL_FREE_SKILLS.has(skillName);
+  }
+
   async createJob(input: CreateJobRequest): Promise<JobResponse> {
     const skillName = input.skillName?.trim();
     if (!skillName) {
@@ -130,7 +136,7 @@ export class SkillRuntimeService {
     const workingDirectory = input.workingDirectory
       ? this.assertAllowedExternalPath(input.workingDirectory, 'workingDirectory')
       : null;
-    const model = this.validateModel(input.model);
+    const model = this.requiresModel(skillName) ? this.validateModel(input.model) : null;
 
     const job = await this.options.repository.createJob({
       skillName,

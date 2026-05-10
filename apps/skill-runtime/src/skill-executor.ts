@@ -2,6 +2,7 @@ import {
   copyFileSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   statSync,
 } from 'node:fs';
 import { basename, extname, join, relative, resolve } from 'node:path';
@@ -18,9 +19,10 @@ import type {
   WebSearchClient,
 } from './contracts.js';
 import { inferPptxMode, type PptxMode } from './pptx-deck.js';
-import { BadRequestError } from './errors.js';
+import { BadRequestError, ExternalServiceError } from './errors.js';
 import { isPathWithin } from './path-utils.js';
 import { JobRepository } from './job-repository.js';
+import { ReportCanvasClient } from './report-canvas-client.js';
 import {
   createCompanyResearchTools,
   createGenericTextTools,
@@ -36,6 +38,17 @@ const GENERIC_TEXT_SKILLS = new Set([
   'customer-value-positioning',
   'yunzhijia-visit-prep',
 ]);
+const REPORT_GENERATION_SKILL = 'report-generation';
+
+function extractMarkdownSubject(markdown: string, attachmentPath: string): string {
+  const headingMatch = markdown.match(/^#\s+(.+)$/m);
+  if (headingMatch?.[1]?.trim()) {
+    return headingMatch[1].trim();
+  }
+
+  const fileName = basename(attachmentPath, extname(attachmentPath)).trim();
+  return fileName || 'report';
+}
 
 function walkFiles(baseDir: string, currentDir = baseDir): string[] {
   const entries = readdirSync(currentDir, { withFileTypes: true });
@@ -88,6 +101,7 @@ export class SkillExecutor {
       artifactStore: ArtifactStore;
       chatClient: ChatCompletionClient;
       webSearchClient: WebSearchClient;
+      reportCanvasClient: ReportCanvasClient;
       fetchImpl?: FetchLike;
     },
   ) {}
@@ -344,6 +358,146 @@ export class SkillExecutor {
     }
   }
 
+  private assertMarkdownAttachment(skillName: string, stagedAttachments: string[]): string {
+    if (stagedAttachments.length !== 1) {
+      throw new BadRequestError(`${skillName} 当前只支持 1 个 markdown 附件`);
+    }
+
+    const attachmentPath = stagedAttachments[0]!;
+    if (extname(attachmentPath).toLowerCase() !== '.md') {
+      throw new BadRequestError(`${skillName} 当前只支持 .md 附件`);
+    }
+
+    return attachmentPath;
+  }
+
+  private buildReportPublicUrl(sessionId: string): string {
+    return `${this.options.config.reportCanvas.publicBaseUrl.replace(/\/+$/, '')}/embed/${encodeURIComponent(sessionId)}`;
+  }
+
+  private async executeReportGeneration(input: {
+    job: StoredJobRecord;
+    stagedAttachments: string[];
+    emitEvent: (type: JobEvent['type'], message: string, data?: unknown) => Promise<void>;
+    publishTextArtifact: (fileName: string, content: string, mimeType?: string) => Promise<JobArtifact>;
+  }): Promise<{ finalText: string | null }> {
+    const sourceAttachment = this.assertMarkdownAttachment(REPORT_GENERATION_SKILL, input.stagedAttachments);
+    const sourceMarkdownRaw = readFileSync(sourceAttachment, 'utf8');
+    const sourceMarkdown = sourceMarkdownRaw.trim();
+    if (!sourceMarkdown) {
+      throw new BadRequestError('report-generation 附件内容为空');
+    }
+
+    const subject = extractMarkdownSubject(sourceMarkdown, sourceAttachment);
+    await input.emitEvent('message', '报告 Canvas 生成请求已提交', {
+      subject,
+      sourceAttachment,
+    });
+
+    const created = await this.options.reportCanvasClient.generate({
+      markdown: sourceMarkdown,
+      query: input.job.requestText,
+      ttlMinutes: 1440,
+    });
+    const openUrl = this.buildReportPublicUrl(created.sessionId);
+
+    await input.emitEvent('message', '报告 Canvas 会话已创建', {
+      sessionId: created.sessionId,
+      openUrl,
+      statusUrl: created.statusUrl,
+      resultUrl: created.resultUrl,
+    });
+
+    const startedAt = Date.now();
+    let latestStatus = await this.options.reportCanvasClient.getStatus(created.sessionId);
+    while (
+      latestStatus.status !== 'complete'
+      && latestStatus.status !== 'error'
+      && Date.now() - startedAt < this.options.config.reportCanvas.timeoutMs
+    ) {
+      await input.emitEvent('message', '报告 Canvas 生成中', {
+        sessionId: created.sessionId,
+        status: latestStatus.status,
+        stage: latestStatus.stage,
+        progress: latestStatus.progress,
+      });
+      await new Promise((resolvePromise) => {
+        setTimeout(resolvePromise, this.options.config.reportCanvas.pollIntervalMs);
+      });
+      latestStatus = await this.options.reportCanvasClient.getStatus(created.sessionId);
+    }
+
+    if (latestStatus.status === 'error') {
+      throw new ExternalServiceError(latestStatus.error?.message || '报告 Canvas 生成失败', {
+        sessionId: created.sessionId,
+        status: latestStatus,
+      });
+    }
+
+    if (latestStatus.status !== 'complete') {
+      throw new ExternalServiceError('报告 Canvas 生成超时，请稍后重试', {
+        sessionId: created.sessionId,
+        status: latestStatus,
+        timeoutMs: this.options.config.reportCanvas.timeoutMs,
+      });
+    }
+
+    const result = await this.options.reportCanvasClient.getResult(created.sessionId);
+    if (result.status !== 'complete' || !('code' in result) || !result.code?.trim()) {
+      throw new ExternalServiceError('报告 Canvas 已完成但未返回报告代码', {
+        sessionId: created.sessionId,
+        result,
+      });
+    }
+
+    await input.publishTextArtifact(
+      `report-generation-${input.job.jobId}-source.md`,
+      sourceMarkdownRaw,
+      'text/markdown',
+    );
+    const codeArtifact = await input.publishTextArtifact(
+      `report-generation-${input.job.jobId}-report.jsx`,
+      result.code,
+      'text/plain',
+    );
+    const metadataArtifact = await input.publishTextArtifact(
+      `report-generation-${input.job.jobId}.json`,
+      JSON.stringify(
+        {
+          sessionId: created.sessionId,
+          subject,
+          openUrl,
+          sourceAttachment,
+          codeArtifactId: codeArtifact.artifactId,
+          created,
+          status: latestStatus,
+          result: {
+            sessionId: result.sessionId,
+            status: result.status,
+            embedUrl: result.embedUrl,
+            metadata: result.metadata,
+          },
+        },
+        null,
+        2,
+      ),
+      'application/json',
+    );
+
+    await input.emitEvent('report_ready', '报告已生成，可在新页面打开', {
+      sessionId: created.sessionId,
+      subject,
+      openUrl,
+      artifactId: metadataArtifact.artifactId,
+      generatedAt: result.metadata.generatedAt,
+      codeLength: result.metadata.codeLength,
+    });
+
+    return {
+      finalText: `报告已生成：${subject}\n${openUrl}`,
+    };
+  }
+
   async execute(job: StoredJobRecord, skill: LoadedSkill): Promise<{ finalText: string | null }> {
     const paths = this.createExecutionPaths(job, skill);
     const stagedAttachments = this.stageAttachments(job, paths);
@@ -374,6 +528,15 @@ export class SkillExecutor {
       publishTextArtifact,
       publishFileArtifact,
     };
+
+    if (skill.skillName === REPORT_GENERATION_SKILL) {
+      return this.executeReportGeneration({
+        job,
+        stagedAttachments,
+        emitEvent,
+        publishTextArtifact,
+      });
+    }
 
     let systemPrompt = '';
     let userPrompt = '';

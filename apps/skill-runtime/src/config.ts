@@ -40,6 +40,38 @@ function parsePort(value: string | undefined): number {
   return port;
 }
 
+function parsePositiveInteger(value: string | undefined, fallbackValue: number, label: string): number {
+  if (!value) {
+    return fallbackValue;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new ConfigError(`${label} 必须是正整数`);
+  }
+
+  return parsed;
+}
+
+function parseHttpBaseUrl(value: string, label: string): string {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new ConfigError(`${label} 必须是合法 URL`);
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new ConfigError(`${label} 必须使用 http:// 或 https://`);
+  }
+
+  if (!url.hostname) {
+    throw new ConfigError(`${label} 必须包含主机名`);
+  }
+
+  return value.trim().replace(/\/+$/, '');
+}
+
 function splitList(value: string | undefined): string[] {
   if (!value?.trim()) {
     return [];
@@ -93,6 +125,13 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
   const env = options.env ?? process.env;
   const rootDir = dirname(envFilePath);
   const defaultModel = parseDeepseekDefaultModel(env.DEEPSEEK_DEFAULT_MODEL);
+  const reportCanvasBaseUrl = parseHttpBaseUrl(
+    env.REPORT_CANVAS_SERVICE_BASE_URL || 'http://127.0.0.1:3020',
+    'REPORT_CANVAS_SERVICE_BASE_URL',
+  );
+  const reportCanvasPublicBaseUrl = env.REPORT_CANVAS_PUBLIC_BASE_URL?.trim()
+    ? parseHttpBaseUrl(env.REPORT_CANVAS_PUBLIC_BASE_URL, 'REPORT_CANVAS_PUBLIC_BASE_URL')
+    : reportCanvasBaseUrl;
 
   return {
     server: {
@@ -132,6 +171,12 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
       baseUrl: (env.ARK_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3').trim(),
       apiKey: env.ARK_API_KEY?.trim() || null,
       webSearchModel: (env.ARK_WEB_SEARCH_MODEL || 'doubao-seed-2-0-lite-260215').trim(),
+    },
+    reportCanvas: {
+      baseUrl: reportCanvasBaseUrl,
+      publicBaseUrl: reportCanvasPublicBaseUrl,
+      timeoutMs: parsePositiveInteger(env.REPORT_CANVAS_TIMEOUT_MS, 600000, 'REPORT_CANVAS_TIMEOUT_MS'),
+      pollIntervalMs: parsePositiveInteger(env.REPORT_CANVAS_POLL_INTERVAL_MS, 2000, 'REPORT_CANVAS_POLL_INTERVAL_MS'),
     },
     meta: {
       configSource: '.env',

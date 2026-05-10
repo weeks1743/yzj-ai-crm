@@ -354,6 +354,122 @@ test('POST /api/jobs runs yunzhijia visit prep with company research attachment'
   }
 });
 
+test('POST /api/jobs runs report-generation and emits report_ready with open url', async () => {
+  const tempRoot = createTempDir('skill-runtime-http-report-generation-');
+  const skillDir = resolve(REPO_ROOT, '3rdSkill');
+  const sourcePath = writeTextFixture(
+    tempRoot,
+    'inputs/company-research.md',
+    [
+      '# 上海松井机械有限公司 公司研究',
+      '',
+      '## 公司概览',
+      '松井机械关注销售增长、渠道效率和管理层汇报。',
+    ].join('\n'),
+  );
+
+  const config = createTestConfig({
+    rootDir: tempRoot,
+    skillDirs: [skillDir],
+    allowedRoots: [tempRoot, REPO_ROOT],
+    artifactDir: join(tempRoot, 'artifacts'),
+    reportCanvasBaseUrl: 'https://report-canvas.internal',
+    reportCanvasPublicBaseUrl: 'https://report.example',
+    reportCanvasPollIntervalMs: 10,
+  });
+  const requestedUrls: string[] = [];
+  const harness = await createRuntimeHarness({
+    config,
+    dependencySnapshot: createDependencySnapshot(),
+    chatClient: new QueueChatClient([]),
+    webSearchClient: new StubWebSearchClient({}),
+    fetchImpl: (async (input, init) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.endsWith('/api/report/generate') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body ?? '{}')) as { markdown?: string; query?: string; ttlMinutes?: number };
+        assert.match(body.markdown ?? '', /松井机械关注销售增长/);
+        assert.equal(body.query, '请基于公司研究生成可视化互动报告');
+        assert.equal(body.ttlMinutes, 1440);
+        return new Response(JSON.stringify({
+          sessionId: 'rpt_001',
+          status: 'pending',
+          embedUrl: 'https://report-canvas.internal/embed/rpt_001',
+          statusUrl: '/api/report/status/rpt_001',
+          resultUrl: '/api/report/result/rpt_001',
+          createdAt: '2026-05-10T00:00:00.000Z',
+          expiresAt: '2026-05-11T00:00:00.000Z',
+        }), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/report/status/rpt_001')) {
+        return new Response(JSON.stringify({
+          sessionId: 'rpt_001',
+          status: 'complete',
+          stage: 'code_gen',
+          progress: 100,
+          createdAt: '2026-05-10T00:00:00.000Z',
+          updatedAt: '2026-05-10T00:01:00.000Z',
+          expiresAt: '2026-05-11T00:00:00.000Z',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/report/result/rpt_001')) {
+        return new Response(JSON.stringify({
+          sessionId: 'rpt_001',
+          status: 'complete',
+          code: 'export default function Report() { return <div>report</div>; }',
+          embedUrl: 'https://report-canvas.internal/embed/rpt_001',
+          metadata: {
+            codeLength: 60,
+            generatedAt: '2026-05-10T00:01:00.000Z',
+            pipelineDurationMs: 60_000,
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch url: ${url}`);
+    }) as any,
+  });
+
+  try {
+    const response = await fetch(`${harness.baseUrl}/api/jobs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        skillName: 'report-generation',
+        requestText: '请基于公司研究生成可视化互动报告',
+        attachments: [sourcePath],
+      }),
+    });
+    assert.equal(response.status, 202);
+    const createdJob = await response.json();
+    const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+    assert.match(job.finalText, /https:\/\/report\.example\/embed\/rpt_001/);
+    assert.ok(requestedUrls.some((url) => url === 'https://report-canvas.internal/api/report/generate'));
+
+    const reportReady = job.events.find((event: any) => event.type === 'report_ready');
+    assert.ok(reportReady);
+    assert.equal(reportReady.data.sessionId, 'rpt_001');
+    assert.equal(reportReady.data.openUrl, 'https://report.example/embed/rpt_001');
+    assert.equal(job.artifacts.length, 3);
+    assert.ok(job.artifacts.some((artifact: any) => artifact.fileName.endsWith('-source.md')));
+    assert.ok(job.artifacts.some((artifact: any) => artifact.fileName.endsWith('-report.jsx')));
+    assert.ok(job.artifacts.some((artifact: any) => artifact.fileName.endsWith('.json')));
+  } finally {
+    await harness.close();
+  }
+});
+
 test('GET /api/jobs lists completed jobs for downstream repair lookup', async () => {
   const tempRoot = createTempDir('skill-runtime-http-job-list-');
   const skillDir = resolve(REPO_ROOT, '3rdSkill');
@@ -392,6 +508,7 @@ test('GET /api/jobs lists completed jobs for downstream repair lookup', async ()
     }),
     dependencySnapshot: createDependencySnapshot(),
     chatClient,
+    webSearchClient: new StubWebSearchClient({}),
   });
 
   try {

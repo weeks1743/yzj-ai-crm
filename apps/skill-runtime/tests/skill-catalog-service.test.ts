@@ -8,7 +8,7 @@ import { SkillCatalogService } from '../src/skill-catalog-service.js';
 test('skill catalog computes available, blocked, and unsupported_yet states', () => {
   const tempDir = createTempDir('skill-catalog-');
   try {
-    for (const skillName of ['company-research', 'visit-conversation-understanding', 'customer-needs-todo-analysis', 'yunzhijia-visit-prep', 'discovery-interview-prep']) {
+    for (const skillName of ['company-research', 'visit-conversation-understanding', 'customer-needs-todo-analysis', 'yunzhijia-visit-prep', 'report-generation', 'discovery-interview-prep']) {
       writeSkillFixture(
         tempDir,
         skillName,
@@ -32,6 +32,8 @@ description: ${skillName} description
     assert.equal(catalog.find((item) => item.skillName === 'visit-conversation-understanding')?.status, 'available');
     assert.equal(catalog.find((item) => item.skillName === 'customer-needs-todo-analysis')?.status, 'available');
     assert.equal(catalog.find((item) => item.skillName === 'yunzhijia-visit-prep')?.status, 'available');
+    assert.equal(catalog.find((item) => item.skillName === 'report-generation')?.status, 'available');
+    assert.deepEqual(catalog.find((item) => item.skillName === 'report-generation')?.profile.allowedTools, []);
     assert.equal(catalog.find((item) => item.skillName === 'discovery-interview-prep')?.status, 'unsupported_yet');
     assert.equal(catalog.some((item) => item.skillName === 'super-ppt'), false);
   } finally {

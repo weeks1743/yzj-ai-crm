@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f8fafc;
+  --foreground: #1e293b;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Sandpack overrides */
+.sp-wrapper,
+.sp-layout {
+  height: 100% !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+.sp-preview-container {
+  height: 100% !important;
+}
+
+/* Streaming cursor animation */
+.streaming-cursor {
+  animation: blink 0.8s step-end infinite;
+  color: #6366f1;
+  font-weight: bold;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Hide scrollbar for sidebar */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
