@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ArtifactImageRepository } from '../src/artifact-image-repository.js';
@@ -135,7 +135,7 @@ test('ArtifactImageService stores image binary on local filesystem and metadata 
 
     const filePath = join(
       tempDir,
-      'tmp/artifact-images/21024647/artifact-001',
+      '.local/artifact-images/21024647/artifact-001',
       generated.fileName!,
     );
     assert.equal(readFileSync(filePath, 'utf8'), 'fake-image-1');
@@ -144,6 +144,57 @@ test('ArtifactImageService stores image binary on local filesystem and metadata 
     assert.equal(loaded.status, 'succeeded');
     assert.equal(loaded.prompt, generated.prompt);
     assert.equal(loaded.generationId, generated.generationId);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactImageService marks missing succeeded image files as failed', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-artifact-image-'));
+  const database = createInMemoryDatabase();
+  const detail = buildArtifactDetail();
+  const service = new ArtifactImageService({
+    config: buildConfig(tempDir),
+    repository: new ArtifactImageRepository(database),
+    artifactService: {
+      getArtifact: async () => detail,
+    } as any,
+    externalSkillService: {
+      generateImage: async (input: any) => ({
+        skillCode: 'ext.image_generate',
+        model: 'gpt-image-2',
+        provider: 'linkapi_images_provider',
+        size: input.size,
+        quality: input.quality,
+        previewDataUrl: `data:image/png;base64,${Buffer.from('missing-image').toString('base64')}`,
+        mimeType: 'image/png',
+        latencyMs: 123,
+        generatedAt: '2026-04-28T09:00:00.000Z',
+      }),
+    } as any,
+  });
+
+  try {
+    const generated = await service.generateImage('artifact-001', {
+      size: '1536x1024',
+      quality: 'auto',
+    });
+    const filePath = join(
+      tempDir,
+      '.local/artifact-images/21024647/artifact-001',
+      generated.fileName!,
+    );
+    unlinkSync(filePath);
+
+    await assert.rejects(
+      service.getImageFile(generated.generationId!),
+      /图片文件不存在，请重新生成图片/,
+    );
+
+    const loaded = await service.getImage('artifact-001');
+    assert.equal(loaded.status, 'failed');
+    assert.equal(loaded.errorMessage, '图片文件不存在，请重新生成图片');
+    assert.equal(loaded.previewUrl, undefined);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

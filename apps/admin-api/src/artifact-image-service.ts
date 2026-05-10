@@ -22,6 +22,8 @@ import { resolveAgentIsolationTenant } from './tenant-isolation.js';
 
 const IMAGE_STALE_QUEUE_BUFFER_MS = 30_000;
 const IMAGE_PROMPT_MARKDOWN_MAX_CHARS = 3_800;
+const ARTIFACT_IMAGE_DIR = '.local/artifact-images';
+const MISSING_IMAGE_FILE_MESSAGE = '图片文件不存在，请重新生成图片';
 export interface ArtifactImageFile {
   fileName: string;
   mimeType: string;
@@ -53,8 +55,10 @@ export class ArtifactImageService {
 
   async getImage(artifactId: string): Promise<ArtifactImageResponse> {
     const detail = await this.options.artifactService.getArtifact(artifactId);
-    const record = await this.resolveStaleQueuedRecord(
-      await this.options.repository.getByVersion(detail.artifact.versionId),
+    const record = await this.resolveMissingSucceededFile(
+      await this.resolveStaleQueuedRecord(
+        await this.options.repository.getByVersion(detail.artifact.versionId),
+      ),
     );
     return this.toResponse(detail, record, record?.status ?? 'not_started');
   }
@@ -171,11 +175,22 @@ export class ArtifactImageService {
       throw new NotFoundError('未找到已生成的图片文件');
     }
 
-    return {
-      fileName: record.fileName,
-      mimeType: record.mimeType,
-      content: await readFile(record.filePath),
-    };
+    try {
+      return {
+        fileName: record.fileName,
+        mimeType: record.mimeType,
+        content: await readFile(record.filePath),
+      };
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        await this.options.repository.markFailed({
+          versionId: record.versionId,
+          errorMessage: MISSING_IMAGE_FILE_MESSAGE,
+        });
+        throw new NotFoundError(MISSING_IMAGE_FILE_MESSAGE);
+      }
+      throw error;
+    }
   }
 
   private async writeImageFile(
@@ -186,7 +201,7 @@ export class ArtifactImageService {
     const rootDir = dirname(this.options.config.meta.envFilePath);
     const outputDir = resolve(
       rootDir,
-      'tmp/artifact-images',
+      ARTIFACT_IMAGE_DIR,
       safePathSegment(this.options.config.yzj.eid),
       safePathSegment(detail.artifact.artifactId),
     );
@@ -195,6 +210,30 @@ export class ArtifactImageService {
     const filePath = join(outputDir, fileName);
     await writeFile(filePath, content);
     return filePath;
+  }
+
+  private async resolveMissingSucceededFile(
+    record: ArtifactImageGenerationRecord | null,
+  ): Promise<ArtifactImageGenerationRecord | null> {
+    if (!record || record.status !== 'succeeded' || !record.filePath) {
+      return record;
+    }
+
+    try {
+      const fileStats = await stat(record.filePath);
+      if (fileStats.isFile()) {
+        return record;
+      }
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
+
+    return this.options.repository.markFailed({
+      versionId: record.versionId,
+      errorMessage: MISSING_IMAGE_FILE_MESSAGE,
+    });
   }
 
   private toResponse(
@@ -230,6 +269,15 @@ export class ArtifactImageService {
       updatedAt: record?.updatedAt,
     };
   }
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'ENOENT'
+  );
 }
 
 function parseImageDataUrl(dataUrl: string, fallbackMimeType: string): ParsedImageData {
