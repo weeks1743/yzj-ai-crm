@@ -15,10 +15,12 @@
 
 ## 验收结果
 
-- 待验证：`pnpm --filter @yzj-ai-crm/admin-api test`。
-- 待验证：`pnpm --filter @yzj-ai-crm/admin-api build`。
-- 待线上验证：`https://huaguopm.com/embed/rpt_6afdd7306233` 不再卡在“正在打开报告”。
-- 待线上验证：重新生成图片后 `/api/artifact-images/c2b36219-51d9-4acf-89c2-612835638821/file?download=1` 可返回图片文件。
+- 已通过：`pnpm --filter @yzj-ai-crm/admin-api test`。
+- 已通过：`pnpm --filter @yzj-ai-crm/admin-api build`。
+- 已通过：线上重建并重启 `admin-api`、`web`。
+- 已通过：`https://huaguopm.com/embed/rpt_6afdd7306233` 返回 200，页面引用的 `/_next/static/...` JS/CSS 均返回 200。
+- 已通过：重新生成图片后 `/api/artifact-images/c2b36219-51d9-4acf-89c2-612835638821/file?download=1` 返回 `image/png`，文件大小 `1838471` 字节。
+- 已通过：新图片文件落在 `/app/.local/artifact-images/21024647/7474fd4e-7339-4d72-8164-11408c8beaab/c739e36e-42be-4273-854c-6bb3c346d048-7ec208a9.png`。
 
 ## 未完成项
 
