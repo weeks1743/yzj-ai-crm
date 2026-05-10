@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { ArtifactReportRepository } from '../src/artifact-report-repository.js';
 import { ArtifactReportService } from '../src/artifact-report-service.js';
@@ -75,49 +79,63 @@ function buildJob(status: ExternalSkillJobResponse['status']): ExternalSkillJobR
 }
 
 test('ArtifactReportService reuses existing report generation for one company research version', async () => {
-  const database = createInMemoryDatabase();
-  let createCalls = 0;
-  const service = new ArtifactReportService({
-    config: createTestConfig(),
-    repository: new ArtifactReportRepository(database),
-    artifactService: {
-      getArtifact: async () => buildArtifactDetail(),
-    } as any,
-    externalSkillService: {
-      createSkillJob: async () => {
-        createCalls += 1;
-        return buildJob('queued');
-      },
-      getSkillJob: async () => buildJob('succeeded'),
-      getSkillJobArtifact: async (_jobId: string, artifactId: string) => ({
-        artifact: {
-          artifactId,
-          jobId: 'job-report-001',
-          fileName: 'report.jsx',
-          mimeType: 'text/plain',
-          byteSize: 64,
-          createdAt: '2026-04-28T00:00:01.000Z',
-          downloadPath: '/api/jobs/job-report-001/artifacts/artifact-code-001',
+  const tempDir = await mkdtemp(join(tmpdir(), 'yzj-artifact-report-'));
+  try {
+    const database = createInMemoryDatabase();
+    const createdAttachments: string[][] = [];
+    let createCalls = 0;
+    const service = new ArtifactReportService({
+      config: createTestConfig({ envFilePath: join(tempDir, '.env') }),
+      repository: new ArtifactReportRepository(database),
+      artifactService: {
+        getArtifact: async () => buildArtifactDetail(),
+      } as any,
+      externalSkillService: {
+        createSkillJob: async (_skillCode: string, input: { attachments?: string[] }) => {
+          createCalls += 1;
+          createdAttachments.push(input.attachments ?? []);
+          return buildJob('queued');
         },
-        content: Buffer.from('export default function Report() { return <div>persisted</div>; }', 'utf8'),
-      }),
-    } as any,
-  });
+        getSkillJob: async () => buildJob('succeeded'),
+        getSkillJobArtifact: async (_jobId: string, artifactId: string) => ({
+          artifact: {
+            artifactId,
+            jobId: 'job-report-001',
+            fileName: 'report.jsx',
+            mimeType: 'text/plain',
+            byteSize: 64,
+            createdAt: '2026-04-28T00:00:01.000Z',
+            downloadPath: '/api/jobs/job-report-001/artifacts/artifact-code-001',
+          },
+          content: Buffer.from('export default function Report() { return <div>persisted</div>; }', 'utf8'),
+        }),
+      } as any,
+    });
 
-  const first = await service.ensureReport('artifact-001');
-  const second = await service.ensureReport('artifact-001');
+    const first = await service.ensureReport('artifact-001');
+    const second = await service.ensureReport('artifact-001');
 
-  assert.equal(first.status, 'succeeded');
-  assert.equal(second.status, 'succeeded');
-  assert.equal(second.reportSessionId, 'rpt_001');
-  assert.equal(second.openUrl, '/api/artifacts/artifact-001/report/open');
-  assert.equal(second.codeArtifactId, 'artifact-code-001');
-  assert.equal(second.metadataArtifactId, 'artifact-metadata-001');
-  assert.equal(second.isPersistent, true);
-  const code = await service.getReportCode('artifact-001');
-  assert.match(code.code, /persisted/);
-  assert.equal(code.report.openUrl, '/api/artifacts/artifact-001/report/open');
-  assert.equal(createCalls, 1);
+    assert.equal(first.status, 'succeeded');
+    assert.equal(second.status, 'succeeded');
+    assert.equal(second.reportSessionId, 'rpt_001');
+    assert.equal(second.openUrl, '/api/artifacts/artifact-001/report/open');
+    assert.equal(second.codeArtifactId, 'artifact-code-001');
+    assert.equal(second.metadataArtifactId, 'artifact-metadata-001');
+    assert.equal(second.isPersistent, true);
+    assert.equal(createdAttachments.length, 1);
+    assert.equal(createdAttachments[0]?.length, 1);
+    assert.match(
+      createdAttachments[0]?.[0] ?? '',
+      /\.local\/skill-runtime-inputs\/artifact-report-inputs\/version-001-[a-f0-9]{12}\.md$/,
+    );
+    assert.equal(readFileSync(createdAttachments[0]![0]!, 'utf8'), buildArtifactDetail().markdown);
+    const code = await service.getReportCode('artifact-001');
+    assert.match(code.code, /persisted/);
+    assert.equal(code.report.openUrl, '/api/artifacts/artifact-001/report/open');
+    assert.equal(createCalls, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('ArtifactReportService allows retry after failed report generation', async () => {

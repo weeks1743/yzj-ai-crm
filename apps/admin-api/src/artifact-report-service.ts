@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
 import type {
   AppConfig,
   ArtifactDetailResponse,
@@ -15,6 +13,7 @@ import type {
 import type { ArtifactService } from './artifact-service.js';
 import type { ExternalSkillService } from './external-skill-service.js';
 import { BadRequestError, NotFoundError, getErrorMessage } from './errors.js';
+import { writeSkillRuntimeInputFile } from './skill-runtime-inputs.js';
 
 const REPORT_GENERATION_SKILL_CODE = 'ext.report_generation';
 const LEGACY_TRANSIENT_REPORT_MESSAGE = '该报告仅保存了临时会话链接，报告会话已过期或服务已重启，请重新生成报告。';
@@ -279,14 +278,13 @@ export class ArtifactReportService {
   }
 
   private writeMarkdownAttachment(detail: ArtifactDetailResponse): string {
-    const rootDir = dirname(this.options.config.meta.envFilePath);
-    const outputDir = resolve(rootDir, '.local/artifact-report-inputs');
-    mkdirSync(outputDir, { recursive: true });
-
     const contentHash = createHash('sha256').update(detail.markdown).digest('hex').slice(0, 12);
-    const markdownPath = join(outputDir, `${detail.artifact.versionId}-${contentHash}.md`);
-    writeFileSync(markdownPath, detail.markdown, 'utf8');
-    return markdownPath;
+    return writeSkillRuntimeInputFile({
+      config: this.options.config,
+      segments: ['artifact-report-inputs'],
+      fileName: `${detail.artifact.versionId}-${contentHash}.md`,
+      content: detail.markdown,
+    });
   }
 
   private toResponse(

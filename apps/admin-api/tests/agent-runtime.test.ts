@@ -6950,7 +6950,10 @@ test('Agent runtime invokes visit prep with selected customer research and does 
   assert.ok(skillCall);
   assert.match(skillCall.input.requestText, /客户初步需求：未提供/);
   assert.equal(skillCall.input.attachments.length, 1);
-  assert.match(skillCall.input.attachments[0], /company-research\.md$/);
+  assert.match(
+    skillCall.input.attachments[0],
+    /\.local\/skill-runtime-inputs\/agent-runtime-attachments\/[^/]+\/.+-company-research\.md$/,
+  );
   assert.doesNotThrow(() => readFileSync(skillCall.input.attachments[0], 'utf8'));
   assert.equal(artifactCall, undefined);
   assert.deepEqual(response.message.extraInfo.evidence ?? [], []);

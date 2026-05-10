@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
 import type {
   AgentAttachment,
   AgentEvidenceCard,
@@ -79,6 +77,10 @@ import type { ShadowMetadataService } from './shadow-metadata-service.js';
 import { AgentToolRegistry } from './tool-registry.js';
 import { getErrorMessage } from './errors.js';
 import { resolveAgentIsolationTenant } from './tenant-isolation.js';
+import {
+  sanitizeSkillRuntimeInputFileName,
+  writeSkillRuntimeInputFile,
+} from './skill-runtime-inputs.js';
 
 const CRM_RECORD_OBJECTS: ShadowObjectKey[] = ['customer', 'contact', 'opportunity', 'followup'];
 const COMPANY_RESEARCH_TOOL = 'external.company_research';
@@ -10731,12 +10733,12 @@ function writeYunzhijiaVisitPrepResearchAttachment(input: {
   companyName: string;
   markdown: string;
 }): string {
-  const rootDir = resolve(dirname(input.options.config.meta.envFilePath));
-  const outputDir = resolve(rootDir, '.local/agent-runtime-attachments', input.runId);
-  mkdirSync(outputDir, { recursive: true });
-  const filePath = resolve(outputDir, `${sanitizeFileName(input.companyName)}-company-research.md`);
-  writeFileSync(filePath, input.markdown, 'utf8');
-  return filePath;
+  return writeSkillRuntimeInputFile({
+    config: input.options.config,
+    segments: ['agent-runtime-attachments', input.runId],
+    fileName: `${sanitizeSkillRuntimeInputFileName(input.companyName)}-company-research.md`,
+    content: input.markdown,
+  });
 }
 
 function sanitizeFileName(value: string): string {
