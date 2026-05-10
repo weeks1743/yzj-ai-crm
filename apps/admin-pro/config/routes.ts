@@ -4,33 +4,25 @@ export default [
     redirect: '/dashboard/analysis',
   },
   {
-    name: '运营看板',
-    path: '/dashboard',
+    name: '分析运营看板',
+    path: '/dashboard/analysis',
     icon: 'dashboard',
-    routes: [
-      {
-        path: '/dashboard',
-        redirect: '/dashboard/analysis',
-      },
-      {
-        name: '分析页',
-        path: '/dashboard/analysis',
-        icon: 'barChart',
-        component: './dashboard/analysis',
-      },
-      {
-        name: '运行监控',
-        path: '/dashboard/monitor',
-        icon: 'monitor',
-        component: './dashboard/monitor',
-      },
-      {
-        name: '工作台',
-        path: '/dashboard/workplace',
-        icon: 'desktop',
-        component: './dashboard/workplace',
-      },
-    ],
+    component: './dashboard/analysis',
+  },
+  {
+    path: '/dashboard',
+    hideInMenu: true,
+    redirect: '/dashboard/analysis',
+  },
+  {
+    path: '/dashboard/monitor',
+    hideInMenu: true,
+    redirect: '/dashboard/analysis',
+  },
+  {
+    path: '/dashboard/workplace',
+    hideInMenu: true,
+    redirect: '/dashboard/analysis',
   },
   {
     path: '/records',
@@ -106,22 +98,19 @@ export default [
         component: './skills/record-skills/[objectKey]',
       },
       {
-        name: '会话任务',
         path: '/agent-governance/sessions',
-        icon: 'message',
-        component: './assets/[assetType]',
+        hideInMenu: true,
+        redirect: '/agent-governance/runtime-observability',
       },
       {
-        name: '计划模板',
         path: '/agent-governance/plan-templates',
-        icon: 'deploymentUnit',
-        component: './agent-governance/[governancePage]',
+        hideInMenu: true,
+        redirect: '/agent-governance/tools-objects',
       },
       {
-        name: '策略与确认',
         path: '/agent-governance/policies-confirmation',
-        icon: 'safetyCertificate',
-        component: './agent-governance/[governancePage]',
+        hideInMenu: true,
+        redirect: '/agent-governance/runtime-observability',
       },
       {
         name: '运行观测',
@@ -173,29 +162,34 @@ export default [
       {
         path: '/settings/security',
         hideInMenu: true,
-        redirect: '/agent-governance/policies-confirmation',
+        redirect: '/agent-governance/runtime-observability',
       },
     ],
   },
   {
     path: '/skills/scene-assembly',
     hideInMenu: true,
-    redirect: '/agent-governance/plan-templates',
+    redirect: '/agent-governance/tools-objects',
+  },
+  {
+    path: '/skills/scene-assembly/:sceneKey',
+    hideInMenu: true,
+    redirect: '/agent-governance/tools-objects',
   },
   {
     path: '/skills/writeback-policies',
     hideInMenu: true,
-    redirect: '/agent-governance/policies-confirmation',
+    redirect: '/agent-governance/runtime-observability',
   },
   {
     path: '/assets',
     hideInMenu: true,
-    redirect: '/agent-governance/sessions',
+    redirect: '/agent-governance/runtime-observability',
   },
   {
     path: '/assets/sessions',
     hideInMenu: true,
-    redirect: '/agent-governance/sessions',
+    redirect: '/agent-governance/runtime-observability',
   },
   {
     path: '/*',
