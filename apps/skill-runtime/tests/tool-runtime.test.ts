@@ -115,9 +115,9 @@ test('read_source_file reads staged inputs directory as combined text attachment
   const context: ToolExecutionContext = {
     job: {
       jobId: 'job-read-inputs-dir',
-      skillName: 'problem-statement',
+      skillName: 'customer-value-positioning',
       model: 'deepseek-v4-pro',
-      requestText: '基于录音生成问题陈述',
+      requestText: '基于录音生成客户价值定位',
       attachments: [],
       workingDirectory: null,
       status: 'running',
@@ -129,15 +129,15 @@ test('read_source_file reads staged inputs directory as combined text attachment
       finishedAt: null,
     },
     skill: {
-      skillName: 'problem-statement',
-      skillFilePath: `${tempDir}/problem-statement/SKILL.md`,
+      skillName: 'customer-value-positioning',
+      skillFilePath: `${tempDir}/customer-value-positioning/SKILL.md`,
       rawContent: '',
-      promptContent: 'problem statement prompt',
+      promptContent: 'customer value positioning prompt',
       frontmatter: {},
       profile: {
-        skillName: 'problem-statement',
-        displayName: 'problem statement',
-        description: 'problem statement',
+        skillName: 'customer-value-positioning',
+        displayName: 'customer value positioning',
+        description: 'customer value positioning',
         arguments: [],
         allowedTools: [],
         baseDir: tempDir,

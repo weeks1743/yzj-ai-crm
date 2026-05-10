@@ -13,7 +13,7 @@
 
 ## 关键结论
 
-- skill-runtime 中的 `problem-statement-*.md` 只能证明外部技能产物已生成。
+- skill-runtime 中旧问题陈述 Markdown 产物只能证明外部技能产物已生成。
 - 拜访资料列表读取的是正式归档的 `analysis_material` Artifact。
 - 若旧产物仍包含“待绑定上下文/录音未关联客户商机”，不能直接保存为正式资料，必须用正式客户、商机、跟进记录锚点重跑后再落库。
 
@@ -29,8 +29,8 @@
 
 ## 本地数据修复记录
 
-- 对 `recording-task-f4aed9d9` 通过正式接口补跑 `ext.problem_statement_pm`，新 Job 为 `0776e73e-5614-4988-b549-b56eddc3e170`。
-- Mongo 已生成正式 Artifact：`贝斯美拜访 - 问题陈述`，`sourceToolCode=ext.problem_statement_pm`，`artifactId=9904812e-4046-4177-a484-1aa9263dadca`，`vectorStatus=indexed`。
+- 对 `recording-task-f4aed9d9` 通过正式接口补跑当时的问题陈述外部技能，新 Job 为 `0776e73e-5614-4988-b549-b56eddc3e170`。
+- Mongo 当时已生成正式 Artifact：`贝斯美拜访 - 问题陈述`，来源工具为当时的问题陈述外部技能，`artifactId=9904812e-4046-4177-a484-1aa9263dadca`，`vectorStatus=indexed`。
 - 该资料头部已包含正式客户、商机、跟进记录锚点，不再包含“待绑定上下文 / 未关联客户商机”等旧上下文文案。
 - 以客户锚点检索 `analysis_material` 时，结果已包含 `客户需求工作待办分析`、`问题陈述`、`拜访会话理解`。
 

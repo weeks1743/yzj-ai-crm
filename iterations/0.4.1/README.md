@@ -33,7 +33,7 @@
   - `ext.company_research_pm`
   - `ext.customer_journey_map_pm`
   - `ext.jobs_to_be_done_pm`
-  - `ext.problem_statement_pm`
+  - 旧问题陈述外部技能（已在 0.10.5 移除）
   - `ext.saas_revenue_growth_metrics_pm`
 - 本轮按你的要求忽略：
   - `discovery-interview-prep`
@@ -48,7 +48,7 @@
 - 统一输出 markdown artifact，并在必要时自动回填 `finalText`
 - `customer-journey-map`
 - `jobs-to-be-done`
-- `problem-statement`
+- 旧问题陈述文本技能（已在 0.10.5 移除）
 - `saas-revenue-growth-metrics`
   已从 `unsupported_yet` 提升为可执行
 

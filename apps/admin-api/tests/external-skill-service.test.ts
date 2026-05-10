@@ -160,7 +160,7 @@ test('ExternalSkillService forwards runtime jobs and rewrites artifact download 
         receivedTemplateId = body.templateId;
         return jsonResponse({
           jobId: 'job-001',
-          skillName: 'problem-statement',
+          skillName: 'customer-value-positioning',
           model: 'deepseek-v4-flash',
           status: 'queued',
           finalText: null,
@@ -174,7 +174,7 @@ test('ExternalSkillService forwards runtime jobs and rewrites artifact download 
       if (url.endsWith('/api/jobs/job-001')) {
         return jsonResponse({
           jobId: 'job-001',
-          skillName: 'problem-statement',
+          skillName: 'customer-value-positioning',
           model: 'deepseek-v4-flash',
           status: 'succeeded',
           finalText: 'done',
@@ -190,7 +190,7 @@ test('ExternalSkillService forwards runtime jobs and rewrites artifact download 
             {
               artifactId: 'artifact-001',
               jobId: 'job-001',
-              fileName: 'problem-statement.md',
+              fileName: 'customer-value-positioning.md',
               mimeType: 'text/markdown',
               byteSize: 128,
               createdAt: '2026-04-25T10:01:00.000Z',
@@ -203,11 +203,11 @@ test('ExternalSkillService forwards runtime jobs and rewrites artifact download 
         });
       }
       if (url.endsWith('/api/jobs/job-001/artifacts/artifact-001')) {
-        return new Response('# problem statement', {
+        return new Response('# customer value positioning', {
           status: 200,
           headers: {
             'Content-Type': 'text/markdown',
-            'Content-Disposition': 'attachment; filename="problem-statement.md"',
+            'Content-Disposition': 'attachment; filename="customer-value-positioning.md"',
           },
         });
       }
@@ -215,19 +215,19 @@ test('ExternalSkillService forwards runtime jobs and rewrites artifact download 
     }) as FetchLike,
   });
 
-  const created = await service.createSkillJob('ext.problem_statement_pm', {
-    requestText: '整理问题陈述',
+  const created = await service.createSkillJob('ext.customer_value_positioning_pm', {
+    requestText: '整理客户价值定位',
   });
-  assert.equal(created.skillCode, 'ext.problem_statement_pm');
-  assert.equal(created.runtimeSkillName, 'problem-statement');
+  assert.equal(created.skillCode, 'ext.customer_value_positioning_pm');
+  assert.equal(created.runtimeSkillName, 'customer-value-positioning');
 
   const job = await service.getSkillJob('job-001');
   assert.equal(job.status, 'succeeded');
   assert.equal(job.artifacts[0]?.downloadPath, '/api/external-skills/jobs/job-001/artifacts/artifact-001');
 
   const artifact = await service.getSkillJobArtifact('job-001', 'artifact-001');
-  assert.equal(artifact.artifact.fileName, 'problem-statement.md');
-  assert.equal(artifact.content.toString('utf8'), '# problem statement');
+  assert.equal(artifact.artifact.fileName, 'customer-value-positioning.md');
+  assert.equal(artifact.content.toString('utf8'), '# customer value positioning');
   assert.equal(receivedTemplateId, undefined);
 });
 
@@ -237,7 +237,7 @@ test('ExternalSkillService lists runtime jobs for downstream recording repair', 
     fetchImpl: (async (input) => {
       const url = String(input);
       assert.match(url, /\/api\/jobs\?/);
-      assert.match(url, /skillName=problem-statement/);
+      assert.match(url, /skillName=customer-value-positioning/);
       assert.match(url, /status=succeeded/);
       assert.match(url, /query=%E8%B4%9D%E6%96%AF%E7%BE%8E/);
       return jsonResponse({
@@ -246,11 +246,11 @@ test('ExternalSkillService lists runtime jobs for downstream recording repair', 
         total: 1,
         jobs: [
           {
-            jobId: 'job-problem-001',
-            skillName: 'problem-statement',
+            jobId: 'job-value-001',
+            skillName: 'customer-value-positioning',
             model: 'deepseek-v4-flash',
             status: 'succeeded',
-            finalText: '# 问题陈述',
+            finalText: '# 客户价值定位',
             events: [],
             artifacts: [],
             error: null,
@@ -263,7 +263,7 @@ test('ExternalSkillService lists runtime jobs for downstream recording repair', 
   });
 
   const result = await service.listSkillJobs({
-    skillCode: 'ext.problem_statement_pm',
+    skillCode: 'ext.customer_value_positioning_pm',
     status: 'succeeded',
     query: '贝斯美',
     pageSize: 25,
@@ -271,8 +271,8 @@ test('ExternalSkillService lists runtime jobs for downstream recording repair', 
 
   assert.equal(result.total, 1);
   assert.equal(result.jobs.length, 1);
-  assert.equal(result.jobs[0]?.skillCode, 'ext.problem_statement_pm');
-  assert.equal(result.jobs[0]?.runtimeSkillName, 'problem-statement');
+  assert.equal(result.jobs[0]?.skillCode, 'ext.customer_value_positioning_pm');
+  assert.equal(result.jobs[0]?.runtimeSkillName, 'customer-value-positioning');
 });
 
 test('ExternalSkillService skips enterprise template for ext.super_ppt jobs while keeping prompt', async () => {

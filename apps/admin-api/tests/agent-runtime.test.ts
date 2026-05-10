@@ -1687,9 +1687,9 @@ test('Agent runtime routes complex multi-source customer questions to context su
                   ? '贝斯美公司研究'
                   : kind === 'recording_material'
                     ? '贝斯美拜访.mp3 录音资料包'
-                    : '贝斯美拜访 - 问题陈述',
+                    : '贝斯美拜访 - 客户价值定位',
                 version: 1,
-                sourceToolCode: kind === 'analysis_material' ? 'ext.problem_statement_pm' : 'test',
+                sourceToolCode: kind === 'analysis_material' ? 'ext.customer_value_positioning_pm' : 'test',
                 anchorTypes: ['customer'],
                 anchorIds: ['贝斯美'],
                 snippet: `${kind} 命中资料片段。`,
@@ -1797,8 +1797,8 @@ test('Agent runtime anchors visit demand summary with real customer name and foc
               buildEvidence('analysis_material', 3, '贝斯美拜访 - 拜访会话理解', 'ext.visit_conversation_understanding', '会话摘要：客户提出采购申请、费用报销、项目费用统计、海外多语言、AI 知识库等需求。', 0.86),
               buildEvidence('analysis_material', 4, '贝斯美拜访 - 客户价值定位', 'ext.customer_value_positioning_pm', '定位声明：可从移动办公和全球组织协同切入。', 0.84),
               buildEvidence('analysis_material', 5, '贝斯美拜访 - 客户价值定位', 'ext.customer_value_positioning_pm', '待补充的材料/证据：需销售后续补充预算与决策链。', 0.82),
-              buildEvidence('analysis_material', 6, '贝斯美拜访 - 问题陈述', 'ext.problem_statement_pm', [
-                '# 问题陈述',
+              buildEvidence('analysis_material', 6, '贝斯美拜访 - 客户价值定位', 'ext.customer_value_positioning_pm', [
+                '# 客户价值定位',
                 '已确认的需求：客户希望打通采购、合同、费用报销流程与 ERP 自动对接。',
                 '关键问题：海外员工需要多语言和移动端兼容，AI 知识库要降低重复咨询。',
               ].join('\n'), 0.8),
@@ -1889,7 +1889,7 @@ test('Agent runtime anchors visit demand summary with real customer name and foc
   assert.doesNotMatch(response.message.content, /证据来源/);
   assert.doesNotMatch(response.message.content, /记录系统补充/);
   assert.doesNotMatch(response.message.content, /公司研究背景/);
-  assert.doesNotMatch(response.message.content, /贝斯美拜访 - 问题陈述/);
+  assert.doesNotMatch(response.message.content, /贝斯美拜访 - 客户价值定位/);
   assert.doesNotMatch(response.message.content, /贝斯美拜访 - 拜访会话理解/);
   assert.doesNotMatch(response.message.content, /价值定位：云之家可围绕协同办公/);
   assert.doesNotMatch(response.message.content, /项目\/场景背景/);

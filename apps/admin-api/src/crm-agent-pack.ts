@@ -99,7 +99,6 @@ const VISIT_NEEDS_PRIMARY_ANALYSIS_LIMIT = 4;
 const VISIT_NEEDS_EVIDENCE_SOURCE_LIMIT = 6;
 const VISIT_NEEDS_ANALYSIS_SOURCE_ORDER = [
   { sourceToolCode: 'ext.customer_needs_todo_analysis', titleKeyword: '客户需求工作待办分析' },
-  { sourceToolCode: 'ext.problem_statement_pm', titleKeyword: '问题陈述' },
   { sourceToolCode: 'ext.visit_conversation_understanding', titleKeyword: '拜访会话理解' },
   { sourceToolCode: 'ext.customer_value_positioning_pm', titleKeyword: '客户价值定位' },
 ];
@@ -713,7 +712,7 @@ function inferExplicitRecordObject(query: string): string | null {
 
 function resolveDataSourceScope(query: string): DataSourceScopeResolution {
   const normalized = query.replace(/\s+/g, '').trim();
-  const hasExternalInfo = /(外部信息|系统外信息|系统外资料|公开资料|公开信息|公司研究|录音资料|录音资料包|拜访录音|录音分析|最近拜访|这次拜访|上次拜访|下次拜访|需求待办|问题陈述|价值定位|价值主张|分析结果|客户诉求|价值点|风险|推进阻塞|客户问题|方案|时机)/.test(normalized);
+  const hasExternalInfo = /(外部信息|系统外信息|系统外资料|公开资料|公开信息|公司研究|录音资料|录音资料包|拜访录音|录音分析|最近拜访|这次拜访|上次拜访|下次拜访|需求待办|价值定位|价值主张|分析结果|客户诉求|价值点|风险|推进阻塞|客户问题|方案|时机)/.test(normalized);
   const hasInternalRecords = /(系统内记录|系统记录|内部记录|记录系统|CRM记录|客户记录|客户|商机|机会|跟进记录|拜访记录|回访记录|待办情况|预算|关键人)/i.test(normalized);
 
   if (
@@ -771,7 +770,7 @@ function inferContextSummaryDataSourceScope(
   if (semanticIntent.requiresExternalInfo) {
     return 'combined';
   }
-  return /(公司研究|录音|拜访|需求|待办|问题陈述|客户问题|价值|风险|阻塞|简报|赢单|开场|客户诉求)/.test(query)
+  return /(公司研究|录音|拜访|需求|待办|客户问题|价值|风险|阻塞|简报|赢单|开场|客户诉求)/.test(query)
     ? 'combined'
     : 'auto';
 }
@@ -8674,7 +8673,7 @@ function registerRecordingMaterialTool(registry: AgentToolRegistry): void {
           '- 当前会先生成录音资料包，不展示逐字转写。',
           '- 未关联客户/商机时可以先处理，生成正式跟进记录前必须补齐关联并确认。',
           '',
-          '完成后可以点击录音卡片打开录音查看页，或继续调用：拜访会话理解、客户需求工作待办分析、问题陈述、客户价值定位、新增拜访记录。',
+          '完成后可以点击录音卡片打开录音查看页，或继续调用：拜访会话理解、客户需求工作待办分析、客户价值定位、新增拜访记录。',
         ].join('\n'),
         headline: '录音资料包处理入口已准备',
         references: ['录音处理服务', '录音资料包'],
@@ -8740,7 +8739,7 @@ function isContextSummaryQuery(query: string, intentFrame?: GenericIntentFrame |
 }
 
 function hasLegacyContextSummaryPhrase(query: string): boolean {
-  return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下|拜访前摘要|拜访重点|回访重点|沟通重点|会议重点|主要关注点|客户关注点|客户主要关注|商机进展|机会进展|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统|值不值得|重点推进|赢单概率|下次拜访|怎么开场|价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|需求|问题陈述|价值主张)/.test(query);
+  return /(客户旅程|旅程|推进|下一步|怎么推进|进展概览|盘点一下|总结一下|拜访前摘要|拜访重点|回访重点|沟通重点|会议重点|主要关注点|客户关注点|客户主要关注|商机进展|机会进展|客户情况|客户状态|客户处于什么状态|客户是什么状态|客户档案|系统内记录|系统记录|内部记录|记录系统|值不值得|重点推进|赢单概率|下次拜访|怎么开场|价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|需求|价值主张)/.test(query);
 }
 
 function isComplexContextSummaryQuery(query: string, intentFrame?: GenericIntentFrame | null): boolean {
@@ -8748,7 +8747,7 @@ function isComplexContextSummaryQuery(query: string, intentFrame?: GenericIntent
 }
 
 function hasLegacyComplexContextSummaryPhrase(query: string): boolean {
-  return /(结合|综合|融合|同时看|一起看|值不值得|重点推进|拜访重点|回访重点|沟通重点|会议重点|(?:拜访|回访|沟通|会议).*重点|重点.*(?:拜访|回访|沟通|会议)|主要关注点|客户关注点|客户主要关注|赢单概率|下次拜访|怎么开场|问哪些问题|推什么价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|问题陈述|价值主张|价值定位|行动建议|主要提了什么需求|需求.*待办)/.test(query);
+  return /(结合|综合|融合|同时看|一起看|值不值得|重点推进|拜访重点|回访重点|沟通重点|会议重点|(?:拜访|回访|沟通|会议).*重点|重点.*(?:拜访|回访|沟通|会议)|主要关注点|客户关注点|客户主要关注|赢单概率|下次拜访|怎么开场|问哪些问题|推什么价值点|推进阻塞|经营简报|给老板看|客户诉求|待办情况|反复强调|价值主张|价值定位|行动建议|主要提了什么需求|需求.*待办)/.test(query);
 }
 
 function isSimpleCustomerRecordLookupQuery(query: string): boolean {
@@ -8759,7 +8758,7 @@ function isSimpleCustomerRecordLookupQuery(query: string): boolean {
   if (isRecordLookupContextSummaryOverride(normalized)) {
     return false;
   }
-  if (/(公司研究|录音资料|录音资料包|拜访录音|录音分析|最近拜访|这次拜访|上次拜访|需求待办|问题陈述|价值定位|价值主张|分析结果)/.test(normalized)) {
+  if (/(公司研究|录音资料|录音资料包|拜访录音|录音分析|最近拜访|这次拜访|上次拜访|需求待办|价值定位|价值主张|分析结果)/.test(normalized)) {
     return false;
   }
   return isDirectRecordLookupQuery(normalized)
@@ -8849,7 +8848,6 @@ function analyzeContextSummarySemanticIntent(
     '录音资料包',
     '拜访录音',
     '分析结果',
-    '问题陈述',
     '价值定位',
     '价值主张',
   ]);
@@ -9840,7 +9838,7 @@ function isDemandSignalHeading(line: string): boolean {
     .replace(/[：:]\s*$/g, '')
     .replace(/\s+/g, '')
     .trim();
-  return /^(客户需求工作待办分析|拜访会话理解|问题陈述|客户价值定位|分析依据|注意|项目\/场景背景|待补充的材料\/证据|定位声明|来源文件|录音任务|关联状态|生成日期|技能|客户主要需求|已确认的需求|待办清单|建议下一步|下一步建议|总结|摘要)$/.test(normalized);
+  return /^(客户需求工作待办分析|拜访会话理解|客户价值定位|分析依据|注意|项目\/场景背景|待补充的材料\/证据|定位声明|来源文件|录音任务|关联状态|生成日期|技能|客户主要需求|已确认的需求|待办清单|建议下一步|下一步建议|总结|摘要)$/.test(normalized);
 }
 
 function trimEvidenceSnippet(value: string, maxLength: number): string {

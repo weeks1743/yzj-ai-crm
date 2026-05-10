@@ -358,13 +358,8 @@ function getUpstreamMaterialConfig(skillCode: string): {
       actions: ['客户需求工作待办分析'],
       enabled: true,
     },
-    'ext.problem_statement_pm': {
-      materials: ['通义结构化分析 JSON', '录音资料包', '需求待办', '客户资料'],
-      actions: ['问题陈述'],
-      enabled: true,
-    },
     'ext.customer_value_positioning_pm': {
-      materials: ['问题陈述', '客户资料', '商机资料'],
+      materials: ['客户需求工作待办分析', '拜访会话理解', '客户资料', '商机资料'],
       actions: ['客户价值定位'],
       enabled: true,
     },

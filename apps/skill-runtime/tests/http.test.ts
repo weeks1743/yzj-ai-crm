@@ -195,9 +195,9 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
             id: 'text-2',
             name: 'write_text_artifact',
             arguments: JSON.stringify({
-              fileName: 'problem-statement.md',
+              fileName: 'customer-value-positioning.md',
               content: [
-                '# 问题陈述',
+                '# 客户价值定位',
                 '',
                 '## 我是谁',
                 '- 一线销售代表',
@@ -214,7 +214,7 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
       };
     },
     {
-      content: 'Problem statement generated.',
+      content: 'Customer value positioning generated.',
       toolCalls: [],
     },
   ]);
@@ -238,8 +238,8 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        skillName: 'problem-statement',
-        requestText: '请根据附件整理一个用户视角的问题陈述',
+        skillName: 'customer-value-positioning',
+        requestText: '请根据附件整理一个客户价值定位',
         attachments: [sourcePath],
       }),
     });
@@ -247,13 +247,13 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
     const createdJob = await response.json();
     const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
     assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
-    assert.equal(job.finalText, 'Problem statement generated.');
+    assert.equal(job.finalText, 'Customer value positioning generated.');
     assert.equal(job.artifacts.length, 1);
 
     const artifactResponse = await fetch(`${harness.baseUrl}${job.artifacts[0].downloadPath}`);
     assert.equal(artifactResponse.status, 200);
     const artifactText = await artifactResponse.text();
-    assert.match(artifactText, /问题陈述/);
+    assert.match(artifactText, /客户价值定位/);
     assert.match(artifactText, /多个系统间来回切换/);
   } finally {
     await harness.close();
@@ -371,14 +371,14 @@ test('GET /api/jobs lists completed jobs for downstream repair lookup', async ()
           id: 'text-1',
           name: 'write_text_artifact',
           arguments: JSON.stringify({
-            fileName: 'problem-statement.md',
-            content: '# 问题陈述\n\n贝斯美需要打通采购、合同和费用报销流程。',
+            fileName: 'customer-value-positioning.md',
+            content: '# 客户价值定位\n\n贝斯美需要打通采购、合同和费用报销流程。',
           }),
         },
       ],
     },
     {
-      content: 'Problem statement generated.',
+      content: 'Customer value positioning generated.',
       toolCalls: [],
     },
   ]);
@@ -401,7 +401,7 @@ test('GET /api/jobs lists completed jobs for downstream repair lookup', async ()
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        skillName: 'problem-statement',
+        skillName: 'customer-value-positioning',
         requestText: `来源录音：贝斯美拜访.mp3\n录音任务：recording-task-f4aed9d9`,
         attachments: [sourcePath],
       }),
@@ -411,14 +411,14 @@ test('GET /api/jobs lists completed jobs for downstream repair lookup', async ()
     await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
 
     const listResponse = await fetch(
-      `${harness.baseUrl}/api/jobs?skillName=problem-statement&status=succeeded&query=${encodeURIComponent('recording-task-f4aed9d9')}&pageSize=10`,
+      `${harness.baseUrl}/api/jobs?skillName=customer-value-positioning&status=succeeded&query=${encodeURIComponent('recording-task-f4aed9d9')}&pageSize=10`,
     );
     assert.equal(listResponse.status, 200);
     const result = await listResponse.json();
     assert.equal(result.total, 1);
     assert.equal(result.jobs.length, 1);
     assert.equal(result.jobs[0].jobId, createdJob.jobId);
-    assert.equal(result.jobs[0].skillName, 'problem-statement');
+    assert.equal(result.jobs[0].skillName, 'customer-value-positioning');
     assert.equal(result.jobs[0].artifacts.length, 1);
   } finally {
     await harness.close();

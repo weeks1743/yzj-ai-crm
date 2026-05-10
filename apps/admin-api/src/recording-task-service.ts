@@ -26,7 +26,6 @@ const RECORDING_MATERIAL_TOOL_CODE = 'tongyi.audio.recording_material';
 const DOWNSTREAM_RECORDING_SKILLS = {
   'ext.visit_conversation_understanding': '拜访会话理解',
   'ext.customer_needs_todo_analysis': '客户需求工作待办分析',
-  'ext.problem_statement_pm': '问题陈述',
   'ext.customer_value_positioning_pm': '客户价值定位',
 } as const;
 
@@ -433,7 +432,7 @@ export class RecordingTaskService {
   async createSkillJob(taskId: string, input: { skillCode?: string }): Promise<ExternalSkillJobResponse> {
     const skillCode = String(input.skillCode || '').trim();
     if (!isDownstreamRecordingSkillCode(skillCode)) {
-      throw new BadRequestError('录音资料包只允许继续调用拜访会话理解、客户需求工作待办分析、问题陈述、客户价值定位');
+      throw new BadRequestError('录音资料包只允许继续调用拜访会话理解、客户需求工作待办分析、客户价值定位');
     }
     if (!this.options.externalSkillService) {
       throw new ServiceUnavailableError('外部技能服务未启用');
@@ -455,7 +454,7 @@ export class RecordingTaskService {
 
   async getSkillJob(taskId: string, skillCode: string, jobId: string): Promise<ExternalSkillJobResponse> {
     if (!isDownstreamRecordingSkillCode(skillCode)) {
-      throw new BadRequestError('录音资料包只允许继续调用拜访会话理解、客户需求工作待办分析、问题陈述、客户价值定位');
+      throw new BadRequestError('录音资料包只允许继续调用拜访会话理解、客户需求工作待办分析、客户价值定位');
     }
     if (!this.options.externalSkillService) {
       throw new ServiceUnavailableError('外部技能服务未启用');
@@ -487,7 +486,6 @@ export class RecordingTaskService {
     return this.ensureAnalysisMaterialsForRecord(record, [
       'ext.visit_conversation_understanding',
       'ext.customer_needs_todo_analysis',
-      'ext.problem_statement_pm',
     ]);
   }
 
@@ -1106,8 +1104,6 @@ function runtimeSkillNameToDownstreamSkillCode(skillName: string): DownstreamRec
       return 'ext.visit_conversation_understanding';
     case 'customer-needs-todo-analysis':
       return 'ext.customer_needs_todo_analysis';
-    case 'problem-statement':
-      return 'ext.problem_statement_pm';
     case 'customer-value-positioning':
       return 'ext.customer_value_positioning_pm';
     default:

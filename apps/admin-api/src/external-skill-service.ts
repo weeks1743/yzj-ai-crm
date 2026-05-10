@@ -187,7 +187,7 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     route: '/chat/conversation-understanding',
     owner: '销售分析能力组',
     sla: 'P95 < 20 秒',
-    summary: '负责将拜访录音或纪要整理成可复用的会话理解资产，供后续需求和问题分析复用。',
+    summary: '负责将拜访录音或纪要整理成可复用的会话理解资产，供后续需求分析和价值定位复用。',
     requestPlaceholder:
       '例如：基于一段客户拜访纪要，输出摘要、关键事实、承诺事项和风险信号。',
   },
@@ -209,23 +209,6 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
       '例如：基于一次客户拜访纪要，拆出客户需求、我方待办和责任归属。',
   },
   {
-    id: 'ext-005',
-    label: '问题陈述',
-    skillCode: 'ext.problem_statement_pm',
-    runtimeSkillName: 'problem-statement',
-    provider: SKILL_RUNTIME_PROVIDER_CODE,
-    requiredDependencies: ['env:DEEPSEEK_API_KEY'],
-    artifactKind: 'markdown',
-    assetMaterialization: RECORDING_ANALYSIS_ASSET_MATERIALIZATION,
-    trigger: '问题定义 / PRD 前置澄清',
-    route: '/chat/problem-statement',
-    owner: '销售分析能力组',
-    sla: 'P95 < 20 秒',
-    summary: '负责把需求、约束和影响范围整理成统一问题陈述，供方案推进和内部评审使用。',
-    requestPlaceholder:
-      '例如：将“客户资料录入效率低”整理成用户视角的问题陈述和约束背景。',
-  },
-  {
     id: 'ext-006',
     label: '客户价值定位',
     skillCode: 'ext.customer_value_positioning_pm',
@@ -238,9 +221,9 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     route: '/chat/value-positioning',
     owner: '销售分析能力组',
     sla: 'P95 < 20 秒',
-    summary: '负责把客户问题映射到金蝶价值表达，是从分析结论走向推进话术的外部供给能力。',
+    summary: '负责把客户需求与业务目标映射到金蝶价值表达，是从分析结论走向推进话术的外部供给能力。',
     requestPlaceholder:
-      '例如：基于客户问题陈述，输出金蝶可交付的价值主张、推进话术和下一步建议。',
+      '例如：基于客户需求工作待办分析，输出金蝶可交付的价值主张、推进话术和下一步建议。',
   },
   {
     id: 'ext-009',

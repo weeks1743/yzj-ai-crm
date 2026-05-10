@@ -39,10 +39,10 @@ test('buildAnchorIdentity keeps recording and analysis artifacts stable by forma
   assert.equal(
     buildAnchorIdentity(anchors, {
       kind: 'analysis_material',
-      sourceToolCode: 'ext.problem_statement_pm',
-      metadata: { skillCode: 'ext.problem_statement_pm' },
+      sourceToolCode: 'ext.customer_value_positioning_pm',
+      metadata: { skillCode: 'ext.customer_value_positioning_pm' },
     }),
-    'analysis_material:followup:followup-bsm:skill:ext.problem_statement_pm',
+    'analysis_material:followup:followup-bsm:skill:ext.customer_value_positioning_pm',
   );
   assert.equal(
     buildAnchorIdentity(

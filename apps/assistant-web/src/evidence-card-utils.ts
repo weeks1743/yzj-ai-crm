@@ -11,7 +11,6 @@ const imageEnabledSourceToolCodes = new Set([
   'ext.company_research_pm',
   'ext.visit_conversation_understanding',
   'ext.customer_needs_todo_analysis',
-  'ext.problem_statement_pm',
   'ext.customer_value_positioning_pm',
   'ext.yunzhijia_visit_prep',
 ]);

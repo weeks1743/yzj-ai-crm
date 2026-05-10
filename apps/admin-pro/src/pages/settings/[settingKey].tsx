@@ -481,8 +481,7 @@ const SettingsPage = () => {
                 dataSource={[
                   { capability: '会话理解', materials: '结构化分析 JSON、录音资料包', action: '拜访会话理解' },
                   { capability: '需求待办', materials: '结构化分析 JSON、录音资料包、客户资料、商机资料', action: '客户需求工作待办分析' },
-                  { capability: '问题陈述', materials: '结构化分析 JSON、需求待办、录音资料包', action: '问题陈述' },
-                  { capability: '价值定位', materials: '问题陈述、客户资料', action: '客户价值定位' },
+                  { capability: '价值定位', materials: '需求待办、会话理解、客户资料', action: '客户价值定位' },
                   { capability: '跟进记录生成', materials: '录音资料包、客户/商机', action: '新增拜访记录' },
                 ]}
               />

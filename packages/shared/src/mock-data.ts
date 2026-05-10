@@ -758,73 +758,20 @@ export const sceneAssemblyDrafts: SceneAssemblyDraft[] = [
     },
   },
   {
-    key: 'scene.problem_statement',
-    label: '问题陈述',
-    category: '分析场景',
-    salesStage: '方案澄清',
-    businessGoal: '将客户需求、约束和风险整理成统一的问题陈述，为方案沟通和内部评审提供口径。',
-    entityAnchor: '商机',
-    summary: '该场景把散落的需求和背景转成“问题定义”，帮助销售和解决方案团队对齐。',
-    triggerEntries: [
-      '/问题陈述 星海精工股份',
-      '把这次需求整理成问题陈述',
-    ],
-    upstreamAssets: ['需求待办分析结果', '商机信息', '关键约束与风险'],
-    outputs: ['问题背景', '约束条件', '影响范围', '优先级判断'],
-    orchestrationChain: ['消费需求待办结果', '整理背景与约束', '输出统一问题陈述'],
-    recordSkillDependencies: [
-      {
-        skillName: 'shadow.customer_get',
-        objectKey: 'customer',
-        operation: 'get',
-      },
-      {
-        skillName: 'shadow.opportunity_get',
-        objectKey: 'opportunity',
-        operation: 'get',
-      },
-      {
-        skillName: 'shadow.followup_get',
-        objectKey: 'followup',
-        operation: 'get',
-      },
-    ],
-    externalSkillDependencies: [
-      {
-        skillCode: 'ext.problem_statement_pm',
-        label: '问题陈述供给',
-      },
-    ],
-    boundaries: {
-      scene: [
-        '负责形成问题定义，不直接替代客户分析或方案设计。',
-      ],
-      shadow: [
-        '问题陈述所依赖的商机和跟进上下文由 shadow.* 技能读取。',
-      ],
-      external: [
-        '问题框架整理通过 ext.* 能力供给。',
-      ],
-      writeback: [
-        '输出默认沉淀为分析资产，不直接改写正式字段。',
-      ],
-    },
-  },
-  {
     key: 'scene.value_positioning',
     label: '客户价值定位',
     category: '分析场景',
     salesStage: '方案澄清',
     businessGoal: '把客户问题、业务目标与金蝶方案价值主张对齐，形成可进入方案推进阶段的价值表达。',
     entityAnchor: '客户 / 商机',
-    summary: '该场景仍属于拜访后的分析加工，用来把问题定义进一步收束成价值表达，供后续方案推进场景直接复用。',
+    summary: '该场景仍属于拜访后的分析加工，用来把需求与业务目标进一步收束成价值表达，供后续方案推进场景直接复用。',
     triggerEntries: [
       '/客户价值定位 星海精工股份',
       '帮我形成星海精工股份的价值定位话术',
     ],
-    upstreamAssets: ['问题陈述', '客户分析结果', '商机阶段', '历史跟进'],
+    upstreamAssets: ['客户需求工作待办分析', '拜访会话理解', '客户分析结果', '商机阶段', '历史跟进'],
     outputs: ['客户价值主张', '价值表达口径', '推进话术', '方案推进输入建议'],
-    orchestrationChain: ['读取问题陈述', '补充客户背景', '映射价值主张', '输出价值表达与推进输入'],
+    orchestrationChain: ['读取需求待办与会话理解', '补充客户背景', '映射价值主张', '输出价值表达与推进输入'],
     recordSkillDependencies: [
       {
         skillName: 'shadow.customer_get',
@@ -874,12 +821,12 @@ export const sceneAssemblyDrafts: SceneAssemblyDraft[] = [
     salesStage: '方案推进',
     businessGoal: '根据客户诉求和价值定位，在内部方案与案例资产中匹配可推进的候选方案。',
     entityAnchor: '客户 / 商机',
-    summary: '该场景承接问题陈述与客户价值定位，负责匹配方案知识和标杆案例，输出销售可继续推进的方案建议。',
+    summary: '该场景承接客户诉求与客户价值定位，负责匹配方案知识和标杆案例，输出销售可继续推进的方案建议。',
     triggerEntries: [
       '/方案匹配 星海精工股份',
       '帮我找和这家客户匹配的方案和案例',
     ],
-    upstreamAssets: ['客户价值定位', '问题陈述', '客户诉求摘要', '方案知识库', '标杆案例库'],
+    upstreamAssets: ['客户价值定位', '客户诉求摘要', '方案知识库', '标杆案例库'],
     outputs: ['候选方案清单', '匹配案例清单', '方案推进建议'],
     orchestrationChain: ['读取客户诉求与价值定位', '匹配方案知识条目', '筛选相似案例', '生成方案推进建议'],
     recordSkillDependencies: [
@@ -992,7 +939,7 @@ export const scenePlanPlaybooks: Record<SceneAssemblyKey, ScenePlanPlaybook> = {
       {
         key: 'compose_downstream',
         label: '加入下游分析',
-        description: '按需加入需求待办、问题陈述和客户价值定位。',
+        description: '按需加入需求待办和客户价值定位。',
         requirement: 'optional',
         skillCode: 'ext.customer_needs_todo_analysis',
         canSkip: true,
@@ -1176,50 +1123,6 @@ export const scenePlanPlaybooks: Record<SceneAssemblyKey, ScenePlanPlaybook> = {
     policies: sharedPlanPolicies,
     adminControls: ['待办写回确认', '责任人字段权限', '分析输出模板'],
   },
-  'scene.problem_statement': {
-    sceneKey: 'scene.problem_statement',
-    planModes: ['问题草稿', '评审口径'],
-    stepLibrary: [
-      {
-        key: 'load_problem_inputs',
-        label: '读取问题输入',
-        description: '消费需求待办、商机和跟进上下文。',
-        requirement: 'required',
-        skillCode: 'shadow.opportunity_get',
-        canSkip: true,
-        canPause: true,
-      },
-      {
-        key: 'draft_problem',
-        label: '生成问题陈述',
-        description: '整理背景、约束、影响范围和优先级。',
-        requirement: 'required',
-        skillCode: 'ext.problem_statement_pm',
-        canSkip: false,
-        canPause: true,
-      },
-    ],
-    variants: [
-      {
-        key: 'draft',
-        label: '问题草稿',
-        summary: '快速形成可讨论的问题定义。',
-        recommendedFor: '用户需要先和团队对齐方向。',
-        steps: ['draft_problem'],
-        userDecisions: ['是否补读商机上下文', '是否继续价值定位'],
-      },
-      {
-        key: 'review-ready',
-        label: '评审口径',
-        summary: '补齐上下文后生成可进入内部评审的问题口径。',
-        recommendedFor: '用户准备方案会或内部评审。',
-        steps: ['load_problem_inputs', 'draft_problem'],
-        userDecisions: ['是否强调风险', '是否压缩成一页材料'],
-      },
-    ],
-    policies: sharedPlanPolicies,
-    adminControls: ['商机读取权限', '问题陈述模板', '引用来源要求'],
-  },
   'scene.value_positioning': {
     sceneKey: 'scene.value_positioning',
     planModes: ['价值话术', '推进输入'],
@@ -1227,7 +1130,7 @@ export const scenePlanPlaybooks: Record<SceneAssemblyKey, ScenePlanPlaybook> = {
       {
         key: 'load_value_inputs',
         label: '读取价值输入',
-        description: '读取客户分析、问题陈述和商机上下文。',
+        description: '读取客户分析、需求待办和商机上下文。',
         requirement: 'conditional',
         skillCode: 'shadow.customer_get',
         canSkip: true,
@@ -1271,7 +1174,7 @@ export const scenePlanPlaybooks: Record<SceneAssemblyKey, ScenePlanPlaybook> = {
       {
         key: 'load_solution_inputs',
         label: '读取方案输入',
-        description: '消费问题陈述、价值定位和客户诉求。',
+        description: '消费价值定位和客户诉求。',
         requirement: 'required',
         skillCode: 'shadow.opportunity_get',
         canSkip: true,
@@ -1412,33 +1315,6 @@ export const externalSkillRows: ExternalSkillCatalogItem[] = [
     summary: '负责把会话理解结果转成需求清单与执行待办，是拜访后闭环的中间分析节点。',
   },
   {
-    id: 'ext-005',
-    label: '问题陈述',
-    skillCode: 'ext.problem_statement_pm',
-    type: '外部技能',
-    trigger: '问题定义 / PRD 前置澄清',
-    route: '/chat/problem-statement',
-    dependencies: ['env:DEEPSEEK_API_KEY'],
-    status: '运行中',
-    implementationType: 'skill',
-    supportsInvoke: true,
-    runtimeSkillName: 'problem-statement',
-    debugMode: 'skill_job',
-    debugConfig: {
-      defaultModel: 'deepseek-v4-flash',
-      supportedModels: ['deepseek-v4-flash', 'deepseek-v4-pro'],
-      supportsAttachments: true,
-      supportsWorkingDirectory: true,
-      requestPlaceholder: '例如：将“客户资料录入效率低”整理成用户视角的问题陈述和约束背景。',
-      artifactKind: 'markdown',
-    },
-    provider: 'skill-runtime',
-    model: 'deepseek-v4-flash',
-    owner: '销售分析能力组',
-    sla: 'P95 < 20 秒',
-    summary: '负责把需求、约束和影响范围整理成统一问题陈述，供方案推进和内部评审使用。',
-  },
-  {
     id: 'ext-006',
     label: '客户价值定位',
     skillCode: 'ext.customer_value_positioning_pm',
@@ -1456,14 +1332,14 @@ export const externalSkillRows: ExternalSkillCatalogItem[] = [
       supportedModels: ['deepseek-v4-flash', 'deepseek-v4-pro'],
       supportsAttachments: true,
       supportsWorkingDirectory: true,
-      requestPlaceholder: '例如：基于客户问题陈述，输出金蝶可交付的价值主张、推进话术和下一步建议。',
+      requestPlaceholder: '例如：基于客户需求工作待办分析，输出金蝶可交付的价值主张、推进话术和下一步建议。',
       artifactKind: 'markdown',
     },
     provider: 'skill-runtime',
     model: 'deepseek-v4-flash',
     owner: '销售分析能力组',
     sla: 'P95 < 20 秒',
-    summary: '负责把客户问题映射到金蝶价值表达，是从分析结论走向推进话术的外部供给能力。',
+    summary: '负责把客户需求与业务目标映射到金蝶价值表达，是从分析结论走向推进话术的外部供给能力。',
   },
   {
     id: 'ext-009',
@@ -1791,7 +1667,7 @@ export const agentPlanTemplates: AgentPlanTemplate[] = [
         key: 'analyze-evidence',
         title: '基于证据分析卡点',
         actionType: 'analyze',
-        toolRefs: ['ext.problem_statement_pm'],
+        toolRefs: ['ext.customer_value_positioning_pm'],
         required: true,
         skippable: false,
         confirmationRequired: false,
@@ -1901,7 +1777,7 @@ export const agentRuntimeTraces: AgentRuntimeTrace[] = [
       steps: ['确认目标对象', '读取上下文', '分析证据', '输出卡点'],
     },
     executionState: 'completed',
-    toolChain: ['record.customer.search', 'ext.problem_statement_pm'],
+    toolChain: ['record.customer.search', 'ext.customer_value_positioning_pm'],
     evidenceRefs: ['followup:2026-04-18', 'research:snapshot-0420'],
     result: '输出阶段判断、卡点和下一步建议，并标注依据来源。',
     timestamp: '2026-04-27 17:01:05',
@@ -1942,22 +1818,6 @@ export const traceLogs: TraceLog[] = [
     ],
     writebackResult: '客户分析卡片已生成，研究快照作为外部供给被复用',
     timestamp: '2026-04-23 09:18:22',
-  },
-  {
-    traceId: 'trace-20260423-021',
-    taskId: 'task-problem-004',
-    eid: tenantContext.eid,
-    appId: tenantContext.appId,
-    scene: 'scene.problem_statement',
-    status: '成功',
-    toolChain: [
-      'scene.needs_todo_analysis',
-      'shadow.opportunity.get',
-      'shadow.followup.get',
-      'ext.problem_statement_pm',
-    ],
-    writebackResult: '问题陈述结果已落盘，并可供客户价值定位继续消费',
-    timestamp: '2026-04-23 10:51:03',
   },
 ];
 
@@ -2211,15 +2071,6 @@ export const conversationSessions: ConversationSession[] = [
     scene: 'needs-todo-analysis',
   },
   {
-    key: 'conv-problem-statement',
-    label: '问题陈述',
-    route: '/chat/problem-statement',
-    group: '固定会话',
-    lastMessage: '把需求和约束整理成统一的问题定义。',
-    updatedAt: '09:22',
-    scene: 'problem-statement',
-  },
-  {
     key: 'conv-value-positioning',
     label: '客户价值定位',
     route: '/chat/value-positioning',
@@ -2258,7 +2109,7 @@ export const sceneTasks: SceneTask[] = [
     progress: 82,
     owner: '高远',
     entityAnchor: '商机/AGI 产线升级项目',
-    nextAction: '确认跟进记录草稿并查看问题陈述草案',
+    nextAction: '确认跟进记录草稿并查看客户价值定位草案',
     traceId: 'trace-20260423-001',
     taskId: 'task-loop-009',
     eid: tenantContext.eid,
@@ -2280,22 +2131,6 @@ export const sceneTasks: SceneTask[] = [
     eid: tenantContext.eid,
     appId: tenantContext.appId,
     updatedAt: '09:18',
-  },
-  {
-    id: 'task-problem-004',
-    title: '远澜生物问题陈述',
-    scene: '问题陈述',
-    route: '/chat/problem-statement',
-    status: '已完成',
-    progress: 100,
-    owner: '高远',
-    entityAnchor: '客户/远澜生物科技',
-    nextAction: '进入客户价值定位，形成推进话术',
-    traceId: 'trace-20260423-021',
-    taskId: 'task-problem-004',
-    eid: tenantContext.eid,
-    appId: tenantContext.appId,
-    updatedAt: '10:51',
   },
 ];
 
@@ -2498,7 +2333,7 @@ export const assistantScenes: Record<string, AssistantScene> = {
     title: '拜访会话理解',
     subtitle: '把录音和纪要转成事实、承诺与风险',
     headline: '拜访会话理解既能单独使用，也能被复合 Plan 动态加入。',
-    description: '该场景围绕拜访录音和纪要，抽取关键事实、客户承诺事项和风险信号，为后续需求待办与问题陈述提供上游输入。',
+    description: '该场景围绕拜访录音和纪要，抽取关键事实、客户承诺事项和风险信号，为后续需求待办与客户价值定位提供上游输入。',
     defaultInput: '/拜访会话理解 星海精工股份',
     prompts: [
       { key: 'v1', label: '/拜访会话理解 星海精工股份', description: '理解会话摘要、承诺事项和风险。' },
@@ -2511,7 +2346,7 @@ export const assistantScenes: Record<string, AssistantScene> = {
     ],
     guides: [
       { key: 'vg1', title: '先事实后判断', description: '先把客户说了什么讲清楚，再进入需求和问题拆解。' },
-      { key: 'vg2', title: '输出可被下游复用', description: '会话理解结果会被需求待办和问题陈述继续消费。' },
+      { key: 'vg2', title: '输出可被下游复用', description: '会话理解结果会被需求待办和客户价值定位继续消费。' },
     ],
     taskCards: [
       { key: 'vt1', title: '输出结构', status: '4 块', description: '会话摘要、关键事实、承诺事项、风险信号。', metric: '统一模板' },
@@ -2544,47 +2379,21 @@ export const assistantScenes: Record<string, AssistantScene> = {
       { key: 'nt2', title: '复合 Plan 复用', status: '100%', description: '录音处理 Plan 可按需加入这一层。', metric: '也支持独立访问' },
     ],
   },
-  'problem-statement': {
-    key: 'problem-statement',
-    route: '/chat/problem-statement',
-    title: '问题陈述',
-    subtitle: '把需求、约束与影响范围整理成统一问题定义',
-    headline: '问题陈述是从需求走向方案沟通前最关键的整理节点。',
-    description: '该场景会把需求待办分析结果收敛为问题背景、约束条件、影响范围和优先级，帮助销售和方案团队统一口径。',
-    defaultInput: '/问题陈述 星海精工股份',
-    prompts: [
-      { key: 'ps1', label: '/问题陈述 星海精工股份', description: '基于需求待办结果形成统一问题定义。' },
-      { key: 'ps2', label: '/问题陈述 远澜生物科技', description: '把初访需求整理成可讨论的问题陈述。' },
-      { key: 'ps3', label: '/问题陈述 星海精工股份 重点看约束', description: '优先梳理交付、ROI 和迁移约束。' },
-    ],
-    hotTopics: [
-      { key: 'ph1', title: '问题陈述和需求待办有什么区别？', description: '前者强调统一问题定义，后者强调执行动作。' },
-      { key: 'ph2', title: '它适合什么阶段？', description: '适合需求澄清和客户价值定位前的口径统一。' },
-    ],
-    guides: [
-      { key: 'pg1', title: '从动作回到问题', description: '先看客户到底想解决什么，再看我们怎么做。' },
-      { key: 'pg2', title: '约束单独成块', description: '预算、周期、现有系统约束需要单独呈现。' },
-    ],
-    taskCards: [
-      { key: 'pt1', title: '标准输出', status: '4 块', description: '问题背景、约束条件、影响范围、优先级。', metric: '适合内部评审' },
-      { key: 'pt2', title: '下游衔接', status: '1 跳', description: '输出可直接进入客户价值定位。', metric: '减少重复组织语言' },
-    ],
-  },
   'value-positioning': {
     key: 'value-positioning',
     route: '/chat/value-positioning',
     title: '客户价值定位',
     subtitle: '把客户问题翻译成金蝶价值主张和推进话术',
     headline: '价值定位属于拜访后分析的收束一跳，把分析结论转成可进入方案推进的表达。',
-    description: '该场景会消费客户分析、问题陈述和商机上下文，把客户问题映射成金蝶的价值表达、推进话术和方案推进输入建议。',
+    description: '该场景会消费客户分析、需求待办和商机上下文，把客户需求映射成金蝶的价值表达、推进话术和方案推进输入建议。',
     defaultInput: '/客户价值定位 星海精工股份',
     prompts: [
-      { key: 'vp1', label: '/客户价值定位 星海精工股份', description: '基于问题陈述输出价值主张和推进话术。' },
+      { key: 'vp1', label: '/客户价值定位 星海精工股份', description: '基于需求待办输出价值主张和推进话术。' },
       { key: 'vp2', label: '/客户价值定位 远澜生物科技', description: '把数字化改造诉求翻译成金蝶价值表达。' },
       { key: 'vp3', label: '/客户价值定位 星海精工股份 重点看 ROI', description: '优先形成 ROI 和交付相关表述。' },
     ],
     hotTopics: [
-      { key: 'vvh1', title: '价值定位吃哪些输入？', description: '问题陈述、客户分析、商机阶段和历史跟进都会被消费。' },
+      { key: 'vvh1', title: '价值定位吃哪些输入？', description: '需求待办、客户分析、商机阶段和历史跟进都会被消费。' },
       { key: 'vvh2', title: '它输出给谁看？', description: '首先给销售自己用，也适合给方案同事对齐口径。' },
     ],
     guides: [
@@ -2602,7 +2411,7 @@ export const assistantScenes: Record<string, AssistantScene> = {
     title: '方案匹配',
     subtitle: '基于客户诉求匹配内部方案和案例',
     headline: '这一步不再继续拆问题，而是把客户诉求映射到可讨论的方案候选。',
-    description: '该场景会消费问题陈述和客户价值定位，联动方案知识库和标杆案例库，形成下一轮方案推进建议。',
+    description: '该场景会消费客户诉求和客户价值定位，联动方案知识库和标杆案例库，形成下一轮方案推进建议。',
     defaultInput: '/方案匹配 星海精工股份',
     prompts: [
       { key: 'se1', label: '/方案匹配 星海精工股份', description: '基于当前客户诉求匹配内部方案和案例。' },
@@ -2619,7 +2428,7 @@ export const assistantScenes: Record<string, AssistantScene> = {
     ],
     taskCards: [
       { key: 'set1', title: '输出结构', status: '3 块', description: '候选方案、案例清单、推进建议。', metric: '服务下一轮方案推进' },
-      { key: 'set2', title: '主要输入', status: '2 类', description: '问题陈述和客户价值定位是主输入。', metric: '补充内部知识资产' },
+      { key: 'set2', title: '主要输入', status: '2 类', description: '客户诉求和客户价值定位是主输入。', metric: '补充内部知识资产' },
     ],
   },
   tasks: {
@@ -2632,7 +2441,7 @@ export const assistantScenes: Record<string, AssistantScene> = {
     defaultInput: '帮我汇总我今天所有待确认的任务。',
     prompts: [
       { key: 't1', label: '查看待确认写回', description: '聚焦客户、商机和跟进记录的确认动作。' },
-      { key: 't2', label: '查看录音处理 Plan 进度', description: '按 traceId 追踪从 mp3 到问题陈述的进度。' },
+      { key: 't2', label: '查看录音处理 Plan 进度', description: '按 traceId 追踪从 mp3 到客户价值定位的进度。' },
       { key: 't3', label: '查看客户分析复用', description: '确认哪些任务已经复用客户分析结果。' },
     ],
     hotTopics: [
@@ -2641,7 +2450,7 @@ export const assistantScenes: Record<string, AssistantScene> = {
     ],
     guides: [
       { key: 'tg1', title: '任务可追踪', description: '每个任务都绑定 traceId / taskId。' },
-      { key: 'tg2', title: '资产可回看', description: '录音、客户分析、问题陈述等结果都有资产记录。' },
+      { key: 'tg2', title: '资产可回看', description: '录音、客户分析、客户价值定位等结果都有资产记录。' },
     ],
     taskCards: [
       { key: 'tt1', title: '任务总数', status: '24 个', description: '当前个人范围内的活动任务。', metric: '3 个高优先级' },

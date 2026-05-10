@@ -44,7 +44,6 @@ import {
 const GENERIC_TEXT_SKILLS = new Set([
   'visit-conversation-understanding',
   'customer-needs-todo-analysis',
-  'problem-statement',
   'customer-value-positioning',
   'yunzhijia-visit-prep',
 ]);
