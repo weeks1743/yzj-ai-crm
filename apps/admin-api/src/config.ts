@@ -87,6 +87,9 @@ const ENV_COMPATIBILITY_HINTS = [
   '真实密钥和数据库密码只写入未提交的 .env 或 .env.production，不要写入 Git。',
 ];
 
+const DEFAULT_REPORT_CANVAS_SERVICE_BASE_URL = 'http://127.0.0.1:3020';
+const DEFAULT_REPORT_CANVAS_PUBLIC_BASE_URL = 'http://localhost:3020';
+
 const PLACEHOLDER_VALUE_PATTERN = /^(?:your[_-].*|<.+>|请填写.*|待填写.*|xxx+|placeholder)$/i;
 
 const SHADOW_OBJECT_META: Record<ShadowObjectKey, { label: string; envKey: string; enabled: boolean }> = {
@@ -335,13 +338,13 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
     ? parseHttpBaseUrl(env.TONGYI_AUDIO_PUBLIC_BASE_URL, 'TONGYI_AUDIO_PUBLIC_BASE_URL', envFilePath)
     : tongyiAudioServiceBaseUrl;
   const reportCanvasServiceBaseUrl = parseHttpBaseUrl(
-    env.REPORT_CANVAS_SERVICE_BASE_URL || 'http://127.0.0.1:3020',
+    env.REPORT_CANVAS_SERVICE_BASE_URL || DEFAULT_REPORT_CANVAS_SERVICE_BASE_URL,
     'REPORT_CANVAS_SERVICE_BASE_URL',
     envFilePath,
   );
   const reportCanvasPublicBaseUrl = env.REPORT_CANVAS_PUBLIC_BASE_URL?.trim()
     ? parseHttpBaseUrl(env.REPORT_CANVAS_PUBLIC_BASE_URL, 'REPORT_CANVAS_PUBLIC_BASE_URL', envFilePath)
-    : reportCanvasServiceBaseUrl;
+    : parseHttpBaseUrl(DEFAULT_REPORT_CANVAS_PUBLIC_BASE_URL, 'REPORT_CANVAS_PUBLIC_BASE_URL', envFilePath);
 
   return {
     yzj: {

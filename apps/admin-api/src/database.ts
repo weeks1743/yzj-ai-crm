@@ -355,6 +355,8 @@ export async function initializeDatabaseSchema(
         job_id TEXT,
         report_session_id TEXT,
         open_url TEXT,
+        code_artifact_id TEXT,
+        metadata_artifact_id TEXT,
         metadata_json JSONB,
         error_message TEXT,
         created_at TEXT NOT NULL,
@@ -363,6 +365,12 @@ export async function initializeDatabaseSchema(
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_artifact_report_generations_artifact`)}
       ON ${table('artifact_report_generations')}(artifact_id, updated_at DESC);
+
+      ALTER TABLE ${table('artifact_report_generations')}
+      ADD COLUMN IF NOT EXISTS code_artifact_id TEXT;
+
+      ALTER TABLE ${table('artifact_report_generations')}
+      ADD COLUMN IF NOT EXISTS metadata_artifact_id TEXT;
     `);
   }
 

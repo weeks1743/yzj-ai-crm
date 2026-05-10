@@ -147,8 +147,7 @@ export function createTestConfig(options: {
     reportCanvas: {
       baseUrl: options.reportCanvasBaseUrl ?? 'http://127.0.0.1:3020',
       publicBaseUrl: options.reportCanvasPublicBaseUrl
-        ?? options.reportCanvasBaseUrl
-        ?? 'http://127.0.0.1:3020',
+        ?? 'http://localhost:3020',
       timeoutMs: options.reportCanvasTimeoutMs ?? 600000,
       pollIntervalMs: options.reportCanvasPollIntervalMs ?? 2000,
     },

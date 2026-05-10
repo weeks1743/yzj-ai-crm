@@ -224,7 +224,6 @@ class AgentScenarioHarness {
           };
         },
       } as any,
-      companyResearchMaxWaitMs: 10,
     });
 
     this.registryCodes = runtimeParts.registry.list().map((tool) => tool.code).sort();

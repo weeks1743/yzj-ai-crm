@@ -23,6 +23,17 @@ body {
   height: 100% !important;
 }
 
+.sp-preview-actions,
+.sp-preview-action,
+.sp-preview-container .sp-button,
+.sp-preview-container [title="Open in CodeSandbox"],
+.sp-preview-container [title="Refresh"],
+.sp-preview-container [title="Restart"],
+.sp-cube-wrapper,
+[data-nextjs-dev-overlay] {
+  display: none !important;
+}
+
 /* Streaming cursor animation */
 .streaming-cursor {
   animation: blink 0.8s step-end infinite;

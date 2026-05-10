@@ -62,6 +62,8 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.equal(config.external.skillRuntime.baseUrl, 'http://127.0.0.1:3012');
   assert.equal(config.external.tongyiAudioService.baseUrl, 'http://127.0.0.1:3018');
   assert.equal(config.external.tongyiAudioService.publicBaseUrl, 'http://127.0.0.1:3018');
+  assert.equal(config.external.reportCanvasService.baseUrl, 'http://127.0.0.1:3020');
+  assert.equal(config.external.reportCanvasService.publicBaseUrl, 'http://localhost:3020');
 });
 
 test('loadAppConfig separates internal Tongyi audio service URL from public viewer URL', () => {

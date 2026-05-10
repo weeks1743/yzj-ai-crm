@@ -53,9 +53,13 @@ function buildJob(status: ExternalSkillJobResponse['status']): ExternalSkillJobR
             message: '报告已生成，可在新页面打开',
             data: {
               sessionId: 'rpt_001',
+              transientSessionId: 'rpt_001',
               subject: '上海松井机械有限公司 公司研究',
               openUrl: 'https://report.example/embed/rpt_001',
+              transientOpenUrl: 'https://report.example/embed/rpt_001',
               artifactId: 'artifact-metadata-001',
+              codeArtifactId: 'artifact-code-001',
+              metadataArtifactId: 'artifact-metadata-001',
               generatedAt: '2026-04-28T00:00:01.000Z',
               codeLength: 4096,
             },
@@ -85,6 +89,18 @@ test('ArtifactReportService reuses existing report generation for one company re
         return buildJob('queued');
       },
       getSkillJob: async () => buildJob('succeeded'),
+      getSkillJobArtifact: async (_jobId: string, artifactId: string) => ({
+        artifact: {
+          artifactId,
+          jobId: 'job-report-001',
+          fileName: 'report.jsx',
+          mimeType: 'text/plain',
+          byteSize: 64,
+          createdAt: '2026-04-28T00:00:01.000Z',
+          downloadPath: '/api/jobs/job-report-001/artifacts/artifact-code-001',
+        },
+        content: Buffer.from('export default function Report() { return <div>persisted</div>; }', 'utf8'),
+      }),
     } as any,
   });
 
@@ -94,7 +110,13 @@ test('ArtifactReportService reuses existing report generation for one company re
   assert.equal(first.status, 'succeeded');
   assert.equal(second.status, 'succeeded');
   assert.equal(second.reportSessionId, 'rpt_001');
-  assert.equal(second.openUrl, 'https://report.example/embed/rpt_001');
+  assert.equal(second.openUrl, '/api/artifacts/artifact-001/report/open');
+  assert.equal(second.codeArtifactId, 'artifact-code-001');
+  assert.equal(second.metadataArtifactId, 'artifact-metadata-001');
+  assert.equal(second.isPersistent, true);
+  const code = await service.getReportCode('artifact-001');
+  assert.match(code.code, /persisted/);
+  assert.equal(code.report.openUrl, '/api/artifacts/artifact-001/report/open');
   assert.equal(createCalls, 1);
 });
 
@@ -116,6 +138,9 @@ test('ArtifactReportService allows retry after failed report generation', async 
         return buildJob('queued');
       },
       getSkillJob: async () => buildJob('succeeded'),
+      getSkillJobArtifact: async () => {
+        throw new Error('unexpected artifact read');
+      },
     } as any,
   });
 
@@ -126,6 +151,49 @@ test('ArtifactReportService allows retry after failed report generation', async 
   assert.match(failed.errorMessage ?? '', /报告生成服务当前不可达/);
   assert.equal(retried.status, 'succeeded');
   assert.equal(createCalls, 2);
+});
+
+test('ArtifactReportService reports legacy transient-only reports as requiring regeneration', async () => {
+  const database = createInMemoryDatabase();
+  const repository = new ArtifactReportRepository(database);
+  const service = new ArtifactReportService({
+    config: createTestConfig(),
+    repository,
+    artifactService: {
+      getArtifact: async () => buildArtifactDetail(),
+    } as any,
+    externalSkillService: {
+      createSkillJob: async () => buildJob('queued'),
+      getSkillJob: async () => buildJob('queued'),
+      getSkillJobArtifact: async () => {
+        throw new Error('unexpected artifact read');
+      },
+    } as any,
+  });
+
+  await repository.reserve({
+    artifactId: 'artifact-001',
+    versionId: 'version-001',
+    title: '上海松井机械有限公司 公司研究',
+  });
+  await repository.updateStatus({
+    versionId: 'version-001',
+    status: 'succeeded',
+    reportSessionId: 'rpt_legacy',
+    openUrl: 'https://report.example/embed/rpt_legacy',
+    metadata: {
+      sessionId: 'rpt_legacy',
+    },
+  });
+
+  const report = await service.getReport('artifact-001');
+  assert.equal(report.status, 'succeeded');
+  assert.equal(report.isPersistent, false);
+  assert.match(report.errorMessage ?? '', /请重新生成报告/);
+  await assert.rejects(
+    () => service.getReportCode('artifact-001'),
+    /请重新生成报告/,
+  );
 });
 
 test('ArtifactReportService only accepts company research markdown artifacts', async () => {

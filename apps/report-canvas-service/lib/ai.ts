@@ -1,14 +1,17 @@
 import { createOpenAI } from "@ai-sdk/openai";
+import { getDashScopeBaseUrl, loadReportCanvasEnv } from "@/lib/env";
+
+loadReportCanvasEnv();
 
 export const dashscope = createOpenAI({
-  baseURL: process.env.DASHSCOPE_BASE_URL,
+  baseURL: getDashScopeBaseUrl(),
   apiKey: process.env.DASHSCOPE_API_KEY,
   name: "dashscope",
 });
 
 // 带联网搜索能力的 provider（用于规划阶段，注入 DashScope enable_search 参数）
 const dashscopeWithSearch = createOpenAI({
-  baseURL: process.env.DASHSCOPE_BASE_URL,
+  baseURL: getDashScopeBaseUrl(),
   apiKey: process.env.DASHSCOPE_API_KEY,
   name: "dashscope-search",
   fetch: async (url, options) => {

@@ -7,6 +7,7 @@ import {
 } from "ai";
 import { z } from "zod";
 import { model } from "@/lib/ai";
+import { getReportAiConfigError } from "@/lib/env";
 import { isReportRequest, CHAT_SYSTEM_PROMPT } from "@/lib/prompts";
 import { runPipeline, PipelineContext } from "@/lib/pipeline";
 
@@ -85,6 +86,23 @@ export async function POST(req: Request) {
     // 1. 有 existingCode 说明已有报告，用户意图是修改 → 走流水线
     // 2. 关键词匹配 → 新建报告 → 走流水线
     if (existingCode || isReportRequest(userQuery)) {
+      const configError = getReportAiConfigError();
+      if (configError) {
+        const stream = createUIMessageStream({
+          execute: async ({ writer }) => {
+            const textId = `config_${Date.now()}`;
+            writer.write({ type: "text-start", id: textId });
+            writer.write({
+              type: "text-delta",
+              id: textId,
+              delta: configError,
+            });
+            writer.write({ type: "text-end", id: textId });
+          },
+        });
+        return createUIMessageStreamResponse({ stream });
+      }
+
       // 报告模式：使用 createUIMessageStream + 5 阶段 pipeline
       const stream = createUIMessageStream({
         execute: async ({ writer }) => {

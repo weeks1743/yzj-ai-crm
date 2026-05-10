@@ -125,6 +125,7 @@ import {
 import {
   canGenerateEvidenceImage,
   getEvidenceCardTitle,
+  isCompanyResearchEvidenceCard,
   isRecordingMaterialEvidenceCard,
   sanitizeEvidenceText,
 } from './evidence-card-utils';
@@ -326,6 +327,7 @@ type OpenArtifactHandler = (evidence: AssistantEvidenceCard) => void;
 type OpenRecordingEvidenceHandler = (evidence: AssistantEvidenceCard) => void;
 type ArtifactActionTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title' | 'kind' | 'sourceToolCode'>;
 type GenerateImageHandler = (target: ArtifactActionTarget) => void;
+type GenerateReportHandler = (target: Pick<ArtifactActionTarget, 'artifactId' | 'versionId' | 'title'>) => void;
 type GenerateMarkdownImageHandler = (target: VisitPrepMarkdownImageTarget) => void;
 type MetaQuestionSubmitHandler = (input: {
   runId: string;
@@ -402,6 +404,9 @@ interface ArtifactReportPayload {
   jobId?: string;
   reportSessionId?: string;
   openUrl?: string;
+  codeArtifactId?: string;
+  metadataArtifactId?: string;
+  isPersistent: boolean;
   metadata?: Record<string, unknown>;
   errorMessage?: string | null;
   createdAt?: string;
@@ -1685,9 +1690,22 @@ function getReportButtonLabel(report?: ArtifactReportPayload) {
     return '报告生成中';
   }
   if (report.status === 'succeeded') {
-    return '报告已生成';
+    return report.isPersistent ? '报告已生成' : '重新生成报告';
   }
   return '重新生成报告';
+}
+
+function getReportErrorMessage(report?: ArtifactReportPayload) {
+  if (!report) {
+    return null;
+  }
+  if (report.status === 'succeeded' && !report.isPersistent) {
+    return report.errorMessage || '历史报告仅保存了临时链接，请重新生成后再打开。';
+  }
+  if (report.status === 'failed') {
+    return report.errorMessage || '报告生成失败，可重新生成。';
+  }
+  return null;
 }
 
 function downloadDataUrl(dataUrl: string, fileName: string): void {
@@ -3784,6 +3802,8 @@ function AssistantMessageContent({
   onOpenArtifact,
   onOpenRecordingEvidence,
   onGenerateImage,
+  onGenerateReport,
+  onOpenReport,
   onGenerateMarkdownImage,
   onOpenRecord,
   onSubmitQuestionCard,
@@ -3791,6 +3811,7 @@ function AssistantMessageContent({
   activeQuestionInteractionId,
   submittedQuestionInteractionIds,
   imageByArtifactId,
+  reportByArtifactId,
   imageByAttachmentKey,
 }: {
   identity: YzjAuthIdentityResponse;
@@ -3801,6 +3822,8 @@ function AssistantMessageContent({
   onOpenArtifact: OpenArtifactHandler;
   onOpenRecordingEvidence: OpenRecordingEvidenceHandler;
   onGenerateImage: GenerateImageHandler;
+  onGenerateReport: GenerateReportHandler;
+  onOpenReport: (report: ArtifactReportPayload) => void;
   onGenerateMarkdownImage: GenerateMarkdownImageHandler;
   onOpenRecord?: OpenRecordHandler;
   onSubmitQuestionCard?: MetaQuestionSubmitHandler;
@@ -3808,6 +3831,7 @@ function AssistantMessageContent({
   activeQuestionInteractionId?: string;
   submittedQuestionInteractionIds?: Set<string>;
   imageByArtifactId: Record<string, ArtifactImagePayload>;
+  reportByArtifactId: Record<string, ArtifactReportPayload>;
   imageByAttachmentKey: Record<string, MarkdownImagePayload>;
 }) {
   const evidence = (info.extraInfo?.evidence ?? []) as AssistantEvidenceCard[];
@@ -4028,15 +4052,19 @@ function AssistantMessageContent({
               ),
               description: (
                 <div>
-                  {(() => {
-                    const recordingMaterialEvidence = isRecordingMaterialEvidenceCard(item);
-                    const canGenerateImage = canGenerateEvidenceImage(item);
-                    const image = canGenerateImage
-                      ? imageByArtifactId[item.artifactId]
-                      : undefined;
-                    return (
-                      <>
-                        <div className={styles.evidenceCardActions}>
+	                  {(() => {
+	                    const recordingMaterialEvidence = isRecordingMaterialEvidenceCard(item);
+	                    const canGenerateImage = canGenerateEvidenceImage(item);
+	                    const canGenerateReport = isCompanyResearchEvidenceCard(item);
+	                    const image = canGenerateImage
+	                      ? imageByArtifactId[item.artifactId]
+	                      : undefined;
+	                    const report = canGenerateReport
+	                      ? reportByArtifactId[item.artifactId]
+	                      : undefined;
+	                    return (
+	                      <>
+	                        <div className={styles.evidenceCardActions}>
                           {recordingMaterialEvidence ? (
                             <Button
                               type="link"
@@ -4077,15 +4105,52 @@ function AssistantMessageContent({
                                     onGenerateImage(item);
                                   }}
                                 >
-                                  {getImageButtonLabel(image)}
-                                </Button>
-                              ) : null}
-                            </>
-                          )}
-                        </div>
-                        {image?.status === 'failed' && image.errorMessage ? (
-                          <div className={styles.evidenceErrorText}>{image.errorMessage}</div>
-                        ) : null}
+	                                  {getImageButtonLabel(image)}
+	                                </Button>
+	                              ) : null}
+	                              {canGenerateReport ? (
+	                                report?.status === 'succeeded' && report.openUrl && report.isPersistent ? (
+	                                  <Button
+	                                    type="link"
+	                                    size="small"
+	                                    icon={<FundProjectionScreenOutlined />}
+	                                    style={{ paddingInline: 0 }}
+	                                    onClick={(event) => {
+	                                      event.stopPropagation();
+	                                      onOpenReport(report);
+	                                    }}
+	                                  >
+	                                    打开报告
+	                                  </Button>
+	                                ) : (
+	                                  <Button
+	                                    type="link"
+	                                    size="small"
+	                                    icon={<FundProjectionScreenOutlined />}
+	                                    loading={isReportGenerating(report?.status)}
+	                                    disabled={isReportGenerating(report?.status)}
+	                                    style={{ paddingInline: 0 }}
+	                                    onClick={(event) => {
+	                                      event.stopPropagation();
+	                                      onGenerateReport(item);
+	                                    }}
+	                                  >
+	                                    {getReportButtonLabel(report)}
+	                                  </Button>
+	                                )
+	                              ) : null}
+	                            </>
+	                          )}
+	                        </div>
+	                        {image?.status === 'failed' && image.errorMessage ? (
+	                          <div className={styles.evidenceErrorText}>{image.errorMessage}</div>
+	                        ) : null}
+	                        {getReportErrorMessage(report) ? (
+	                          <div className={styles.evidenceErrorText}>{getReportErrorMessage(report)}</div>
+	                        ) : null}
+	                        {report?.status === 'failed' && report.errorMessage ? (
+	                          <div className={styles.evidenceErrorText}>{report.errorMessage}</div>
+	                        ) : null}
                         {image?.status === 'succeeded' && (image.previewUrl || image.previewDataUrl) ? (
                           <div
                             className={styles.evidenceImagePreview}
@@ -4617,6 +4682,8 @@ function buildRole(
   onOpenArtifact: OpenArtifactHandler,
   onOpenRecordingEvidence: OpenRecordingEvidenceHandler,
   onGenerateImage: GenerateImageHandler,
+  onGenerateReport: GenerateReportHandler,
+  onOpenReport: (report: ArtifactReportPayload) => void,
   onGenerateMarkdownImage: GenerateMarkdownImageHandler,
   onOpenRecord: OpenRecordHandler,
   onSubmitQuestionCard: MetaQuestionSubmitHandler,
@@ -4624,6 +4691,7 @@ function buildRole(
   activeQuestionInteractionId: string | undefined,
   submittedQuestionInteractionIds: Set<string>,
   imageByArtifactId: Record<string, ArtifactImagePayload>,
+  reportByArtifactId: Record<string, ArtifactReportPayload>,
   imageByAttachmentKey: Record<string, MarkdownImagePayload>,
 ): BubbleListProps['role'] {
   return {
@@ -4647,10 +4715,7 @@ function buildRole(
         </Avatar>
       ),
       header: (_, { status, extraInfo }) => {
-        const executionStatus = extraInfo?.agentTrace?.executionState?.status;
-        const config = executionStatus === 'running'
-          ? { title: '公司研究任务仍在运行', status: 'loading' }
-          : statusConfig[status as keyof typeof statusConfig];
+        const config = statusConfig[status as keyof typeof statusConfig];
         return config ? (
           <ThoughtChain.Item
             variant="solid"
@@ -4676,18 +4741,21 @@ function buildRole(
           info={info}
           styles={styles}
           markdownClassName={markdownClassName}
-          onOpenArtifact={onOpenArtifact}
-          onOpenRecordingEvidence={onOpenRecordingEvidence}
-          onGenerateImage={onGenerateImage}
-          onGenerateMarkdownImage={onGenerateMarkdownImage}
+	          onOpenArtifact={onOpenArtifact}
+	          onOpenRecordingEvidence={onOpenRecordingEvidence}
+	          onGenerateImage={onGenerateImage}
+	          onGenerateReport={onGenerateReport}
+	          onOpenReport={onOpenReport}
+	          onGenerateMarkdownImage={onGenerateMarkdownImage}
           onOpenRecord={onOpenRecord}
           onSubmitQuestionCard={onSubmitQuestionCard}
           onCancelQuestionCard={onCancelQuestionCard}
           activeQuestionInteractionId={activeQuestionInteractionId}
-          submittedQuestionInteractionIds={submittedQuestionInteractionIds}
-          imageByArtifactId={imageByArtifactId}
-          imageByAttachmentKey={imageByAttachmentKey}
-        />
+	          submittedQuestionInteractionIds={submittedQuestionInteractionIds}
+	          imageByArtifactId={imageByArtifactId}
+	          reportByArtifactId={reportByArtifactId}
+	          imageByAttachmentKey={imageByAttachmentKey}
+	        />
       ),
     },
     user: {
@@ -4712,7 +4780,7 @@ function ArtifactMarkdownDrawer({
   styles: ReturnType<typeof useStyles>['styles'];
   report?: ArtifactReportPayload;
   onClose: () => void;
-  onGenerateReport: (artifact: ArtifactDetailPayload['artifact']) => void;
+  onGenerateReport: GenerateReportHandler;
   onOpenReport: (report: ArtifactReportPayload) => void;
 }) {
   const anchorTags = buildArtifactAnchorTags(state.artifact?.anchors);
@@ -4746,7 +4814,7 @@ function ArtifactMarkdownDrawer({
           <Space>
             {canGenerateReport && state.artifact ? (
               <>
-                {report?.status === 'succeeded' && report.openUrl ? (
+                {report?.status === 'succeeded' && report.openUrl && report.isPersistent ? (
                   <Button
                     size="small"
                     type="primary"
@@ -5489,6 +5557,24 @@ function AssistantConversationRuntime({
   }, [fetchImageStatus, imageByArtifactId, visibleEvidenceCards]);
 
   useEffect(() => {
+    const missingReports = Array.from(new Set(
+      visibleEvidenceCards
+        .filter((item) => isCompanyResearchEvidenceCard(item) && item.artifactId && !reportByArtifactId[item.artifactId])
+        .map((item) => item.artifactId),
+    ));
+
+    if (!missingReports.length) {
+      return;
+    }
+
+    missingReports.forEach((artifactId) => {
+      void fetchReportStatus(artifactId).catch(() => {
+        // The report action can still be used when status lookup is unavailable.
+      });
+    });
+  }, [fetchReportStatus, reportByArtifactId, visibleEvidenceCards]);
+
+  useEffect(() => {
     const generatingArtifacts = Object.values(imageByArtifactId)
       .filter((item) => isImageGenerating(item.status))
       .map((item) => item.artifactId);
@@ -5597,6 +5683,10 @@ function AssistantConversationRuntime({
   );
 
   const handleOpenReport = React.useCallback((report: ArtifactReportPayload) => {
+    if (report.status === 'succeeded' && !report.isPersistent) {
+      messageApi.warning(report.errorMessage || '历史报告仅保存了临时链接，请重新生成后再打开。');
+      return;
+    }
     if (!report.openUrl) {
       messageApi.warning('报告链接尚未生成。');
       return;
@@ -5605,7 +5695,7 @@ function AssistantConversationRuntime({
   }, [messageApi]);
 
   const handleGenerateReport = React.useCallback(
-    async (artifact: ArtifactDetailPayload['artifact']) => {
+    async (artifact: Pick<ArtifactActionTarget, 'artifactId' | 'versionId' | 'title'>) => {
       const existing = reportByArtifactId[artifact.artifactId];
       if (isReportGenerating(existing?.status)) {
         return;
@@ -5618,6 +5708,7 @@ function AssistantConversationRuntime({
           versionId: artifact.versionId,
           title: artifact.title,
           status: 'queued',
+          isPersistent: false,
         },
       }));
 
@@ -5652,6 +5743,7 @@ function AssistantConversationRuntime({
             versionId: artifact.versionId,
             title: artifact.title,
             status: 'failed',
+            isPersistent: false,
             errorMessage,
           },
         }));
@@ -6012,19 +6104,22 @@ function AssistantConversationRuntime({
   }, [handleOpenRecord, requestFromRecordingTask]);
 
   const role = useMemo(
-    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleOpenRecordingEvidence, handleGenerateImage, handleGenerateMarkdownImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, imageByArtifactId, imageByAttachmentKey),
+    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleOpenRecordingEvidence, handleGenerateImage, handleGenerateReport, handleOpenReport, handleGenerateMarkdownImage, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, imageByArtifactId, reportByArtifactId, imageByAttachmentKey),
     [
       activeQuestionInteractionId,
       handleCancelQuestionCard,
       handleGenerateMarkdownImage,
       handleGenerateImage,
+      handleGenerateReport,
       handleOpenArtifactCard,
       handleOpenRecordingEvidence,
+      handleOpenReport,
       handleOpenRecord,
       handleSubmitQuestionCard,
       imageByAttachmentKey,
       imageByArtifactId,
       markdownClassName,
+      reportByArtifactId,
       runtimeScope.identity,
       submittedQuestionInteractionIds,
       styles,

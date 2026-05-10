@@ -12,6 +12,8 @@ interface ArtifactReportGenerationRow extends QueryResultRow {
   job_id: string | null;
   report_session_id: string | null;
   open_url: string | null;
+  code_artifact_id: string | null;
+  metadata_artifact_id: string | null;
   metadata_json: Record<string, unknown> | string | null;
   error_message: string | null;
   created_at: string;
@@ -27,6 +29,8 @@ export interface ArtifactReportGenerationRecord {
   jobId: string | null;
   reportSessionId: string | null;
   openUrl: string | null;
+  codeArtifactId: string | null;
+  metadataArtifactId: string | null;
   metadata: Record<string, unknown> | null;
   errorMessage: string | null;
   createdAt: string;
@@ -61,6 +65,8 @@ function mapRow(row: ArtifactReportGenerationRow): ArtifactReportGenerationRecor
     jobId: row.job_id,
     reportSessionId: row.report_session_id,
     openUrl: row.open_url,
+    codeArtifactId: row.code_artifact_id,
+    metadataArtifactId: row.metadata_artifact_id,
     metadata: parseMetadata(row.metadata_json),
     errorMessage: row.error_message,
     createdAt: row.created_at,
@@ -107,17 +113,21 @@ export class ArtifactReportRepository {
           job_id,
           report_session_id,
           open_url,
+          code_artifact_id,
+          metadata_artifact_id,
           metadata_json,
           error_message,
           created_at,
           updated_at
-        ) VALUES ($1, $2, $3, $4, 'queued', NULL, NULL, NULL, NULL, NULL, $5, $6)
+        ) VALUES ($1, $2, $3, $4, 'queued', NULL, NULL, NULL, NULL, NULL, NULL, NULL, $5, $6)
         ON CONFLICT (version_id) DO UPDATE SET
           title = EXCLUDED.title,
           status = 'queued',
           job_id = NULL,
           report_session_id = NULL,
           open_url = NULL,
+          code_artifact_id = NULL,
+          metadata_artifact_id = NULL,
           metadata_json = NULL,
           error_message = NULL,
           updated_at = EXCLUDED.updated_at
@@ -160,6 +170,8 @@ export class ArtifactReportRepository {
     status: ArtifactReportStatus;
     reportSessionId?: string | null;
     openUrl?: string | null;
+    codeArtifactId?: string | null;
+    metadataArtifactId?: string | null;
     metadata?: Record<string, unknown> | null;
     errorMessage?: string | null;
   }): Promise<ArtifactReportGenerationRecord> {
@@ -169,15 +181,19 @@ export class ArtifactReportRepository {
         SET status = $1,
             report_session_id = $2,
             open_url = $3,
-            metadata_json = $4::jsonb,
-            error_message = $5,
-            updated_at = $6
-        WHERE version_id = $7
+            code_artifact_id = $4,
+            metadata_artifact_id = $5,
+            metadata_json = $6::jsonb,
+            error_message = $7,
+            updated_at = $8
+        WHERE version_id = $9
       `,
       [
         input.status,
         input.reportSessionId ?? null,
         input.openUrl ?? null,
+        input.codeArtifactId ?? null,
+        input.metadataArtifactId ?? null,
         input.metadata ? JSON.stringify(input.metadata) : null,
         input.errorMessage ?? null,
         new Date().toISOString(),

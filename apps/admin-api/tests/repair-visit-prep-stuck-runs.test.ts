@@ -11,7 +11,7 @@ import { createInMemoryDatabase } from './test-helpers.js';
 
 test('parseVisitPrepJobId reads job id from running tool output summary', () => {
   assert.equal(
-    parseVisitPrepJobId('job=ead9549e-dba2-42ea-ba4d-bc26cc820175, status=running, 已超过同步等待窗口'),
+    parseVisitPrepJobId('job=ead9549e-dba2-42ea-ba4d-bc26cc820175, status=running'),
     'ead9549e-dba2-42ea-ba4d-bc26cc820175',
   );
   assert.equal(parseVisitPrepJobId('status=running'), null);
@@ -120,11 +120,11 @@ async function seedVisitPrepStuckRun(database: DatabaseConnection) {
       },
     ],
   };
-  const executionState = {
-    runId,
-    traceId,
-    status: 'running',
-    message: '客户拜访准备任务仍在运行',
+	  const executionState = {
+	    runId,
+	    traceId,
+	    status: 'running',
+	    message: '客户拜访准备任务处理中',
     startedAt: now,
     finishedAt: null,
     currentStepKey: 'execute-tool',
@@ -144,19 +144,19 @@ async function seedVisitPrepStuckRun(database: DatabaseConnection) {
     {
       id: visitPrepToolCallId,
       runId,
-      toolCode: 'ext.yunzhijia_visit_prep',
-      status: 'running',
-      inputSummary: '绍兴贝斯美化工股份有限公司',
-      outputSummary: `job=${jobId}, status=running, 已超过同步等待窗口`,
+	      toolCode: 'ext.yunzhijia_visit_prep',
+	      status: 'running',
+	      inputSummary: '绍兴贝斯美化工股份有限公司',
+	      outputSummary: `job=${jobId}, status=running`,
       startedAt: now,
       finishedAt: null,
       errorMessage: null,
     },
   ];
   const extraInfo = {
-    feedback: 'default',
-    sceneKey: 'chat',
-    headline: '客户拜访准备任务仍在运行',
+	    feedback: 'default',
+	    sceneKey: 'chat',
+	    headline: '客户拜访准备任务处理中',
     references: ['客户拜访准备助手'],
     evidence: [],
     uiSurfaces: [],
@@ -202,7 +202,7 @@ async function seedVisitPrepStuckRun(database: DatabaseConnection) {
       )
       VALUES
         ('message-user-stuck', $1, $2, 'user', '/拜访准备 贝斯美', '[]'::jsonb, '{}'::jsonb, $3),
-        ($4, $1, $2, 'assistant', '## 客户拜访准备仍在运行', '[]'::jsonb, $5::jsonb, $3)
+	        ($4, $1, $2, 'assistant', '## 客户拜访准备处理中', '[]'::jsonb, $5::jsonb, $3)
     `,
     [runId, conversationKey, now, assistantMessageId, JSON.stringify(extraInfo)],
   );
@@ -211,7 +211,7 @@ async function seedVisitPrepStuckRun(database: DatabaseConnection) {
       INSERT INTO ${database.table('agent_conversations')} (
         conversation_key, operator_open_id, label, route, group_name, last_message, updated_label, scene_key, created_at, updated_at
       )
-      VALUES ($1, 'operator-001', '贝斯美', '/chat', '默认', '## 客户拜访准备仍在运行', '贝斯美', 'chat', $2, $2)
+	      VALUES ($1, 'operator-001', '贝斯美', '/chat', '默认', '## 客户拜访准备处理中', '贝斯美', 'chat', $2, $2)
     `,
     [conversationKey, now],
   );

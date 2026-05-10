@@ -204,8 +204,7 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
       reportCanvasService: {
         baseUrl: options.reportCanvasServiceBaseUrl ?? 'http://127.0.0.1:3020',
         publicBaseUrl: options.reportCanvasPublicBaseUrl
-          ?? options.reportCanvasServiceBaseUrl
-          ?? 'http://127.0.0.1:3020',
+          ?? 'http://localhost:3020',
       },
     },
     meta: {

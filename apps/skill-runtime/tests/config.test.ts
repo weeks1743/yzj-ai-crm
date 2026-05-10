@@ -23,6 +23,8 @@ test('loadAppConfig parses defaults and resolves skill runtime paths', () => {
   assert.equal(config.ark.webSearchModel, 'ep-web-search-001');
   assert.equal(config.storage.postgresUrl, 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev');
   assert.equal(config.storage.postgresSchema, 'skill_runtime');
+  assert.equal(config.reportCanvas.baseUrl, 'http://127.0.0.1:3020');
+  assert.equal(config.reportCanvas.publicBaseUrl, 'http://localhost:3020');
 });
 
 test('loadAppConfig rejects non-whitelisted default model', () => {

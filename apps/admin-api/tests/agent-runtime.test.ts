@@ -306,13 +306,12 @@ function createAgentTestService(input: {
   config?: AppConfig;
   repository: AgentRunRepository;
   intentFrame: IntentFrame | ((request: { query: string }) => IntentFrame);
-  shadowMetadataService?: unknown;
-  orgSyncRepository?: unknown;
-	  externalSkillService?: unknown;
-	  artifactService?: unknown;
-	  recordingTaskService?: unknown;
-	  companyResearchMaxWaitMs?: number;
-}) {
+	  shadowMetadataService?: unknown;
+	  orgSyncRepository?: unknown;
+		  externalSkillService?: unknown;
+		  artifactService?: unknown;
+		  recordingTaskService?: unknown;
+	}) {
   const config = input.config ?? createTestConfig();
   const resolveTestIntentFrame = (request: { query: string }) =>
     typeof input.intentFrame === 'function' ? input.intentFrame(request) : input.intentFrame;
@@ -370,10 +369,9 @@ function createAgentTestService(input: {
       getArtifact: async () => {
         throw new Error('not used');
       },
-	    }) as any,
-	    recordingTaskService: input.recordingTaskService as any,
-	    companyResearchMaxWaitMs: input.companyResearchMaxWaitMs,
-	  });
+		    }) as any,
+		    recordingTaskService: input.recordingTaskService as any,
+		  });
 
   return {
     service: new AgentService({
@@ -6865,10 +6863,9 @@ test('Agent runtime invokes visit prep with selected customer research and does 
   const visitPrepMarkdown = `# ${companyName} 拜访讲解准备\n\n## 一、客户画像速览\n贝斯美关注统一门户和流程审批。\n\n## 二、需求理解与方案匹配\n统一门户与统一流程管理匹配客户关注点。`;
   const customer = createUpdateLiveRecord('customer', 'customer-bsm-001', companyName);
   const { service } = createAgentTestService({
-    repository,
-    config: createTestConfig({ envFilePath: '/tmp/yzj-ai-crm-admin-api-test/.env' }),
-    companyResearchMaxWaitMs: 0,
-    intentFrame: companyIntent('贝斯美'),
+	    repository,
+	    config: createTestConfig({ envFilePath: '/tmp/yzj-ai-crm-admin-api-test/.env' }),
+	    intentFrame: companyIntent('贝斯美'),
     shadowMetadataService: {
       executeSearch: async (objectKey: ShadowObjectKey, searchInput: any) => {
         calls.push({ tool: `record.${objectKey}.search`, input: searchInput });
@@ -6971,10 +6968,9 @@ test('Agent runtime blocks visit prep when skill job fails without degraded mate
   const companyName = '绍兴贝斯美化工股份有限公司';
   const customer = createUpdateLiveRecord('customer', 'customer-bsm-001', companyName);
   const { service } = createAgentTestService({
-    repository,
-    config: createTestConfig({ envFilePath: '/tmp/yzj-ai-crm-admin-api-test/.env' }),
-    companyResearchMaxWaitMs: 0,
-    intentFrame: companyIntent('贝斯美'),
+	    repository,
+	    config: createTestConfig({ envFilePath: '/tmp/yzj-ai-crm-admin-api-test/.env' }),
+	    intentFrame: companyIntent('贝斯美'),
     shadowMetadataService: {
       executeSearch: async (objectKey: ShadowObjectKey, searchInput: any) => {
         calls.push({ tool: `record.${objectKey}.search`, input: searchInput });

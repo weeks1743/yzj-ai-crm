@@ -42,8 +42,6 @@ function createAgentTestService(input: {
   externalSkillService?: unknown;
   artifactService?: unknown;
   shadowMetadataService?: unknown;
-  companyResearchMaxWaitMs?: number;
-  companyResearchBackgroundMaxWaitMs?: number;
 }) {
   const config = input.config ?? createTestConfig();
   const runtimeParts = createCrmAgentRuntimeParts({
@@ -79,8 +77,6 @@ function createAgentTestService(input: {
       },
       search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
     }) as any,
-    companyResearchMaxWaitMs: input.companyResearchMaxWaitMs,
-    companyResearchBackgroundMaxWaitMs: input.companyResearchBackgroundMaxWaitMs,
   });
 
   return new AgentService({
@@ -535,79 +531,12 @@ test('AgentService reuses existing company research artifact without rerunning s
   assert.equal(response.toolCalls[0]?.status, 'succeeded');
 });
 
-test('AgentService keeps long-running company research as running instead of tool unavailable', async () => {
+test('AgentService waits for long-running company research and returns final artifact', async () => {
   const config = createTestConfig();
   const database = createInMemoryDatabase();
   const repository = new AgentRunRepository(database);
-  let artifactCreated = false;
   const runningJob = {
     jobId: 'job-running-001',
-    skillCode: 'ext.company_research_pm',
-    runtimeSkillName: 'company-research',
-    model: 'deepseek-v4-flash',
-    status: 'running',
-    finalText: null,
-    events: [],
-    artifacts: [],
-    error: null,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  } as const;
-  const service = createAgentTestService({
-    config,
-    repository,
-    companyResearchMaxWaitMs: 0,
-    intentFrameService: {
-      createIntentFrame: async () => companyIntent('上海松井机械有限公司'),
-    } as any,
-    externalSkillService: {
-      createSkillJob: async () => runningJob,
-      getSkillJob: async () => runningJob,
-      getSkillJobArtifact: async () => {
-        throw new Error('should not download unfinished skill artifact');
-      },
-    } as any,
-    artifactService: {
-      findLatestCompanyResearchArtifact: async () => null,
-      createCompanyResearchArtifact: async () => {
-        artifactCreated = true;
-        throw new Error('should not persist artifact before skill completion');
-      },
-      search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
-    } as any,
-  });
-
-  const response = await service.chat({
-    conversationKey: 'conv-agent-running-001',
-    sceneKey: 'chat',
-    query: '研究这家公司 上海松井机械有限公司',
-  });
-
-  assert.equal(response.success, true);
-  assert.equal(response.executionState.status, 'running');
-  assert.equal(response.executionState.currentStepKey, 'execute-tool');
-  assert.match(response.message.content, /公司研究仍在运行/);
-  assert.doesNotMatch(response.message.content, /job-running-001|Skill Job|Artifact|ext\.company_research_pm|preview/);
-  assert.equal(response.toolCalls.length, 2);
-  assert.equal(response.toolCalls[0]?.status, 'skipped');
-  assert.equal(response.toolCalls[1]?.status, 'running');
-  assert.equal(artifactCreated, false);
-
-  const runs = await database.query<{ status: string }>(`SELECT * FROM ${database.table('agent_runs')}`);
-  const toolCalls = await database.query<{ status: string; finished_at: string | null }>(
-    `SELECT * FROM ${database.table('agent_tool_calls')}`,
-  );
-  assert.equal(runs[0]?.status, 'running');
-  assert.equal(toolCalls.some((item) => item.status === 'skipped'), true);
-  assert.equal(toolCalls.some((item) => item.status === 'running' && item.finished_at === null), true);
-});
-
-test('AgentService completes long-running company research after background artifact backfill', async () => {
-  const config = createTestConfig();
-  const database = createInMemoryDatabase();
-  const repository = new AgentRunRepository(database);
-  const runningJob = {
-    jobId: 'job-background-001',
     skillCode: 'ext.company_research_pm',
     runtimeSkillName: 'company-research',
     model: 'deepseek-v4-flash',
@@ -634,15 +563,12 @@ test('AgentService completes long-running company research after background arti
       '## 核心风险',
       '需要关注行业周期、客户集中度与公开信息更新滞后风险。',
     ].join('\n'),
-    artifacts: [],
     updatedAt: new Date().toISOString(),
   } as const;
   let pollCount = 0;
   const service = createAgentTestService({
     config,
     repository,
-    companyResearchMaxWaitMs: 0,
-    companyResearchBackgroundMaxWaitMs: 1_200,
     intentFrameService: {
       createIntentFrame: async () => companyIntent('上海松井机械有限公司'),
     } as any,
@@ -660,8 +586,8 @@ test('AgentService completes long-running company research after background arti
       findLatestCompanyResearchArtifact: async () => null,
       createCompanyResearchArtifact: async () => ({
         artifact: {
-          artifactId: 'artifact-background-001',
-          versionId: 'version-background-001',
+          artifactId: 'artifact-running-001',
+          versionId: 'version-running-001',
           version: 1,
           title: '上海松井机械有限公司 公司研究',
           sourceToolCode: 'ext.company_research_pm',
@@ -677,14 +603,18 @@ test('AgentService completes long-running company research after background arti
   });
 
   const response = await service.chat({
-    conversationKey: 'conv-agent-background-001',
+    conversationKey: 'conv-agent-running-001',
     sceneKey: 'chat',
     query: '研究这家公司 上海松井机械有限公司',
   });
 
   assert.equal(response.success, true);
-  assert.equal(response.executionState.status, 'running');
-  await new Promise((resolve) => setTimeout(resolve, 1_350));
+  assert.equal(response.executionState.status, 'completed');
+  assert.match(response.message.content, /公司研究已完成/);
+  assert.doesNotMatch(response.message.content, /70 秒|已等待约|仍在运行|稍后查看产物|同步等待/);
+  assert.equal(response.toolCalls.some((item) => item.toolCode === 'ext.company_research_pm' && item.status === 'succeeded'), true);
+  assert.equal(response.toolCalls.some((item) => item.toolCode === 'artifact.company_research' && item.status === 'succeeded'), true);
+  assert.equal(response.message.extraInfo.evidence?.[0]?.artifactId, 'artifact-running-001');
 
   const runs = await database.query<{ status: string; evidence_refs_json: unknown }>(
     `SELECT status, evidence_refs_json FROM ${database.table('agent_runs')}`,
@@ -697,11 +627,11 @@ test('AgentService completes long-running company research after background arti
   );
 
   assert.equal(runs[0]?.status, 'completed');
-  assert.match(JSON.stringify(runs[0]?.evidence_refs_json), /artifact-background-001/);
+  assert.match(JSON.stringify(runs[0]?.evidence_refs_json), /artifact-running-001/);
   assert.equal(toolCalls.some((item) => item.tool_code === 'ext.company_research_pm' && item.status === 'succeeded' && item.finished_at), true);
   assert.equal(toolCalls.some((item) => item.tool_code === 'artifact.company_research' && item.status === 'succeeded'), true);
   assert.equal(messages.some((item) => item.role === 'assistant' && /公司研究已完成/.test(item.content)), true);
-  assert.match(JSON.stringify(messages.at(-1)?.extra_info_json), /artifact-background-001/);
+  assert.match(JSON.stringify(messages.at(-1)?.extra_info_json), /artifact-running-001/);
 });
 
 test('AgentService surfaces company research dependency failure without degraded artifact', async () => {
@@ -972,7 +902,6 @@ test('AgentService rejects real company research result for nonexistent company 
         },
         search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
       } as any,
-      companyResearchMaxWaitMs: 220_000,
     });
 
     const response = await service.chat({

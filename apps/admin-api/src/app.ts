@@ -84,6 +84,12 @@ function writeJson(
   response.end(JSON.stringify(payload));
 }
 
+function resolveRequestOrigin(request: IncomingMessage): string {
+  const protocol = String(request.headers['x-forwarded-proto'] ?? 'http').split(',')[0]?.trim() || 'http';
+  const host = String(request.headers['x-forwarded-host'] ?? request.headers.host ?? '').split(',')[0]?.trim();
+  return host ? `${protocol}://${host}` : 'http://127.0.0.1:3001';
+}
+
 function writeError(response: ServerResponse, error: unknown): void {
   if (error instanceof AppError) {
     const payload: ApiErrorResponse = {
@@ -670,6 +676,32 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           throw new ServiceUnavailableError('Artifact 服务未启用');
         }
         const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length === 5 && parts[3] === 'report' && parts[4] === 'open') {
+          if (!options.artifactReportService) {
+            throw new ServiceUnavailableError('Artifact 报告生成服务未启用');
+          }
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          await options.artifactReportService.getReportOpenUrl(artifactId);
+          const adminOrigin = resolveRequestOrigin(request);
+          const codeUrl = `${adminOrigin}/api/artifacts/${encodeURIComponent(artifactId)}/report/code`;
+          const target = `${options.config.external.reportCanvasService.publicBaseUrl.replace(/\/+$/, '')}/persistent-report?artifactId=${encodeURIComponent(artifactId)}&codeUrl=${encodeURIComponent(codeUrl)}`;
+          response.writeHead(302, {
+            Location: target,
+            'Access-Control-Allow-Origin': '*',
+          });
+          response.end();
+          return;
+        }
+
+        if (parts.length === 5 && parts[3] === 'report' && parts[4] === 'code') {
+          if (!options.artifactReportService) {
+            throw new ServiceUnavailableError('Artifact 报告生成服务未启用');
+          }
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          writeJson(response, 200, await options.artifactReportService.getReportCode(artifactId));
+          return;
+        }
+
         if (parts.length === 4 && parts[3] === 'image') {
           if (!options.artifactImageService) {
             throw new ServiceUnavailableError('Artifact 图片生成服务未启用');

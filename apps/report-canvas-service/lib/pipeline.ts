@@ -21,6 +21,17 @@ interface StreamWriter {
   write(chunk: Record<string, unknown>): void;
 }
 
+class PipelineError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PipelineError";
+  }
+}
+
+function getErrorMessage(error: unknown, fallback = "未知错误"): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 /**
  * 从 AI 文本中提取 React 代码块
  */
@@ -410,28 +421,30 @@ ${dataOutput}
     const code = extractCodeFromText(accumulated);
     if (code) {
       const qaResult = await qaCheck(code, writer);
-      writer.write({ type: "reasoning-end", id: "stage_3" });
       return qaResult.code;
     }
 
     // 代码可能没有代码块标记
     if (accumulated.includes("export default")) {
       const qaResult = await qaCheck(accumulated, writer);
-      writer.write({ type: "reasoning-end", id: "stage_3" });
       return qaResult.code;
     }
 
     writer.write({ type: "reasoning-delta", id: "stage_3", delta: "代码提取失败。\n" });
+    throw new PipelineError("报告代码生成失败，模型未返回可执行的 React 组件代码。");
   } catch (err) {
+    const message = getErrorMessage(err);
     writer.write({
       type: "reasoning-delta",
       id: "stage_3",
-      delta: `[生成出错: ${err instanceof Error ? err.message : "未知错误"}]\n`,
+      delta: `[生成出错: ${message}]\n`,
     });
+    throw err instanceof Error
+      ? err
+      : new PipelineError(`报告代码生成失败：${message}`);
+  } finally {
+    writer.write({ type: "reasoning-end", id: "stage_3" });
   }
-
-  writer.write({ type: "reasoning-end", id: "stage_3" });
-  return "";
 }
 
 // ===== QA Agent: 代码质量检查与自动修复 =====
@@ -697,8 +710,12 @@ async function qaCheck(code: string, writer: StreamWriter): Promise<QAResult> {
       } else {
         writer.write({ type: "reasoning-delta", id: "stage_3", delta: "AI 修复未返回有效代码，使用原始代码。\n" });
       }
-    } catch {
-      writer.write({ type: "reasoning-delta", id: "stage_3", delta: "AI 修复调用失败，使用原始代码。\n" });
+    } catch (error) {
+      writer.write({
+        type: "reasoning-delta",
+        id: "stage_3",
+        delta: `AI 修复调用失败，使用原始代码。原因：${getErrorMessage(error)}\n`,
+      });
     }
   } else if (issues.length > 0) {
     writer.write({

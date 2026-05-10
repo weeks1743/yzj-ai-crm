@@ -15,6 +15,11 @@ const imageEnabledSourceToolCodes = new Set([
   'ext.yunzhijia_visit_prep',
 ]);
 
+const companyResearchSourceToolCodes = new Set([
+  'external.company_research',
+  'ext.company_research_pm',
+]);
+
 export function isLikelyInternalEvidenceId(value?: string | null): boolean {
   const normalized = (value ?? '').replace(/\s+/g, '').trim();
   if (!normalized) {
@@ -51,11 +56,18 @@ export function isRecordingEvidenceCard(
   return isRecordingMaterialEvidenceCard(item);
 }
 
+export function isCompanyResearchEvidenceCard(
+  item: Pick<AssistantEvidenceCard, 'kind' | 'sourceToolCode'>,
+): boolean {
+  const kind = item.kind as EvidenceCardKind | undefined;
+  return kind === 'company_research' || companyResearchSourceToolCodes.has(item.sourceToolCode.trim());
+}
+
 export function canGenerateEvidenceImage(
   item: Pick<AssistantEvidenceCard, 'kind' | 'sourceToolCode'>,
 ): boolean {
   const kind = item.kind as EvidenceCardKind | undefined;
-  return kind === 'company_research'
+  return isCompanyResearchEvidenceCard(item)
     || kind === 'analysis_material'
     || imageEnabledSourceToolCodes.has(item.sourceToolCode.trim());
 }

@@ -460,10 +460,19 @@ test('POST /api/jobs runs report-generation and emits report_ready with open url
     const reportReady = job.events.find((event: any) => event.type === 'report_ready');
     assert.ok(reportReady);
     assert.equal(reportReady.data.sessionId, 'rpt_001');
+    assert.equal(reportReady.data.transientSessionId, 'rpt_001');
     assert.equal(reportReady.data.openUrl, 'https://report.example/embed/rpt_001');
+    assert.equal(typeof reportReady.data.codeArtifactId, 'string');
+    assert.equal(typeof reportReady.data.metadataArtifactId, 'string');
+    assert.notEqual(reportReady.data.codeArtifactId, reportReady.data.metadataArtifactId);
     assert.equal(job.artifacts.length, 3);
+    const codeArtifact = job.artifacts.find((artifact: any) => artifact.artifactId === reportReady.data.codeArtifactId);
+    assert.ok(codeArtifact);
+    assert.ok(codeArtifact.fileName.endsWith('-report.jsx'));
+    const artifactResponse = await fetch(`${harness.baseUrl}${codeArtifact.downloadPath}`);
+    assert.equal(artifactResponse.status, 200);
+    assert.match(await artifactResponse.text(), /export default function Report/);
     assert.ok(job.artifacts.some((artifact: any) => artifact.fileName.endsWith('-source.md')));
-    assert.ok(job.artifacts.some((artifact: any) => artifact.fileName.endsWith('-report.jsx')));
     assert.ok(job.artifacts.some((artifact: any) => artifact.fileName.endsWith('.json')));
   } finally {
     await harness.close();

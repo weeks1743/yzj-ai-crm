@@ -4,6 +4,9 @@ import type { AppConfig, SupportedDeepseekModel } from './contracts.js';
 import { SUPPORTED_DEEPSEEK_MODELS } from './contracts.js';
 import { ConfigError } from './errors.js';
 
+const DEFAULT_REPORT_CANVAS_SERVICE_BASE_URL = 'http://127.0.0.1:3020';
+const DEFAULT_REPORT_CANVAS_PUBLIC_BASE_URL = 'http://localhost:3020';
+
 interface LoadAppConfigOptions {
   env?: NodeJS.ProcessEnv;
   envFilePath?: string;
@@ -126,12 +129,12 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
   const rootDir = dirname(envFilePath);
   const defaultModel = parseDeepseekDefaultModel(env.DEEPSEEK_DEFAULT_MODEL);
   const reportCanvasBaseUrl = parseHttpBaseUrl(
-    env.REPORT_CANVAS_SERVICE_BASE_URL || 'http://127.0.0.1:3020',
+    env.REPORT_CANVAS_SERVICE_BASE_URL || DEFAULT_REPORT_CANVAS_SERVICE_BASE_URL,
     'REPORT_CANVAS_SERVICE_BASE_URL',
   );
   const reportCanvasPublicBaseUrl = env.REPORT_CANVAS_PUBLIC_BASE_URL?.trim()
     ? parseHttpBaseUrl(env.REPORT_CANVAS_PUBLIC_BASE_URL, 'REPORT_CANVAS_PUBLIC_BASE_URL')
-    : reportCanvasBaseUrl;
+    : parseHttpBaseUrl(DEFAULT_REPORT_CANVAS_PUBLIC_BASE_URL, 'REPORT_CANVAS_PUBLIC_BASE_URL');
 
   return {
     server: {

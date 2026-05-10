@@ -4,6 +4,7 @@ import {
   canGenerateEvidenceImage,
   compactEvidenceSnippet,
   getEvidenceCardTitle,
+  isCompanyResearchEvidenceCard,
   isRecordingEvidenceCard,
   isRecordingMaterialEvidenceCard,
   isLikelyInternalEvidenceId,
@@ -35,6 +36,27 @@ test('evidence card title stays product-facing', () => {
   });
 
   assert.equal(title, '上海松井机械有限公司 公司研究');
+});
+
+test('company research evidence is recognized for legacy and current cards', () => {
+  const legacyCard = {
+    artifactId: 'artifact-company-001',
+    versionId: 'version-company-001',
+    title: '上海松井机械有限公司 公司研究',
+    version: 1,
+    sourceToolCode: 'ext.company_research_pm',
+    anchorLabel: '上海松井机械有限公司',
+    snippet: '公司研究摘要',
+  };
+  const currentCard = {
+    ...legacyCard,
+    kind: 'company_research' as const,
+    sourceToolCode: 'external.company_research',
+  };
+
+  assert.equal(isCompanyResearchEvidenceCard(legacyCard), true);
+  assert.equal(isCompanyResearchEvidenceCard(currentCard), true);
+  assert.equal(canGenerateEvidenceImage(legacyCard), true);
 });
 
 test('recording evidence cards use recording-facing title fallback and disable image generation', () => {

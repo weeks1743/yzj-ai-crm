@@ -439,6 +439,9 @@ export interface ArtifactReportResponse {
   jobId?: string;
   reportSessionId?: string;
   openUrl?: string;
+  codeArtifactId?: string;
+  metadataArtifactId?: string;
+  isPersistent: boolean;
   metadata?: Record<string, unknown>;
   errorMessage?: string | null;
   createdAt?: string;

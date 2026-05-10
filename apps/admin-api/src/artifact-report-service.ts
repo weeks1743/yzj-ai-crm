@@ -14,15 +14,20 @@ import type {
 } from './artifact-report-repository.js';
 import type { ArtifactService } from './artifact-service.js';
 import type { ExternalSkillService } from './external-skill-service.js';
-import { BadRequestError, getErrorMessage } from './errors.js';
+import { BadRequestError, NotFoundError, getErrorMessage } from './errors.js';
 
 const REPORT_GENERATION_SKILL_CODE = 'ext.report_generation';
+const LEGACY_TRANSIENT_REPORT_MESSAGE = '该报告仅保存了临时会话链接，报告会话已过期或服务已重启，请重新生成报告。';
 
 interface ReportReadyEventData {
   sessionId?: string;
+  transientSessionId?: string;
   subject?: string;
   openUrl?: string;
+  transientOpenUrl?: string;
   artifactId?: string;
+  codeArtifactId?: string;
+  metadataArtifactId?: string;
   generatedAt?: string;
   codeLength?: number;
 }
@@ -70,6 +75,54 @@ export class ArtifactReportService {
       detail,
       await this.refreshIfNeeded(record),
     );
+  }
+
+  async getReportCode(artifactId: string): Promise<{
+    code: string;
+    fileName: string;
+    mimeType: string;
+    report: ArtifactReportResponse;
+  }> {
+    const detail = await this.options.artifactService.getArtifact(artifactId);
+    const record = await this.refreshIfNeededByVersion(detail.artifact.versionId);
+    if (!record || record.status === 'not_started') {
+      throw new NotFoundError('报告尚未生成，请先生成报告');
+    }
+    if (record.status !== 'succeeded') {
+      throw new BadRequestError(record.errorMessage || '报告尚未生成完成');
+    }
+    if (!record.jobId || !record.codeArtifactId) {
+      throw new NotFoundError(LEGACY_TRANSIENT_REPORT_MESSAGE);
+    }
+
+    const payload = await this.options.externalSkillService.getSkillJobArtifact(record.jobId, record.codeArtifactId);
+    const code = payload.content.toString('utf8');
+    if (!code.trim()) {
+      throw new NotFoundError('报告源码 artifact 为空，请重新生成报告');
+    }
+
+    return {
+      code,
+      fileName: payload.artifact.fileName,
+      mimeType: payload.artifact.mimeType,
+      report: this.toResponse(detail, record),
+    };
+  }
+
+  async getReportOpenUrl(artifactId: string): Promise<string> {
+    const detail = await this.options.artifactService.getArtifact(artifactId);
+    const record = await this.refreshIfNeededByVersion(detail.artifact.versionId);
+    if (!record || record.status === 'not_started') {
+      throw new NotFoundError('报告尚未生成，请先生成报告');
+    }
+    if (record.status !== 'succeeded') {
+      throw new BadRequestError(record.errorMessage || '报告尚未生成完成');
+    }
+    if (!record.codeArtifactId) {
+      throw new NotFoundError(LEGACY_TRANSIENT_REPORT_MESSAGE);
+    }
+
+    return this.buildPersistentReportOpenUrl(detail.artifact.artifactId);
   }
 
   async ensureReport(artifactId: string): Promise<ArtifactReportResponse> {
@@ -144,6 +197,11 @@ export class ArtifactReportService {
     }
   }
 
+  private async refreshIfNeededByVersion(versionId: string): Promise<ArtifactReportGenerationRecord | null> {
+    const record = await this.options.repository.getByVersion(versionId);
+    return record ? this.refreshIfNeeded(record) : null;
+  }
+
   private syncJobStatus(
     record: ArtifactReportGenerationRecord,
     job: ExternalSkillJobResponse,
@@ -164,7 +222,8 @@ export class ArtifactReportService {
     }
 
     const reportReady = this.findReportReadyEvent(job);
-    if (!reportReady?.sessionId || !reportReady.openUrl) {
+    const sessionId = reportReady?.transientSessionId || reportReady?.sessionId;
+    if (!sessionId || !reportReady?.openUrl) {
       return this.options.repository.updateStatus({
         versionId: record.versionId,
         status: 'failed',
@@ -172,13 +231,24 @@ export class ArtifactReportService {
       });
     }
 
+    const codeArtifactId = reportReady.codeArtifactId || null;
+    const persistentOpenUrl = codeArtifactId
+      ? this.buildPersistentReportOpenUrl(record.artifactId)
+      : reportReady.openUrl;
+
     return this.options.repository.updateStatus({
       versionId: record.versionId,
       status: 'succeeded',
-      reportSessionId: reportReady.sessionId,
-      openUrl: reportReady.openUrl,
+      reportSessionId: sessionId,
+      openUrl: persistentOpenUrl,
+      codeArtifactId,
+      metadataArtifactId: reportReady.metadataArtifactId || reportReady.artifactId || null,
       metadata: {
         ...reportReady,
+        sessionId,
+        transientSessionId: sessionId,
+        transientOpenUrl: reportReady.transientOpenUrl || reportReady.openUrl,
+        openUrl: persistentOpenUrl,
         jobId: job.jobId,
         finalText: job.finalText,
       },
@@ -202,6 +272,10 @@ export class ArtifactReportService {
       return 'failed';
     }
     return status;
+  }
+
+  private buildPersistentReportOpenUrl(artifactId: string): string {
+    return `/api/artifacts/${encodeURIComponent(artifactId)}/report/open`;
   }
 
   private writeMarkdownAttachment(detail: ArtifactDetailResponse): string {
@@ -228,8 +302,15 @@ export class ArtifactReportService {
       jobId: record?.jobId ?? undefined,
       reportSessionId: record?.reportSessionId ?? undefined,
       openUrl: record?.openUrl ?? undefined,
+      codeArtifactId: record?.codeArtifactId ?? undefined,
+      metadataArtifactId: record?.metadataArtifactId ?? undefined,
+      isPersistent: Boolean(record?.codeArtifactId),
       metadata: record?.metadata ?? undefined,
-      errorMessage: record?.errorMessage ?? null,
+      errorMessage: record?.errorMessage ?? (
+        record?.status === 'succeeded' && !record.codeArtifactId
+          ? LEGACY_TRANSIENT_REPORT_MESSAGE
+          : null
+      ),
       createdAt: record?.createdAt,
       updatedAt: record?.updatedAt,
     };

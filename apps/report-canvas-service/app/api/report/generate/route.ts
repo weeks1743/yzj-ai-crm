@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sessionStore } from "@/lib/session-store";
 import { startPipelineAsync } from "@/lib/pipeline-adapter";
+import { getReportAiConfigError } from "@/lib/env";
 
 export const maxDuration = 10; // This endpoint returns quickly; pipeline runs async
 
@@ -25,6 +26,14 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { error: { code: "BAD_REQUEST", message: "markdown 内容不能超过 200KB" } },
         { status: 400 }
+      );
+    }
+
+    const configError = getReportAiConfigError();
+    if (configError) {
+      return NextResponse.json(
+        { error: { code: "CONFIG_ERROR", message: configError } },
+        { status: 503 }
       );
     }
 

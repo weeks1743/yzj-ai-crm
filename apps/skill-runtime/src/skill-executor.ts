@@ -371,10 +371,6 @@ export class SkillExecutor {
     return attachmentPath;
   }
 
-  private buildReportPublicUrl(sessionId: string): string {
-    return `${this.options.config.reportCanvas.publicBaseUrl.replace(/\/+$/, '')}/embed/${encodeURIComponent(sessionId)}`;
-  }
-
   private async executeReportGeneration(input: {
     job: StoredJobRecord;
     stagedAttachments: string[];
@@ -399,11 +395,11 @@ export class SkillExecutor {
       query: input.job.requestText,
       ttlMinutes: 1440,
     });
-    const openUrl = this.buildReportPublicUrl(created.sessionId);
+    const transientOpenUrl = `${this.options.config.reportCanvas.publicBaseUrl.replace(/\/+$/, '')}/embed/${encodeURIComponent(created.sessionId)}`;
 
     await input.emitEvent('message', '报告 Canvas 会话已创建', {
       sessionId: created.sessionId,
-      openUrl,
+      openUrl: transientOpenUrl,
       statusUrl: created.statusUrl,
       resultUrl: created.resultUrl,
     });
@@ -465,8 +461,10 @@ export class SkillExecutor {
       JSON.stringify(
         {
           sessionId: created.sessionId,
+          transientSessionId: created.sessionId,
           subject,
-          openUrl,
+          openUrl: transientOpenUrl,
+          transientOpenUrl,
           sourceAttachment,
           codeArtifactId: codeArtifact.artifactId,
           created,
@@ -486,15 +484,19 @@ export class SkillExecutor {
 
     await input.emitEvent('report_ready', '报告已生成，可在新页面打开', {
       sessionId: created.sessionId,
+      transientSessionId: created.sessionId,
       subject,
-      openUrl,
+      openUrl: transientOpenUrl,
+      transientOpenUrl,
       artifactId: metadataArtifact.artifactId,
+      codeArtifactId: codeArtifact.artifactId,
+      metadataArtifactId: metadataArtifact.artifactId,
       generatedAt: result.metadata.generatedAt,
       codeLength: result.metadata.codeLength,
     });
 
     return {
-      finalText: `报告已生成：${subject}\n${openUrl}`,
+      finalText: `报告已生成：${subject}\n${transientOpenUrl}`,
     };
   }
 

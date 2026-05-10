@@ -101,11 +101,12 @@ Agent 治理
 - `agent_tool_calls`：保存实际工具调用、状态、输入摘要、输出摘要和错误。
 - `agent_confirmations`：保存写回预览、确认状态、确认输入和决策时间。
 
-对于真实联网公司研究这类长耗时工具，`ExecutionState.status` 可以保持为 `running`：
+0.10.11 起，主对话链路中的长耗时内外部技能不再持久化运行中占位回复：
 
-- `currentStepKey` 指向仍在执行的计划步骤。
-- 对应 `agent_tool_calls.status` 保持 `running`，不应被误写成 `tool_unavailable`。
-- 前端应展示“任务仍在运行 / 可稍后查看产物”，而不是按失败处理。
+- `/公司研究`、`/拜访准备` 等显性技能调用必须等待 Skill Job 进入 `succeeded` 或 `failed` 后再保存助手消息。
+- 成功时 `ExecutionState.status` 写为 `completed`，对应 `agent_tool_calls.status` 写为 `succeeded`。
+- 失败时按工具策略写为 `tool_unavailable` 或业务失败态，不生成降级资料。
+- 前端只展示请求过程中的临时 loading，不再把 70 秒运行中状态作为可回看的业务结果。
 
 后续“运行观测”页面应优先读取这些真实 run 数据，而不是只展示静态样例。
 
