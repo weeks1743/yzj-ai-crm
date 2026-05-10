@@ -23,7 +23,11 @@ export class AgentService {
 
   async chat(request: AgentChatRequest): Promise<AgentChatResponse> {
     const runId = request.resume?.runId || randomUUID();
-    const traceId = createTraceId();
+    const attemptTraceId = createTraceId();
+    const stableTraceId = request.resume?.runId
+      ? await this.options.repository.findTraceIdByRunId(request.resume.runId)
+      : null;
+    const traceId = stableTraceId ?? attemptTraceId;
     const startedAt = new Date().toISOString();
     const tenant = resolveAgentIsolationTenant(this.options.config, {
       eid: request.tenantContext?.eid,
@@ -54,7 +58,7 @@ export class AgentService {
       contextCandidates,
       resumeFallback,
     });
-    const message = buildMessage(request.sceneKey, output);
+    const message = buildMessage(request.sceneKey, output, attemptTraceId);
 
     try {
       await this.options.repository.saveRun({
@@ -100,7 +104,7 @@ export class AgentService {
   }
 }
 
-function buildMessage(sceneKey: string, output: AgentRuntimeOutput): AgentChatMessage {
+function buildMessage(sceneKey: string, output: AgentRuntimeOutput, attemptTraceId?: string): AgentChatMessage {
   return {
     role: 'assistant',
     content: output.content,
@@ -114,6 +118,7 @@ function buildMessage(sceneKey: string, output: AgentRuntimeOutput): AgentChatMe
       uiSurfaces: output.uiSurfaces,
       agentTrace: {
         traceId: output.executionState.traceId,
+        ...(attemptTraceId && attemptTraceId !== output.executionState.traceId ? { attemptTraceId } : {}),
         intentFrame: output.legacyIntentFrame,
         taskPlan: output.taskPlan,
         executionState: output.executionState,

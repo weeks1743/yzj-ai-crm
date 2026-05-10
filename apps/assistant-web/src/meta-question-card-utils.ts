@@ -20,6 +20,34 @@ export function shouldRenderMetaQuestionCard(input?: {
   return Boolean(input?.questionCard && input.status !== 'cancelled');
 }
 
+export function findLatestPendingQuestionInteractionId<T extends {
+  message: {
+    role: string;
+    extraInfo?: {
+      agentTrace?: {
+        pendingInteraction?: {
+          interactionId: string;
+          status: string;
+          questionCard?: AssistantMetaQuestionCard;
+        } | null;
+      };
+    };
+  };
+}>(messages: T[]): string | undefined {
+  return [...messages]
+    .reverse()
+    .find((item) => {
+      const pending = item.message.extraInfo?.agentTrace?.pendingInteraction;
+      return item.message.role === 'assistant'
+        && pending?.status === 'pending'
+        && shouldRenderMetaQuestionCard({
+          status: pending.status,
+          questionCard: pending.questionCard,
+        });
+    })
+    ?.message.extraInfo?.agentTrace?.pendingInteraction?.interactionId;
+}
+
 export function filterUpdateFieldQuestions(input: {
   questions: AssistantMetaQuestion[];
   currentValues?: AssistantMetaQuestionCard['currentValues'];

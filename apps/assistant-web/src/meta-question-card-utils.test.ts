@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { AssistantMetaQuestionCard } from './agent-api-provider';
 import {
   filterUpdateFieldQuestions,
+  findLatestPendingQuestionInteractionId,
   getMetaQuestionAnswerDisplay,
   getMetaQuestionCurrentDisplay,
   pickChangedMetaQuestionAnswers,
@@ -134,4 +135,34 @@ test('cancelled question card is not renderable', () => {
 
   assert.equal(shouldRenderMetaQuestionCard({ status: 'pending', questionCard: card }), true);
   assert.equal(shouldRenderMetaQuestionCard({ status: 'cancelled', questionCard: card }), false);
+});
+
+test('latest pending question interaction can be active even when no questions are present', () => {
+  const card: AssistantMetaQuestionCard = {
+    title: '还需要补充以下信息',
+    layout: 'missing_fields',
+    toolCode: 'record.customer.preview_create',
+    submitLabel: '补充并继续预览',
+    currentValues: {},
+    questions: [],
+  };
+
+  const interactionId = findLatestPendingQuestionInteractionId([
+    {
+      message: {
+        role: 'assistant',
+        extraInfo: {
+          agentTrace: {
+            pendingInteraction: {
+              interactionId: 'interaction-empty-card',
+              status: 'pending',
+              questionCard: card,
+            },
+          },
+        },
+      },
+    },
+  ]);
+
+  assert.equal(interactionId, 'interaction-empty-card');
 });

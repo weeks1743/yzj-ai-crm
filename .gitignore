@@ -3,6 +3,7 @@ node_modules
 apps/*/.venv
 .DS_Store
 .env
+deploy/
 dist
 .vite
 coverage
