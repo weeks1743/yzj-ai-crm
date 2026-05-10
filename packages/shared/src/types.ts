@@ -1348,7 +1348,6 @@ export interface AssistantScene {
     | 'customer-analysis'
     | 'conversation-understanding'
     | 'needs-todo-analysis'
-    | 'problem-statement'
     | 'value-positioning'
     | 'solution-matching'
     | 'tasks';

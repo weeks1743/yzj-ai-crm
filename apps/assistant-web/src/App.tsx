@@ -177,7 +177,6 @@ const DEPRECATED_WORKBENCH_SCENE_KEYS = new Set([
   'customer-analysis',
   'conversation-understanding',
   'needs-todo-analysis',
-  'problem-statement',
   'value-positioning',
   'solution-matching',
   'tasks',
@@ -186,7 +185,6 @@ const DEPRECATED_WORKBENCH_ROUTES = new Set([
   '/chat/customer-analysis',
   '/chat/conversation-understanding',
   '/chat/needs-todo-analysis',
-  '/chat/problem-statement',
   '/chat/value-positioning',
   '/chat/solution-matching',
   '/chat/tasks',
@@ -310,11 +308,6 @@ const recordingSkillActions: Array<{
     skillCode: 'ext.customer_needs_todo_analysis',
     label: '客户需求工作待办分析',
     icon: <FileSearchOutlined />,
-  },
-  {
-    skillCode: 'ext.problem_statement_pm',
-    label: '问题陈述',
-    icon: <CompassOutlined />,
   },
   {
     skillCode: 'ext.customer_value_positioning_pm',
@@ -493,7 +486,6 @@ interface RecordingTaskPayload {
 type RecordingSkillCode =
   | 'ext.visit_conversation_understanding'
   | 'ext.customer_needs_todo_analysis'
-  | 'ext.problem_statement_pm'
   | 'ext.customer_value_positioning_pm';
 
 interface RecordingSkillJobState {
@@ -4372,8 +4364,6 @@ function getSceneSlashCommand(sceneKey: string) {
       return '/公司研究';
     case 'needs-todo-analysis':
       return '/公司研究';
-    case 'problem-statement':
-      return '/公司研究';
     case 'value-positioning':
       return '/公司研究';
     case 'solution-matching':
@@ -4526,9 +4516,6 @@ function getSceneSourceTags(sceneKey: string) {
   }
   if (sceneKey === 'needs-todo-analysis') {
     return ['会话理解结果', '需求清单', '客户侧待办', '我方待办'];
-  }
-  if (sceneKey === 'problem-statement') {
-    return ['问题背景', '约束条件', '影响范围', '优先级'];
   }
   if (sceneKey === 'value-positioning') {
     return ['客户问题', '价值主张', '推进话术', '下一步建议'];
@@ -7162,7 +7149,6 @@ function App() {
       <Route path="/chat/customer-analysis" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/conversation-understanding" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/needs-todo-analysis" element={<Navigate to="/chat" replace />} />
-      <Route path="/chat/problem-statement" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/value-positioning" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/solution-matching" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/tasks" element={<Navigate to="/chat" replace />} />

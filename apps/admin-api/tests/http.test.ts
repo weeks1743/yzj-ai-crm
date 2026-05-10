@@ -1662,14 +1662,6 @@ async function createTestServer(options: {
             summary: 'needs todo summary',
           },
           {
-            skillName: 'problem-statement',
-            status: 'available',
-            supportsInvoke: true,
-            requiredDependencies: ['env:DEEPSEEK_API_KEY'],
-            missingDependencies: [],
-            summary: 'problem summary',
-          },
-          {
             skillName: 'customer-value-positioning',
             status: 'available',
             supportsInvoke: true,
@@ -2492,11 +2484,11 @@ test('HTTP endpoints execute image generation and return preview metadata', asyn
       implementationType?: string;
     }>;
     const imageSkill = skillsPayload.find((item) => item.skillCode === 'ext.image_generate');
-    const problemSkill = skillsPayload.find((item) => item.skillCode === 'ext.problem_statement_pm');
+    const valueSkill = skillsPayload.find((item) => item.skillCode === 'ext.customer_value_positioning_pm');
     assert.ok(imageSkill);
-    assert.ok(problemSkill);
+    assert.ok(valueSkill);
     assert.equal(imageSkill.status, '运行中');
-    assert.equal(problemSkill.implementationType, 'skill');
+    assert.equal(valueSkill.implementationType, 'skill');
 
     const invokeResponse = await fetch(`${runtime.baseUrl}/api/external-skills/image-generate`, {
       method: 'POST',
@@ -2549,19 +2541,19 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
       if (url.endsWith('/api/skills')) {
         return jsonResponse([
           {
-            skillName: 'problem-statement',
+            skillName: 'customer-value-positioning',
             status: 'available',
             supportsInvoke: true,
             requiredDependencies: ['env:DEEPSEEK_API_KEY'],
             missingDependencies: [],
-            summary: 'problem summary',
+            summary: 'value positioning summary',
           },
         ]);
       }
       if (url.endsWith('/api/jobs') && init?.method === 'POST') {
         return jsonResponse({
           jobId: 'job-001',
-          skillName: 'problem-statement',
+          skillName: 'customer-value-positioning',
           model: 'deepseek-v4-pro',
           status: 'queued',
           finalText: null,
@@ -2582,10 +2574,10 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
       if (url.endsWith('/api/jobs/job-001')) {
         return jsonResponse({
           jobId: 'job-001',
-          skillName: 'problem-statement',
+          skillName: 'customer-value-positioning',
           model: 'deepseek-v4-pro',
           status: 'succeeded',
-          finalText: '# 问题陈述',
+          finalText: '# 客户价值定位',
           events: [
             {
               id: 'evt-1',
@@ -2598,7 +2590,7 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
             {
               artifactId: 'artifact-001',
               jobId: 'job-001',
-              fileName: 'problem-statement.md',
+              fileName: 'customer-value-positioning.md',
               mimeType: 'text/markdown',
               byteSize: 128,
               createdAt: '2026-04-25T10:01:00.000Z',
@@ -2611,11 +2603,11 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
         });
       }
       if (url.endsWith('/api/jobs/job-001/artifacts/artifact-001')) {
-        return new Response('# 问题陈述', {
+        return new Response('# 客户价值定位', {
           status: 200,
           headers: {
             'Content-Type': 'text/markdown',
-            'Content-Disposition': 'attachment; filename="problem-statement.md"',
+            'Content-Disposition': 'attachment; filename="customer-value-positioning.md"',
           },
         });
       }
@@ -2678,13 +2670,13 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
   });
 
   try {
-    const createResponse = await fetch(`${runtime.baseUrl}/api/external-skills/ext.problem_statement_pm/jobs`, {
+    const createResponse = await fetch(`${runtime.baseUrl}/api/external-skills/ext.customer_value_positioning_pm/jobs`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        requestText: '整理问题陈述',
+        requestText: '整理客户价值定位',
         model: 'deepseek-v4-pro',
       }),
     });
@@ -2695,8 +2687,8 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
       model: string;
       status: string;
     };
-    assert.equal(createdJob.skillCode, 'ext.problem_statement_pm');
-    assert.equal(createdJob.runtimeSkillName, 'problem-statement');
+    assert.equal(createdJob.skillCode, 'ext.customer_value_positioning_pm');
+    assert.equal(createdJob.runtimeSkillName, 'customer-value-positioning');
     assert.equal(createdJob.model, 'deepseek-v4-pro');
     assert.equal(createdJob.status, 'queued');
 
@@ -2707,8 +2699,8 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
       finalText: string;
       artifacts: Array<{ downloadPath: string }>;
     };
-    assert.equal(jobPayload.skillCode, 'ext.problem_statement_pm');
-    assert.equal(jobPayload.finalText, '# 问题陈述');
+    assert.equal(jobPayload.skillCode, 'ext.customer_value_positioning_pm');
+    assert.equal(jobPayload.finalText, '# 客户价值定位');
     assert.equal(
       jobPayload.artifacts[0]?.downloadPath,
       '/api/external-skills/jobs/job-001/artifacts/artifact-001',
@@ -2717,7 +2709,7 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
     const artifactResponse = await fetch(`${runtime.baseUrl}/api/external-skills/jobs/job-001/artifacts/artifact-001`);
     assert.equal(artifactResponse.status, 200);
     assert.equal(artifactResponse.headers.get('content-type'), 'text/markdown');
-    assert.equal(await artifactResponse.text(), '# 问题陈述');
+    assert.equal(await artifactResponse.text(), '# 客户价值定位');
 
     const sessionResponse = await fetch(
       `${runtime.baseUrl}/api/external-skills/jobs/job-002/presentation-session`,

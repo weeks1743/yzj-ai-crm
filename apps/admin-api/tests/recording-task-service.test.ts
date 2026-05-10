@@ -443,12 +443,12 @@ test('requestArchiveTask repairs downstream analysis for already archived record
               total: 1,
               jobs: [
                 {
-                  jobId: 'job-old-problem-001',
-                  skillCode: 'ext.problem_statement_pm',
-                  runtimeSkillName: 'problem-statement',
+                  jobId: 'job-old-value-001',
+                  skillCode: 'ext.customer_value_positioning_pm',
+                  runtimeSkillName: 'customer-value-positioning',
                   model: 'deepseek-v4-flash',
                   status: 'succeeded',
-                  finalText: '# 问题陈述\n\n旧分析已完成，客户关注采购、合同和费用报销断点。',
+                  finalText: '# 客户价值定位\n\n旧分析已完成，客户关注采购、合同和费用报销断点。',
                   events: [],
                   artifacts: [],
                   error: null,
@@ -465,10 +465,10 @@ test('requestArchiveTask repairs downstream analysis for already archived record
           return {
             jobId: `job-rerun-${skillCode}`,
             skillCode,
-            runtimeSkillName: 'problem-statement',
+            runtimeSkillName: 'customer-value-positioning',
             model: 'deepseek-v4-flash',
             status: 'succeeded',
-            finalText: '# 问题陈述\n\n客户需要解决采购、合同和费用报销流程断点。',
+            finalText: '# 客户价值定位\n\n客户需要解决采购、合同和费用报销流程断点。',
             events: [],
             artifacts: [],
             error: null,
@@ -489,10 +489,10 @@ test('requestArchiveTask repairs downstream analysis for already archived record
 
     assert.equal(response.archive?.status, 'archived');
     assert.equal(skillRequests.length, 1);
-    assert.equal(skillRequests[0].skillCode, 'ext.problem_statement_pm');
+    assert.equal(skillRequests[0].skillCode, 'ext.customer_value_positioning_pm');
     assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
     assert.equal(analysisInputs.length, 1);
-    assert.equal(analysisInputs[0].skillCode, 'ext.problem_statement_pm');
+    assert.equal(analysisInputs[0].skillCode, 'ext.customer_value_positioning_pm');
     assert.deepEqual(
       analysisInputs[0].anchors.map((item: any) => `${item.type}:${item.id}:${item.bindingStatus ?? ''}`),
       [
@@ -1048,8 +1048,8 @@ test('getSkillJob upserts one formal analysis_material when archived recording j
       externalSkillService: {
         getSkillJob: async (jobId: string) => ({
           jobId,
-          skillCode: 'ext.problem_statement_pm',
-          runtimeSkillName: 'problem-statement',
+          skillCode: 'ext.customer_value_positioning_pm',
+          runtimeSkillName: 'customer-value-positioning',
           model: 'deepseek-v4-flash',
           status: 'succeeded',
           finalText: null,
@@ -1057,7 +1057,7 @@ test('getSkillJob upserts one formal analysis_material when archived recording j
           artifacts: [{
             artifactId: 'runtime-md-001',
             jobId,
-            fileName: 'problem-statement.md',
+            fileName: 'customer-value-positioning.md',
             mimeType: 'text/markdown',
             byteSize: 32,
             createdAt: new Date().toISOString(),
@@ -1071,26 +1071,26 @@ test('getSkillJob upserts one formal analysis_material when archived recording j
           artifact: {
             artifactId: 'runtime-md-001',
             jobId: 'job-analysis-001',
-            fileName: 'problem-statement.md',
+            fileName: 'customer-value-positioning.md',
             mimeType: 'text/markdown',
             byteSize: 32,
             createdAt: new Date().toISOString(),
             downloadPath: '#',
           },
-          content: Buffer.from('# 问题陈述\n\n客户需要压缩审批周期。'),
+          content: Buffer.from('# 客户价值定位\n\n客户需要压缩审批周期。'),
         }),
       } as any,
     });
 
-    const first = await service.getSkillJob(record.taskId, 'ext.problem_statement_pm', 'job-analysis-001');
-    const second = await service.getSkillJob(record.taskId, 'ext.problem_statement_pm', 'job-analysis-001');
+    const first = await service.getSkillJob(record.taskId, 'ext.customer_value_positioning_pm', 'job-analysis-001');
+    const second = await service.getSkillJob(record.taskId, 'ext.customer_value_positioning_pm', 'job-analysis-001');
 
     assert.equal(first.status, 'succeeded');
     assert.equal(second.status, 'succeeded');
     assert.equal(analysisInputs.length, 2);
-    assert.equal(analysisInputs[1].skillCode, 'ext.problem_statement_pm');
-    assert.equal(analysisInputs[1].sourceToolCode, 'ext.problem_statement_pm');
-    assert.equal(analysisInputs[1].title, '贝斯美拜访 - 问题陈述');
+    assert.equal(analysisInputs[1].skillCode, 'ext.customer_value_positioning_pm');
+    assert.equal(analysisInputs[1].sourceToolCode, 'ext.customer_value_positioning_pm');
+    assert.equal(analysisInputs[1].title, '贝斯美拜访 - 客户价值定位');
     assert.deepEqual(
       analysisInputs[1].anchors.map((item: any) => `${item.type}:${item.id}:${item.bindingStatus ?? ''}`),
       [
@@ -1227,8 +1227,8 @@ test('archiveCompletedSkillJobs persists succeeded downstream jobs after recordi
   }
 });
 
-test('rerunCompletedSkillJobs waits for rerun and persists formal problem statement', async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), 'recording-problem-rerun-'));
+test('rerunCompletedSkillJobs waits for rerun and persists formal customer value positioning', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-value-rerun-'));
   try {
     const materialPath = join(tempDir, 'recording-material.md');
     writeFileSync(materialPath, '# 录音资料包\n\n客户关注采购和报销流程。', 'utf8');
@@ -1260,8 +1260,8 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal problem statem
         status, final_text, error_json, created_at, updated_at, started_at, finished_at
       ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, ?)
     `).run(
-      'job-problem-old',
-      'problem-statement',
+      'job-value-old',
+      'customer-value-positioning',
       'deepseek-v4-flash',
       '输入材料是附件中的通义结构化录音分析文件和录音资料包，来源录音文件：贝斯美拜访.mp3。建议关联上下文：客户：customer-bsm-001；商机：opportunity-bsm-001；跟进记录：followup-bsm-001。',
       '[]',
@@ -1275,18 +1275,18 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal problem statem
 
     const config = createTestConfig({ embeddingApiKey: null, envFilePath: envPath });
     const record: RecordingTaskRecord = {
-      taskId: 'recording-task-problem-rerun',
+      taskId: 'recording-task-value-rerun',
       eid: config.yzj.eid,
       appId: config.yzj.lightCloud.appId,
-      serviceTaskId: 'audio-task-problem-rerun',
-      providerDataId: 'DATA-PROBLEM',
+      serviceTaskId: 'audio-task-value-rerun',
+      providerDataId: 'DATA-VALUE',
       fixtureTaskId: null,
       status: 'succeeded',
       file: {
         fileName: '贝斯美拜访.mp3',
         mimeType: 'audio/mpeg',
         size: 123,
-        md5: 'md5-problem-rerun',
+        md5: 'md5-value-rerun',
       },
       anchors: {
         customer: 'customer-bsm-001',
@@ -1313,7 +1313,7 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal problem statem
       } as any,
       client: {
         getTask: async () => {
-          throw new Error('audio service offline during problem statement rerun');
+          throw new Error('audio service offline during customer value positioning rerun');
         },
         materialize: async () => ({
           taskId: record.serviceTaskId,
@@ -1337,19 +1337,19 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal problem statem
       artifactService: {
         createAnalysisMaterialArtifact: async (input: any) => {
           analysisInputs.push(input);
-          return { artifact: { artifactId: 'artifact-problem-formal' } };
+          return { artifact: { artifactId: 'artifact-value-formal' } };
         },
       } as any,
       externalSkillService: {
         getSkillJob: async (jobId: string) => {
-          if (jobId === 'job-problem-old') {
+          if (jobId === 'job-value-old') {
             return {
               jobId,
-              skillCode: 'ext.problem_statement_pm',
-              runtimeSkillName: 'problem-statement',
+              skillCode: 'ext.customer_value_positioning_pm',
+              runtimeSkillName: 'customer-value-positioning',
               model: 'deepseek-v4-flash',
               status: 'succeeded',
-              finalText: '# 问题陈述\n\n> 上下文状态：待绑定上下文\n\n录音未关联正式客户/商机。',
+              finalText: '# 客户价值定位\n\n> 上下文状态：待绑定上下文\n\n录音未关联正式客户/商机。',
               events: [],
               artifacts: [],
               error: null,
@@ -1360,13 +1360,13 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal problem statem
           getCreatedJobCount += 1;
           return {
             jobId,
-            skillCode: 'ext.problem_statement_pm',
-            runtimeSkillName: 'problem-statement',
+            skillCode: 'ext.customer_value_positioning_pm',
+            runtimeSkillName: 'customer-value-positioning',
             model: 'deepseek-v4-flash',
             status: getCreatedJobCount === 1 ? 'running' : 'succeeded',
             finalText: getCreatedJobCount === 1
               ? null
-              : '# 问题陈述\n\n客户需要打通采购、合同和报销流程。',
+              : '# 客户价值定位\n\n客户需要打通采购、合同和报销流程。',
             events: [],
             artifacts: [],
             error: null,
@@ -1377,9 +1377,9 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal problem statem
         createSkillJob: async (skillCode: string, input: any) => {
           skillRequests.push({ skillCode, input });
           return {
-            jobId: 'job-problem-rerun',
+            jobId: 'job-value-rerun',
             skillCode,
-            runtimeSkillName: 'problem-statement',
+            runtimeSkillName: 'customer-value-positioning',
             model: 'deepseek-v4-flash',
             status: 'running',
             finalText: null,
@@ -1396,19 +1396,19 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal problem statem
     const count = await service.rerunCompletedSkillJobs(record.taskId);
 
     assert.equal(count, 1);
-    assert.deepEqual(skillRequests.map((item) => item.skillCode), ['ext.problem_statement_pm']);
+    assert.deepEqual(skillRequests.map((item) => item.skillCode), ['ext.customer_value_positioning_pm']);
     assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
     assert.equal(analysisInputs.length, 1);
-    assert.equal(analysisInputs[0].skillCode, 'ext.problem_statement_pm');
-    assert.equal(analysisInputs[0].sourceJobId, 'job-problem-rerun');
-    assert.equal(analysisInputs[0].title, '贝斯美拜访 - 问题陈述');
+    assert.equal(analysisInputs[0].skillCode, 'ext.customer_value_positioning_pm');
+    assert.equal(analysisInputs[0].sourceJobId, 'job-value-rerun');
+    assert.equal(analysisInputs[0].title, '贝斯美拜访 - 客户价值定位');
     assert.doesNotMatch(analysisInputs[0].markdown, /待绑定上下文|未关联正式客户\/商机/);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test('ensureCoreAnalysisMaterials reruns visit understanding, needs analysis, and problem statement for archived recording', async () => {
+test('ensureCoreAnalysisMaterials reruns visit understanding and needs analysis for archived recording', async () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'recording-core-analysis-'));
   try {
     const materialPath = join(tempDir, 'recording-material.md');
@@ -1487,16 +1487,12 @@ test('ensureCoreAnalysisMaterials reruns visit understanding, needs analysis, an
             skillCode,
             runtimeSkillName: skillCode === 'ext.visit_conversation_understanding'
               ? 'visit-conversation-understanding'
-              : skillCode === 'ext.problem_statement_pm'
-                ? 'problem-statement'
-                : 'customer-needs-todo-analysis',
+              : 'customer-needs-todo-analysis',
             model: 'deepseek-v4-flash',
             status: 'succeeded',
             finalText: skillCode === 'ext.visit_conversation_understanding'
               ? '# 拜访会话理解\n\n客户重点关注 ERP 对接和多语言。'
-              : skillCode === 'ext.problem_statement_pm'
-                ? '# 问题陈述\n\n客户需要解决采购、合同和费用报销流程断点。'
-                : '# 客户需求工作待办分析\n\n## 一、客户核心需求\n\n### 需求 1：ERP 对接\n- 背景：客户需要采购、合同、费用报销流程与 ERP 自动对接。',
+              : '# 客户需求工作待办分析\n\n## 一、客户核心需求\n\n### 需求 1：ERP 对接\n- 背景：客户需要采购、合同、费用报销流程与 ERP 自动对接。',
             events: [],
             artifacts: [],
             error: null,
@@ -1509,17 +1505,15 @@ test('ensureCoreAnalysisMaterials reruns visit understanding, needs analysis, an
 
     const count = await service.ensureCoreAnalysisMaterials(record.taskId);
 
-    assert.equal(count, 3);
+    assert.equal(count, 2);
     assert.deepEqual(skillRequests.map((item) => item.skillCode), [
       'ext.visit_conversation_understanding',
       'ext.customer_needs_todo_analysis',
-      'ext.problem_statement_pm',
     ]);
-    assert.equal(analysisInputs.length, 3);
+    assert.equal(analysisInputs.length, 2);
     assert.deepEqual(analysisInputs.map((item) => item.skillCode), [
       'ext.visit_conversation_understanding',
       'ext.customer_needs_todo_analysis',
-      'ext.problem_statement_pm',
     ]);
     assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
     assert.deepEqual(
@@ -2066,7 +2060,7 @@ test('createSkillJob rejects non-whitelisted skill and process-file material pat
       /只允许继续调用/,
     );
     await assert.rejects(
-      () => service.createSkillJob(record.taskId, { skillCode: 'ext.problem_statement_pm' }),
+      () => service.createSkillJob(record.taskId, { skillCode: 'ext.customer_needs_todo_analysis' }),
       /只能消费通义结构化分析 JSON/,
     );
 
@@ -2074,7 +2068,7 @@ test('createSkillJob rejects non-whitelisted skill and process-file material pat
     mkdirSync(directoryMaterialPath);
     record.materialPath = directoryMaterialPath;
     await assert.rejects(
-      () => service.createSkillJob(record.taskId, { skillCode: 'ext.problem_statement_pm' }),
+      () => service.createSkillJob(record.taskId, { skillCode: 'ext.customer_needs_todo_analysis' }),
       /路径不是文件/,
     );
   } finally {
