@@ -37,7 +37,7 @@ export function buildAssistantConversationKey(scope: string, operatorOpenId = AS
   ].join('-');
 }
 
-function isLocalDebugHost() {
+export function isLocalDebugHost() {
   if (typeof window === 'undefined') {
     return false;
   }

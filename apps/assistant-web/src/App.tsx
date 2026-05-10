@@ -105,6 +105,7 @@ import {
   type AssistantMetaQuestionCard,
   ASSISTANT_LOCAL_IDENTITY,
   buildAssistantConversationKey,
+  isLocalDebugHost,
   providerFactory,
   resolveAssistantIdentity,
 } from './agent-api-provider';
@@ -119,7 +120,8 @@ import {
 } from './recording-task-state';
 import {
   readCachedAssistantIdentity,
-  writeCachedAssistantIdentity,
+  readCachedAssistantIdentityForTicket,
+  persistCachedAssistantIdentity,
   type BrowserStorageLike,
 } from './assistant-auth-cache';
 import {
@@ -7286,25 +7288,79 @@ function AssistantIdentityGate() {
     () => new URLSearchParams(location.search).get('ticket')?.trim() || '',
     [location.search],
   );
+  const isLocalDevelopment = import.meta.env.DEV
+    || import.meta.env.VITE_YZJ_ALLOW_LOCAL_IDENTITY === 'true'
+    || isLocalDebugHost();
 
   useEffect(() => {
     let cancelled = false;
     setState({ loading: true, identity: null, error: null });
+    const storage = getBrowserSessionStorage();
+    const hasTicket = Boolean(ticket);
+    const baseUrl = `${window.location.origin}${window.location.pathname}`;
+    const nextUrlSearch = (() => {
+      const params = new URLSearchParams(location.search);
+      params.delete('ticket');
+      const nextSearch = params.toString();
+      return nextSearch ? `?${nextSearch}` : '';
+    })();
 
-    if (!ticket) {
-      const cachedIdentity = readCachedAssistantIdentity(getBrowserSessionStorage());
-      if (cachedIdentity) {
-        setState({ loading: false, identity: cachedIdentity, error: null });
-        return () => {
-          cancelled = true;
-        };
-      }
+    if (hasTicket) {
+      void (async () => {
+        const cachedIdentity = await readCachedAssistantIdentityForTicket(storage, ticket);
+        if (cachedIdentity) {
+          await persistCachedAssistantIdentity(storage, cachedIdentity, ticket);
+          if (!cancelled) {
+            window.history.replaceState(null, '', `${baseUrl}${nextUrlSearch}`);
+            setState({ loading: false, identity: cachedIdentity, error: null });
+          }
+          return;
+        }
+
+        const identity = await resolveAssistantIdentity(ticket);
+        await persistCachedAssistantIdentity(storage, identity, ticket);
+        if (!cancelled) {
+          window.history.replaceState(null, '', `${baseUrl}${nextUrlSearch}`);
+          setState({ loading: false, identity, error: null });
+        }
+      })().catch((error) => {
+        if (!cancelled) {
+          setState({
+            loading: false,
+            identity: null,
+            error: error instanceof Error ? error.message : '云之家身份解析失败',
+          });
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (isLocalDevelopment) {
+      const localIdentity = ASSISTANT_LOCAL_IDENTITY;
+      void persistCachedAssistantIdentity(storage, localIdentity).then(() => {
+        if (!cancelled) {
+          setState({ loading: false, identity: localIdentity, error: null });
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const cachedIdentity = readCachedAssistantIdentity(storage);
+    if (cachedIdentity) {
+      setState({ loading: false, identity: cachedIdentity, error: null });
+      return () => {
+        cancelled = true;
+      };
     }
 
     void resolveAssistantIdentity(ticket)
       .then((identity) => {
         if (!cancelled) {
-          writeCachedAssistantIdentity(getBrowserSessionStorage(), identity);
+          void persistCachedAssistantIdentity(storage, identity, ticket);
           setState({ loading: false, identity, error: null });
         }
       })
@@ -7321,7 +7377,7 @@ function AssistantIdentityGate() {
     return () => {
       cancelled = true;
     };
-  }, [ticket]);
+  }, [isLocalDevelopment, location.pathname, location.search, ticket]);
 
   if (state.loading) {
     return (
