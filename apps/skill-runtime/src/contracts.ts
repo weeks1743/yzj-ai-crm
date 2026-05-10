@@ -39,6 +39,12 @@ export interface AppConfig {
     apiKey: string | null;
     webSearchModel: string;
   };
+  reportCanvas: {
+    baseUrl: string;
+    publicBaseUrl: string;
+    timeoutMs: number;
+    pollIntervalMs: number;
+  };
   meta: {
     configSource: '.env';
     envFilePath: string;
@@ -108,7 +114,8 @@ export interface JobEvent {
     | 'deck_planned'
     | 'deck_rendered'
     | 'qa_report'
-    | 'previews_rendered';
+    | 'previews_rendered'
+    | 'report_ready';
   message: string;
   data?: unknown;
   createdAt: string;
@@ -184,6 +191,39 @@ export interface LoadedSkill {
 
 export interface FetchLike {
   (input: string | URL | Request, init?: RequestInit): Promise<Response>;
+}
+
+export interface ReportCanvasGenerateResponse {
+  sessionId: string;
+  status: 'pending' | 'generating' | 'complete' | 'error';
+  embedUrl: string;
+  statusUrl: string;
+  resultUrl: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface ReportCanvasStatusResponse {
+  sessionId: string;
+  status: 'pending' | 'generating' | 'complete' | 'error';
+  stage?: 'understand' | 'data_prep' | 'code_gen' | null;
+  progress?: number;
+  error?: ApiErrorResponse | null;
+  createdAt?: string;
+  updatedAt?: string;
+  expiresAt?: string;
+}
+
+export interface ReportCanvasResultResponse {
+  sessionId: string;
+  status: 'complete';
+  code: string;
+  embedUrl: string;
+  metadata: {
+    codeLength: number;
+    generatedAt: string;
+    pipelineDurationMs: number;
+  };
 }
 
 export interface ChatToolCall {

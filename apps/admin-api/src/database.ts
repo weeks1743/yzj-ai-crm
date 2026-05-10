@@ -345,6 +345,24 @@ export async function initializeDatabaseSchema(
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_artifact_image_generations_artifact`)}
       ON ${table('artifact_image_generations')}(artifact_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS ${table('artifact_report_generations')} (
+        generation_id TEXT PRIMARY KEY,
+        artifact_id TEXT NOT NULL,
+        version_id TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        job_id TEXT,
+        report_session_id TEXT,
+        open_url TEXT,
+        metadata_json JSONB,
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_artifact_report_generations_artifact`)}
+      ON ${table('artifact_report_generations')}(artifact_id, updated_at DESC);
     `);
   }
 

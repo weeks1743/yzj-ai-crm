@@ -8,6 +8,7 @@ import {
   EyeOutlined,
   FileSearchOutlined,
   GlobalOutlined,
+  FundProjectionScreenOutlined,
   PictureOutlined,
   PlusOutlined,
   ProductOutlined,
@@ -362,6 +363,7 @@ type RecordResultViewModel = Omit<AgentRecordResultViewModel, 'records' | 'recor
 };
 
 type ArtifactImageStatus = 'not_started' | 'queued' | 'succeeded' | 'failed';
+type ArtifactReportStatus = 'not_started' | 'queued' | 'running' | 'succeeded' | 'failed';
 
 type GroupedEvidenceCard = AssistantEvidenceCard & {
   matchCount: number;
@@ -387,6 +389,20 @@ interface ArtifactImagePayload {
   latencyMs?: number;
   errorMessage?: string | null;
   generatedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+interface ArtifactReportPayload {
+  artifactId: string;
+  versionId: string;
+  title: string;
+  status: ArtifactReportStatus;
+  jobId?: string;
+  reportSessionId?: string;
+  openUrl?: string;
+  metadata?: Record<string, unknown>;
+  errorMessage?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -1629,6 +1645,10 @@ function isImageGenerating(status?: ArtifactImageStatus) {
   return status === 'queued';
 }
 
+function isReportGenerating(status?: ArtifactReportStatus) {
+  return status === 'queued' || status === 'running';
+}
+
 function isMarkdownImageGenerating(status?: MarkdownImageStatus) {
   return status === 'queued';
 }
@@ -1654,6 +1674,19 @@ function getMarkdownImageButtonLabel(image?: MarkdownImagePayload) {
     return '图片生成中';
   }
   return '重新生成图片';
+}
+
+function getReportButtonLabel(report?: ArtifactReportPayload) {
+  if (!report || report.status === 'not_started') {
+    return '生成报告';
+  }
+  if (isReportGenerating(report.status)) {
+    return '报告生成中';
+  }
+  if (report.status === 'succeeded') {
+    return '报告已生成';
+  }
+  return '重新生成报告';
 }
 
 function downloadDataUrl(dataUrl: string, fileName: string): void {
@@ -4682,14 +4715,22 @@ function ArtifactMarkdownDrawer({
   state,
   markdownClassName,
   styles,
+  report,
   onClose,
+  onGenerateReport,
+  onOpenReport,
 }: {
   state: ArtifactViewerState;
   markdownClassName: string;
   styles: ReturnType<typeof useStyles>['styles'];
+  report?: ArtifactReportPayload;
   onClose: () => void;
+  onGenerateReport: (artifact: ArtifactDetailPayload['artifact']) => void;
+  onOpenReport: (report: ArtifactReportPayload) => void;
 }) {
   const anchorTags = buildArtifactAnchorTags(state.artifact?.anchors);
+  const canGenerateReport = state.artifact?.kind === 'company_research';
+  const reportGenerating = isReportGenerating(report?.status);
   const staleWarning = Boolean(
     state.artifact
     && state.markdown
@@ -4716,6 +4757,30 @@ function ArtifactMarkdownDrawer({
       extra={
         state.markdown ? (
           <Space>
+            {canGenerateReport && state.artifact ? (
+              <>
+                {report?.status === 'succeeded' && report.openUrl ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<FundProjectionScreenOutlined />}
+                    onClick={() => onOpenReport(report)}
+                  >
+                    打开报告
+                  </Button>
+                ) : (
+                  <Button
+                    size="small"
+                    icon={<FundProjectionScreenOutlined />}
+                    loading={reportGenerating}
+                    disabled={reportGenerating}
+                    onClick={() => onGenerateReport(state.artifact!)}
+                  >
+                    {getReportButtonLabel(report)}
+                  </Button>
+                )}
+              </>
+            ) : null}
             <Actions.Copy text={state.markdown} icon={<CopyOutlined />} />
           </Space>
         ) : null
@@ -4750,6 +4815,15 @@ function ArtifactMarkdownDrawer({
                     type="warning"
                     showIcon
                     message="正文生成早于正式关联，建议重跑分析"
+                  />
+                ) : null}
+                {canGenerateReport && report?.status === 'failed' && report.errorMessage ? (
+                  <Alert
+                    style={{ marginTop: 12, marginBottom: 12 }}
+                    type="error"
+                    showIcon
+                    message="报告生成失败"
+                    description={report.errorMessage}
                   />
                 ) : null}
               </>
@@ -4847,6 +4921,7 @@ function AssistantConversationRuntime({
     error: null,
   });
   const [imageByArtifactId, setImageByArtifactId] = useState<Record<string, ArtifactImagePayload>>({});
+  const [reportByArtifactId, setReportByArtifactId] = useState<Record<string, ArtifactReportPayload>>({});
   const [imageByAttachmentKey, setImageByAttachmentKey] = useState<Record<string, MarkdownImagePayload>>({});
   const [recordingTasks, setRecordingTasks] = useState<RecordingTaskCardState[]>(
     () => loadPersistedRecordingTasks(runtimeScope, activeConversationKey),
@@ -5046,6 +5121,19 @@ function AssistantConversationRuntime({
     }
     const payload = (await response.json()) as ArtifactImagePayload;
     setImageByArtifactId((current) => ({
+      ...current,
+      [artifactId]: payload,
+    }));
+    return payload;
+  }, []);
+
+  const fetchReportStatus = React.useCallback(async (artifactId: string) => {
+    const response = await fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/report`);
+    if (!response.ok) {
+      throw new Error(`报告状态接口返回 ${response.status}`);
+    }
+    const payload = (await response.json()) as ArtifactReportPayload;
+    setReportByArtifactId((current) => ({
       ...current,
       [artifactId]: payload,
     }));
@@ -5433,6 +5521,26 @@ function AssistantConversationRuntime({
     return () => window.clearInterval(timer);
   }, [fetchImageStatus, imageByArtifactId]);
 
+  useEffect(() => {
+    const generatingReports = Object.values(reportByArtifactId)
+      .filter((item) => isReportGenerating(item.status))
+      .map((item) => item.artifactId);
+
+    if (!generatingReports.length) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      generatingReports.forEach((artifactId) => {
+        void fetchReportStatus(artifactId).catch(() => {
+          // Keep the visible generating state; the next poll or manual retry can recover.
+        });
+      });
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [fetchReportStatus, reportByArtifactId]);
+
   const handleGenerateImage = React.useCallback<GenerateImageHandler>(
     async (evidence) => {
       if (!canGenerateEvidenceImage(evidence)) {
@@ -5499,6 +5607,71 @@ function AssistantConversationRuntime({
       }
     },
     [imageByArtifactId, messageApi, safeScrollToBottom],
+  );
+
+  const handleOpenReport = React.useCallback((report: ArtifactReportPayload) => {
+    if (!report.openUrl) {
+      messageApi.warning('报告链接尚未生成。');
+      return;
+    }
+    window.open(report.openUrl, '_blank', 'noopener,noreferrer');
+  }, [messageApi]);
+
+  const handleGenerateReport = React.useCallback(
+    async (artifact: ArtifactDetailPayload['artifact']) => {
+      const existing = reportByArtifactId[artifact.artifactId];
+      if (isReportGenerating(existing?.status)) {
+        return;
+      }
+
+      setReportByArtifactId((current) => ({
+        ...current,
+        [artifact.artifactId]: {
+          artifactId: artifact.artifactId,
+          versionId: artifact.versionId,
+          title: artifact.title,
+          status: 'queued',
+        },
+      }));
+
+      try {
+        const response = await fetch(`/api/artifacts/${encodeURIComponent(artifact.artifactId)}/report`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!response.ok) {
+          throw new Error(await readApiErrorMessage(response));
+        }
+
+        const payload = (await response.json()) as ArtifactReportPayload;
+        setReportByArtifactId((current) => ({
+          ...current,
+          [artifact.artifactId]: payload,
+        }));
+        if (payload.status === 'succeeded' && payload.openUrl) {
+          messageApi.success('报告已生成');
+          handleOpenReport(payload);
+        } else if (isReportGenerating(payload.status)) {
+          messageApi.info('报告生成任务已提交');
+        } else {
+          messageApi.error(payload.errorMessage || '报告生成失败，可重新生成');
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : '报告生成失败';
+        setReportByArtifactId((current) => ({
+          ...current,
+          [artifact.artifactId]: {
+            artifactId: artifact.artifactId,
+            versionId: artifact.versionId,
+            title: artifact.title,
+            status: 'failed',
+            errorMessage,
+          },
+        }));
+        messageApi.error(errorMessage);
+      }
+    },
+    [handleOpenReport, messageApi, reportByArtifactId],
   );
 
   const handleGenerateMarkdownImage = React.useCallback<GenerateMarkdownImageHandler>(
@@ -5695,6 +5868,11 @@ function AssistantConversationRuntime({
         error: null,
         artifact: payload.artifact,
       });
+      if (payload.artifact.kind === 'company_research') {
+        void fetchReportStatus(payload.artifact.artifactId).catch(() => {
+          // Report generation is optional; the drawer can still show the markdown.
+        });
+      }
     } catch (error) {
       setArtifactViewer({
         open: true,
@@ -5705,7 +5883,7 @@ function AssistantConversationRuntime({
         error: error instanceof Error ? error.message : '无法读取资料',
       });
     }
-  }, []);
+  }, [fetchReportStatus]);
 
   const handleOpenRecordingEvidence = React.useCallback<OpenRecordingEvidenceHandler>(async (evidence) => {
     const knownTaskId = evidence.recordingTaskId?.trim();
@@ -6382,7 +6560,10 @@ function AssistantConversationRuntime({
         state={artifactViewer}
         markdownClassName={markdownClassName}
         styles={styles}
+        report={artifactViewer.artifactId ? reportByArtifactId[artifactViewer.artifactId] : undefined}
         onClose={() => setArtifactViewer((current) => ({ ...current, open: false }))}
+        onGenerateReport={handleGenerateReport}
+        onOpenReport={handleOpenReport}
       />
     </ChatContext.Provider>
   );

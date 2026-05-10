@@ -485,6 +485,18 @@ function parseLineSeparatedPaths(value?: string): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
+function readReportReadyUrl(job: ExternalSkillJobResponse): string | null {
+  const event = [...job.events]
+    .reverse()
+    .find((item) => item.type === 'report_ready' && item.data && typeof item.data === 'object');
+  if (!event) {
+    return null;
+  }
+
+  const openUrl = (event.data as { openUrl?: unknown }).openUrl;
+  return typeof openUrl === 'string' && openUrl.trim() ? openUrl : null;
+}
+
 const SkillsCatalogPage = () => {
   const location = useLocation();
   const pageKey = (location.pathname.split('/').pop() ?? '') as keyof typeof pageMap;
@@ -792,6 +804,25 @@ const SkillsCatalogPage = () => {
             <ProDescriptions.Item label="创建时间">{skillJobResult.createdAt}</ProDescriptions.Item>
             <ProDescriptions.Item label="更新时间">{skillJobResult.updatedAt}</ProDescriptions.Item>
           </ProDescriptions>
+
+          {readReportReadyUrl(skillJobResult) ? (
+            <Alert
+              type="success"
+              showIcon
+              message="报告已生成"
+              description={
+                <Button
+                  type="link"
+                  href={readReportReadyUrl(skillJobResult)!}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ padding: 0 }}
+                >
+                  新页面打开报告
+                </Button>
+              }
+            />
+          ) : null}
 
           <div>
             <Typography.Title level={5}>最终文本</Typography.Title>

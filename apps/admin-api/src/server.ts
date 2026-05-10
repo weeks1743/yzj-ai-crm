@@ -10,6 +10,8 @@ import { MainAgentRuntime } from './agent-runtime.js';
 import { AgentService } from './agent-service.js';
 import { ArtifactImageRepository } from './artifact-image-repository.js';
 import { ArtifactImageService } from './artifact-image-service.js';
+import { ArtifactReportRepository } from './artifact-report-repository.js';
+import { ArtifactReportService } from './artifact-report-service.js';
 import { ArtifactRepository } from './artifact-repository.js';
 import { ArtifactService } from './artifact-service.js';
 import { createAdminApiServer } from './app.js';
@@ -167,6 +169,12 @@ const artifactImageService = new ArtifactImageService({
   artifactService,
   externalSkillService,
 });
+const artifactReportService = new ArtifactReportService({
+  config,
+  repository: new ArtifactReportRepository(database),
+  artifactService,
+  externalSkillService,
+});
 const recordingTaskService = new RecordingTaskService({
   config,
   repository: new RecordingTaskRepository(database),
@@ -225,6 +233,7 @@ const server = createAdminApiServer({
   shadowMetadataService,
   externalSkillService,
   artifactService,
+  artifactReportService,
   artifactImageService,
   recordingTaskService,
   agentService,

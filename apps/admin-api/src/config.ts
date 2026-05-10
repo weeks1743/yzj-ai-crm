@@ -49,6 +49,11 @@ export const ADMIN_API_ENV_CONTRACT_KEYS = [
   'EXT_IMAGE_TIMEOUT_MS',
   'TONGYI_AUDIO_SERVICE_PORT',
   'TONGYI_AUDIO_PUBLIC_BASE_URL',
+  'REPORT_CANVAS_SERVICE_BASE_URL',
+  'REPORT_CANVAS_PUBLIC_BASE_URL',
+  'REPORT_CANVAS_SERVICE_PORT',
+  'REPORT_CANVAS_TIMEOUT_MS',
+  'REPORT_CANVAS_POLL_INTERVAL_MS',
   'TONGYI_DASHSCOPE_API_KEY',
   'TONGYI_TINGWU_APP_ID',
   'TONGYI_AUDIO_OUTPUT_DIR',
@@ -329,6 +334,14 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
   const tongyiAudioPublicBaseUrl = env.TONGYI_AUDIO_PUBLIC_BASE_URL?.trim()
     ? parseHttpBaseUrl(env.TONGYI_AUDIO_PUBLIC_BASE_URL, 'TONGYI_AUDIO_PUBLIC_BASE_URL', envFilePath)
     : tongyiAudioServiceBaseUrl;
+  const reportCanvasServiceBaseUrl = parseHttpBaseUrl(
+    env.REPORT_CANVAS_SERVICE_BASE_URL || 'http://127.0.0.1:3020',
+    'REPORT_CANVAS_SERVICE_BASE_URL',
+    envFilePath,
+  );
+  const reportCanvasPublicBaseUrl = env.REPORT_CANVAS_PUBLIC_BASE_URL?.trim()
+    ? parseHttpBaseUrl(env.REPORT_CANVAS_PUBLIC_BASE_URL, 'REPORT_CANVAS_PUBLIC_BASE_URL', envFilePath)
+    : reportCanvasServiceBaseUrl;
 
   return {
     yzj: {
@@ -415,6 +428,10 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
       tongyiAudioService: {
         baseUrl: tongyiAudioServiceBaseUrl,
         publicBaseUrl: tongyiAudioPublicBaseUrl,
+      },
+      reportCanvasService: {
+        baseUrl: reportCanvasServiceBaseUrl,
+        publicBaseUrl: reportCanvasPublicBaseUrl,
       },
     },
     meta: {

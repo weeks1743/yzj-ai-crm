@@ -31,6 +31,7 @@ import type { AgentPersonalSettingsService } from './agent-personal-settings-ser
 import { AgentService } from './agent-service.js';
 import { ArtifactImageService } from './artifact-image-service.js';
 import { AppError, BadRequestError, ServiceUnavailableError } from './errors.js';
+import { ArtifactReportService } from './artifact-report-service.js';
 import { ArtifactService } from './artifact-service.js';
 import { ExternalSkillService } from './external-skill-service.js';
 import { OrgSyncService, getRunIdFromConflict } from './org-sync-service.js';
@@ -51,6 +52,7 @@ interface CreateAdminApiServerOptions {
   approvalFileService: ApprovalFileService;
   externalSkillService: ExternalSkillService;
   artifactService?: ArtifactService;
+  artifactReportService?: ArtifactReportService;
   artifactImageService?: ArtifactImageService;
   recordingTaskService?: RecordingTaskService;
   agentService?: AgentService;
@@ -677,6 +679,15 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           return;
         }
 
+        if (parts.length === 4 && parts[3] === 'report') {
+          if (!options.artifactReportService) {
+            throw new ServiceUnavailableError('Artifact 报告生成服务未启用');
+          }
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          writeJson(response, 200, await options.artifactReportService.getReport(artifactId));
+          return;
+        }
+
         if (parts.length === 3) {
           const artifactId = decodeURIComponent(parts[2] ?? '');
           writeJson(response, 200, await options.artifactService.getArtifact(artifactId));
@@ -693,6 +704,15 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           const artifactId = decodeURIComponent(parts[2] ?? '');
           const payload = await readJsonBody<ArtifactImageGenerationRequest>(request);
           writeJson(response, 202, await options.artifactImageService.generateImage(artifactId, payload));
+          return;
+        }
+
+        if (parts.length === 4 && parts[3] === 'report') {
+          if (!options.artifactReportService) {
+            throw new ServiceUnavailableError('Artifact 报告生成服务未启用');
+          }
+          const artifactId = decodeURIComponent(parts[2] ?? '');
+          writeJson(response, 202, await options.artifactReportService.ensureReport(artifactId));
           return;
         }
       }

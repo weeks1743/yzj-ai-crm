@@ -102,6 +102,7 @@ interface RuntimeBackedSkillDefinition {
   sla: string;
   summary: string;
   requestPlaceholder: string;
+  requiresModel?: boolean;
 }
 
 type StaticExternalSkillDefinition =
@@ -209,6 +210,24 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     requestPlaceholder:
       '例如：基于公司研究 md，为绍兴贝斯美化工股份有限公司准备拜访材料，客户关注统一门户和流程审批。',
   },
+  {
+    id: 'ext-010',
+    label: '报告生成',
+    skillCode: 'ext.report_generation',
+    runtimeSkillName: 'report-generation',
+    provider: 'report-canvas-service',
+    requiredDependencies: ['env:DASHSCOPE_API_KEY', 'env:REPORT_CANVAS_SERVICE_BASE_URL'],
+    artifactKind: 'report',
+    assetMaterialization: NON_MATERIALIZED_ASSET_STRATEGY,
+    trigger: '公司研究 Markdown / 可视化报告生成',
+    route: '/chat',
+    owner: '导出能力组',
+    sla: 'P95 < 3 分钟',
+    summary: '通过内置 report-canvas-service 将公司研究 Markdown 转换成可新页面打开的互动报告。',
+    requestPlaceholder:
+      '例如：请基于公司研究 Markdown 生成一份面向销售和管理层的新页面互动报告。',
+    requiresModel: false,
+  },
 ];
 
 const STATIC_EXTERNAL_SKILLS: StaticExternalSkillDefinition[] = [
@@ -273,6 +292,17 @@ export class ExternalSkillService {
     definition: RuntimeBackedSkillDefinition,
     models: SkillRuntimeModelDescriptor[],
   ): ExternalSkillDebugConfig {
+    if (definition.requiresModel === false) {
+      return {
+        defaultModel: null,
+        supportedModels: [],
+        supportsAttachments: true,
+        supportsWorkingDirectory: true,
+        requestPlaceholder: definition.requestPlaceholder,
+        artifactKind: definition.artifactKind,
+      };
+    }
+
     const supportedModels = models.length > 0
       ? models.map((item) => item.name)
       : FALLBACK_SKILL_RUNTIME_MODELS;
@@ -323,7 +353,9 @@ export class ExternalSkillService {
   ): ExternalSkillCatalogItem {
     const runtimeEntry = runtimeCatalog.get(definition.runtimeSkillName);
     const debugConfig = this.buildSkillDebugConfig(definition, models);
-    const displayModel = debugConfig.defaultModel ?? DEFAULT_SKILL_RUNTIME_MODEL;
+    const displayModel = definition.requiresModel === false
+      ? null
+      : debugConfig.defaultModel ?? DEFAULT_SKILL_RUNTIME_MODEL;
 
     if (runtimeError) {
       return {

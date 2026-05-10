@@ -1,0 +1,34 @@
+{
+  "name": "@yzj-ai-crm/report-canvas-service",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port ${REPORT_CANVAS_SERVICE_PORT:-3020}",
+    "build": "next build",
+    "start": "next start --port ${REPORT_CANVAS_SERVICE_PORT:-3020}",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.63",
+    "@ai-sdk/react": "^3.0.179",
+    "@babel/parser": "^7.29.2",
+    "@codesandbox/sandpack-react": "^2.20.0",
+    "ai": "^6.0.177",
+    "lucide-react": "^1.14.0",
+    "next": "16.2.6",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "recharts": "^3.8.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

@@ -1363,6 +1363,33 @@ export const externalSkillRows: ExternalSkillCatalogItem[] = [
     sla: 'P95 < 20 秒',
     summary: '基于已沉淀的公司研究资料和客户初步需求，生成云之家销售拜访讲解提纲、话术要点与竞品应对。',
   },
+  {
+    id: 'ext-010',
+    label: '报告生成',
+    skillCode: 'ext.report_generation',
+    type: '外部技能',
+    trigger: '公司研究 Markdown / 可视化报告生成',
+    route: '/chat',
+    dependencies: ['env:DASHSCOPE_API_KEY', 'env:REPORT_CANVAS_SERVICE_BASE_URL'],
+    status: '运行中',
+    implementationType: 'skill',
+    supportsInvoke: true,
+    runtimeSkillName: 'report-generation',
+    debugMode: 'skill_job',
+    debugConfig: {
+      defaultModel: null,
+      supportedModels: [],
+      supportsAttachments: true,
+      supportsWorkingDirectory: true,
+      requestPlaceholder: '例如：请基于公司研究 Markdown 生成一份面向销售和管理层的新页面互动报告。',
+      artifactKind: 'report',
+    },
+    provider: 'report-canvas-service',
+    model: null,
+    owner: '导出能力组',
+    sla: 'P95 < 3 分钟',
+    summary: '通过内置 report-canvas-service 将公司研究 Markdown 转换成可新页面打开的互动报告。',
+  },
 ];
 
 export const writebackPolicies: WritebackPolicy[] = [

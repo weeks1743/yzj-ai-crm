@@ -42,7 +42,7 @@ export type ExternalSkillImplementationType =
   | 'skill'
   | 'placeholder';
 export type ExternalSkillDebugMode = 'none' | 'image_generate' | 'skill_job';
-export type ExternalSkillDebugArtifactKind = 'image' | 'markdown';
+export type ExternalSkillDebugArtifactKind = 'image' | 'markdown' | 'report';
 export type ExternalSkillAssetArtifactKind = 'company_research' | 'recording_material' | 'analysis_material';
 export type SkillRuntimeModelName = 'deepseek-v4-pro' | 'deepseek-v4-flash';
 export type ImageGenerationSize = 'auto' | '1024x1024' | '1536x1024' | '1024x1536';
@@ -58,7 +58,8 @@ export type ExternalSkillJobEventType =
   | 'deck_planned'
   | 'deck_rendered'
   | 'qa_report'
-  | 'previews_rendered';
+  | 'previews_rendered'
+  | 'report_ready';
 
 export interface ExternalSkillDebugConfig {
   defaultModel?: SkillRuntimeModelName | null;
@@ -161,6 +162,10 @@ export interface AppConfig {
       baseUrl: string;
     };
     tongyiAudioService: {
+      baseUrl: string;
+      publicBaseUrl: string;
+    };
+    reportCanvasService: {
       baseUrl: string;
       publicBaseUrl: string;
     };
@@ -417,6 +422,27 @@ export interface RecordingTaskMaterializeResponse extends RecordingTaskResponse 
     markdown: string;
     excludedProcessFiles: string[];
   };
+}
+
+export type ArtifactReportStatus =
+  | 'not_started'
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed';
+
+export interface ArtifactReportResponse {
+  artifactId: string;
+  versionId: string;
+  title: string;
+  status: ArtifactReportStatus;
+  jobId?: string;
+  reportSessionId?: string;
+  openUrl?: string;
+  metadata?: Record<string, unknown>;
+  errorMessage?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type ArtifactImageStatus =

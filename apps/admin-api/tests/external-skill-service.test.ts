@@ -77,6 +77,14 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
             missingDependencies: [],
             summary: 'visit prep summary',
           },
+          {
+            skillName: 'report-generation',
+            status: 'available',
+            supportsInvoke: true,
+            requiredDependencies: ['env:DASHSCOPE_API_KEY', 'env:REPORT_CANVAS_SERVICE_BASE_URL'],
+            missingDependencies: [],
+            summary: 'report summary',
+          },
         ]);
       }
       if (url.endsWith('/api/models')) {
@@ -93,6 +101,7 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
   const companySkill = skills.find((item) => item.skillCode === 'ext.company_research_pm');
   const needsTodoSkill = skills.find((item) => item.skillCode === 'ext.customer_needs_todo_analysis');
   const visitPrepSkill = skills.find((item) => item.skillCode === 'ext.yunzhijia_visit_prep');
+  const reportSkill = skills.find((item) => item.skillCode === 'ext.report_generation');
 
   assert.ok(companySkill);
   assert.equal(companySkill.status, '运行中');
@@ -120,6 +129,15 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
   assert.equal(visitPrepSkill.debugConfig?.artifactKind, 'markdown');
   assert.equal(visitPrepSkill.assetMaterialization?.enabled, false);
   assert.equal(service.getSkillAssetMaterialization('ext.yunzhijia_visit_prep')?.enabled, false);
+
+  assert.ok(reportSkill);
+  assert.equal(reportSkill.status, '运行中');
+  assert.equal(reportSkill.implementationType, 'skill');
+  assert.equal(reportSkill.runtimeSkillName, 'report-generation');
+  assert.equal(reportSkill.debugConfig?.artifactKind, 'report');
+  assert.equal(reportSkill.debugConfig?.defaultModel, null);
+  assert.deepEqual(reportSkill.debugConfig?.supportedModels, []);
+  assert.equal(reportSkill.model, null);
   assert.equal(skills.some((item) => item.skillCode === 'ext.super_ppt'), false);
   assert.equal(skills.some((item) => item.skillCode === 'ext.audio_transcribe'), false);
 });

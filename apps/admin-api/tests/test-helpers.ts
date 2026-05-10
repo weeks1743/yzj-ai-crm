@@ -19,6 +19,8 @@ interface TestConfigOptions {
   skillRuntimeBaseUrl?: string;
   tongyiAudioServiceBaseUrl?: string;
   tongyiAudioPublicBaseUrl?: string;
+  reportCanvasServiceBaseUrl?: string;
+  reportCanvasPublicBaseUrl?: string;
   mongodbUri?: string;
   mongodbDb?: string;
   qdrantUrl?: string;
@@ -198,6 +200,12 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
         publicBaseUrl: options.tongyiAudioPublicBaseUrl
           ?? options.tongyiAudioServiceBaseUrl
           ?? 'http://127.0.0.1:3018',
+      },
+      reportCanvasService: {
+        baseUrl: options.reportCanvasServiceBaseUrl ?? 'http://127.0.0.1:3020',
+        publicBaseUrl: options.reportCanvasPublicBaseUrl
+          ?? options.reportCanvasServiceBaseUrl
+          ?? 'http://127.0.0.1:3020',
       },
     },
     meta: {

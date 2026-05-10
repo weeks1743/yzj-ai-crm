@@ -91,6 +91,8 @@ export function probeDependencies(config: AppConfig): DependencySnapshot {
   const details = Object.fromEntries([
     probeEnv('DEEPSEEK_API_KEY', config.deepseek.apiKey),
     probeEnv('ARK_API_KEY', config.ark.apiKey),
+    probeEnv('DASHSCOPE_API_KEY', process.env.DASHSCOPE_API_KEY?.trim() || null),
+    probeEnv('REPORT_CANVAS_SERVICE_BASE_URL', config.reportCanvas.baseUrl),
     probeCommand('python3', ['--version']),
     probeCommand('soffice', ['--version']),
     probeCommand('pdftoppm', ['-v']),
