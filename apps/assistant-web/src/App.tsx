@@ -141,6 +141,7 @@ import {
   DEFAULT_UPDATE_FIELD_VISIBLE_COUNT,
   UPDATE_FIELD_VISIBLE_COUNT_STEP,
   filterUpdateFieldQuestions,
+  findLatestPendingQuestionInteractionId,
   getMetaQuestionAnswerDisplay,
   getMetaQuestionCurrentDisplay,
   pickChangedMetaQuestionAnswers,
@@ -4455,20 +4456,6 @@ function findLatestPendingConfirmationTrace(
       return item.message.role === 'assistant' && pending?.status === 'pending';
     })
     ?.message.extraInfo?.agentTrace;
-}
-
-function findLatestPendingQuestionInteractionId(
-  messages: MessageInfo<AssistantChatMessage>[],
-) {
-  return [...messages]
-    .reverse()
-    .find((item) => {
-      const pending = item.message.extraInfo?.agentTrace?.pendingInteraction;
-      return item.message.role === 'assistant'
-        && pending?.status === 'pending'
-        && Boolean(pending.questionCard?.questions?.length);
-    })
-    ?.message.extraInfo?.agentTrace?.pendingInteraction?.interactionId;
 }
 
 function findPendingRecordingFollowupTaskIds(

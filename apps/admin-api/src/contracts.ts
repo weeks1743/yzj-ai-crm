@@ -684,6 +684,7 @@ export interface AgentChatMessage {
     uiSurfaces?: AgentUiSurface[];
     agentTrace: {
       traceId: string;
+      attemptTraceId?: string;
       intentFrame: IntentFrame;
       taskPlan: TaskPlan;
       executionState: ExecutionState;

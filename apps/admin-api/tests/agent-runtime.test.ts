@@ -4383,6 +4383,197 @@ test('Agent runtime resumes waiting input from structured Meta Question answers'
   );
 });
 
+test('Agent runtime normalizes customer create attributes and keeps resume trace stable', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const previewInputs: any[] = [];
+  const required = ['contact_name', 'contact_phone', 'enabled_state', 'customer_type', 'customer_status', 'Ra_1', 'owner_open_id'];
+  const fields: ShadowStandardizedField[] = [
+    { fieldCode: 'Te_5', label: '联系人姓名', widgetType: 'textWidget', writeParameterKey: 'contact_name', options: [], writePolicy: 'promptable' } as any,
+    { fieldCode: 'Nu_1', label: '联系人手机', widgetType: 'numberWidget', writeParameterKey: 'contact_phone', options: [], writePolicy: 'promptable' } as any,
+    { fieldCode: '_S_DISABLE', label: '启用状态', widgetType: 'switchWidget', writeParameterKey: 'enabled_state', options: [{ title: '启用', value: '启用', key: '1' }, { title: '停用', value: '停用', key: '0' }], writePolicy: 'promptable' } as any,
+    { fieldCode: 'Ra_3', label: '客户类型', widgetType: 'radioWidget', writeParameterKey: 'customer_type', semanticSlot: 'customer_type', options: [{ title: '普通客户', value: '普通客户', key: 'normal' }, { title: 'VIP客户', value: 'VIP客户', key: 'vip' }], writePolicy: 'promptable' } as any,
+    { fieldCode: 'Ra_0', label: '客户状态', widgetType: 'radioWidget', writeParameterKey: 'customer_status', options: [{ title: '销售线索阶段', value: '销售线索阶段', key: 'lead' }], writePolicy: 'promptable' } as any,
+    { fieldCode: 'Ra_1', label: '客户是否分配', widgetType: 'radioWidget', writeParameterKey: 'Ra_1', options: [{ title: '已分配', value: '已分配', key: 'assigned' }, { title: '未分配', value: '未分配', key: 'unassigned' }], writePolicy: 'promptable' } as any,
+    { fieldCode: 'Ra_8', label: '所属行业', widgetType: 'radioWidget', writeParameterKey: 'industry', semanticSlot: 'industry', options: [{ title: '电子', value: '电子', key: 'electronics' }, { title: '通讯', value: '通讯', key: 'telecom' }], writePolicy: 'promptable' } as any,
+    { fieldCode: 'Ps_0', label: '销售负责人', widgetType: 'personSelectWidget', writeParameterKey: 'owner_open_id', options: [], writePolicy: 'promptable' } as any,
+  ];
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: (request) => recordIntent('customer', 'write', request.query.replace(/^新增客户\s*/, '')),
+    orgSyncRepository: {
+      findEmployees: async () => [{
+        openId: 'owner-zhangchenlu',
+        name: '张晨路',
+        phone: '18661055989',
+        email: 'chenlu_zhang@yunzhijia.com',
+      }],
+    },
+    shadowMetadataService: {
+      getObject: () => ({ fields }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => {
+        previewInputs.push(input);
+        const params = input.params ?? {};
+        const missing = required.filter((paramKey) => params[paramKey] === undefined);
+        return {
+          objectKey: 'customer',
+          operation: 'upsert',
+          unresolvedDictionaries: [],
+          resolvedDictionaryMappings: [],
+          missingRequiredParams: missing,
+          blockedReadonlyParams: [],
+          missingRuntimeInputs: [],
+          validationErrors: [],
+          readyToSend: missing.length === 0,
+          requestBody: {
+            formCodeId: 'customer-form',
+            data: [{
+              widgetValue: {
+                _S_NAME: params.customer_name,
+                Ra_8: params.industry,
+                Ra_3: params.customer_type,
+                Ps_0: params.owner_open_id,
+              },
+            }],
+          },
+        };
+      },
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const waiting = await service.chat({
+    conversationKey: 'conv-trace-b3f99ae0-repro',
+    sceneKey: 'chat',
+    query: '新增客户 江苏三木集团有限公司，行业：电子行业，VIP客户',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  assert.equal(waiting.executionState.status, 'waiting_input');
+  assert.equal(previewInputs[0]?.params.customer_name, '江苏三木集团有限公司');
+  assert.equal(previewInputs[0]?.params.industry, 'electronics');
+  assert.equal(previewInputs[0]?.params.customer_type, 'vip');
+  assert.equal(
+    (waiting.message.extraInfo.agentTrace.selectedTool?.input.agentControl as any)?.duplicateCheck?.filters?.[0]?.value,
+    '江苏三木集团有限公司',
+  );
+
+  const firstTraceId = waiting.traceId;
+  const firstPending = waiting.message.extraInfo.agentTrace.pendingInteraction;
+  const continued = await service.chat({
+    conversationKey: 'conv-trace-b3f99ae0-repro',
+    sceneKey: 'chat',
+    query: '联系人姓名：李伟，启用状态：启用，客户状态：销售线索阶段，客户是否分配：已分配，联系人手机：13612952000',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: firstPending!.interactionId,
+      answers: {
+        contact_name: '李伟',
+        contact_phone: '13612952000',
+        enabled_state: '1',
+        customer_status: 'lead',
+        Ra_1: 'assigned',
+      },
+    },
+  });
+
+  assert.equal(continued.traceId, firstTraceId);
+  assert.equal(continued.message.extraInfo.agentTrace.traceId, firstTraceId);
+  assert.ok(continued.message.extraInfo.agentTrace.attemptTraceId);
+  assert.notEqual(continued.message.extraInfo.agentTrace.attemptTraceId, firstTraceId);
+  assert.equal(continued.executionState.status, 'waiting_input');
+
+  const secondPending = continued.message.extraInfo.agentTrace.pendingInteraction;
+  const completed = await service.chat({
+    conversationKey: 'conv-trace-b3f99ae0-repro',
+    sceneKey: 'chat',
+    query: '负责人：张晨路 · 18661055989 · chenlu_zhang@yunzhijia.com',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: waiting.executionState.runId,
+      action: 'provide_input',
+      interactionId: secondPending!.interactionId,
+      answers: {
+        owner_open_id: '张晨路 · 18661055989 · chenlu_zhang@yunzhijia.com',
+      },
+    },
+  });
+
+  assert.equal(completed.traceId, firstTraceId);
+  assert.equal(completed.executionState.status, 'waiting_confirmation');
+  assert.equal(previewInputs.at(-1)?.params.customer_name, '江苏三木集团有限公司');
+  assert.equal(previewInputs.at(-1)?.params.industry, 'electronics');
+  assert.equal(previewInputs.at(-1)?.params.owner_open_id?.open_id, 'owner-zhangchenlu');
+});
+
+test('Agent runtime turns repairable validation errors into Meta Question Card questions', async () => {
+  const repository = new AgentRunRepository(createInMemoryDatabase());
+  const fields: ShadowStandardizedField[] = [
+    {
+      fieldCode: 'Ra_8',
+      label: '所属行业',
+      widgetType: 'radioWidget',
+      writeParameterKey: 'industry',
+      semanticSlot: 'industry',
+      options: [
+        { title: '电子', value: '电子', key: 'electronics' },
+        { title: '通讯', value: '通讯', key: 'telecom' },
+      ],
+      writePolicy: 'promptable',
+    } as any,
+  ];
+  const { service } = createAgentTestService({
+    repository,
+    intentFrame: recordIntent('customer', 'write', '江苏三木集团有限公司'),
+    shadowMetadataService: {
+      getObject: () => ({ fields }),
+      executeSearch: async () => ({ records: [] }),
+      executeGet: async () => ({ record: null }),
+      previewUpsert: async (_objectKey: ShadowObjectKey, input: any) => ({
+        objectKey: 'customer',
+        operation: 'upsert',
+        unresolvedDictionaries: [],
+        resolvedDictionaryMappings: [],
+        missingRequiredParams: [],
+        blockedReadonlyParams: [],
+        missingRuntimeInputs: [],
+        validationErrors: input.params?.industry === '电子制造行业'
+          ? ['所属行业 的单选值未命中模板选项']
+          : [],
+        readyToSend: input.params?.industry !== '电子制造行业',
+        requestBody: {
+          formCodeId: 'customer-form',
+          data: [{ widgetValue: { _S_NAME: input.params?.customer_name } }],
+        },
+      }),
+      executeUpsert: async () => {
+        throw new Error('not used');
+      },
+    },
+  });
+
+  const response = await service.chat({
+    conversationKey: 'conv-validation-repair-question',
+    sceneKey: 'chat',
+    query: '新增客户 江苏三木集团有限公司，行业：电子制造行业',
+    tenantContext: { operatorOpenId: 'operator-001' },
+  });
+
+  const questionCard = response.message.extraInfo.agentTrace.pendingInteraction?.questionCard;
+  const industryQuestion = questionCard?.questions.find((item) => item.paramKey === 'industry');
+
+  assert.equal(response.executionState.status, 'waiting_input');
+  assert.equal(industryQuestion?.label, '所属行业');
+  assert.equal(industryQuestion?.type, 'single_select');
+  assert.deepEqual(industryQuestion?.options?.map((item) => item.label), ['电子', '通讯']);
+  assert.equal(response.message.extraInfo.agentTrace.pendingInteraction?.blockedRows?.length, 0);
+});
+
 test('Agent runtime blocks ready record preview when write payload is empty', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const { service } = createAgentTestService({

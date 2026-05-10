@@ -177,6 +177,7 @@ export interface AssistantChatMessage {
     };
     agentTrace?: {
       traceId: string;
+      attemptTraceId?: string;
       intentFrame: any;
       taskPlan: any;
       executionState: any;

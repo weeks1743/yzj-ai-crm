@@ -483,6 +483,19 @@ export class AgentRunRepository {
     return null;
   }
 
+  async findTraceIdByRunId(runId: string): Promise<string | null> {
+    const row = await this.database.queryMaybeOne<{ trace_id: string }>(
+      `
+        SELECT trace_id
+        FROM ${this.database.table('agent_runs')}
+        WHERE run_id = $1
+        LIMIT 1
+      `,
+      [runId],
+    );
+    return row?.trace_id?.trim() || null;
+  }
+
   async findFocusedCompany(conversationKey: string): Promise<string | null> {
     const row = await this.database.query<FocusRow>(
       `

@@ -2642,7 +2642,7 @@ function resolveRecordSubjectName(input: {
 }): string {
   const subjectNameParam = input.capability.previewInputPolicy?.subjectNameParam ?? inferRecordNameParam(input.objectKey);
   const targetName = normalizeRecordSubjectNameCandidate({
-    value: input.targetName ?? '',
+    value: sanitizeRecordSubjectNameCandidate(input.targetName ?? '', input.objectKey),
     objectKey: input.objectKey,
     capability: input.capability,
     subjectNameParam,
@@ -2651,7 +2651,7 @@ function resolveRecordSubjectName(input: {
     return targetName;
   }
   return normalizeRecordSubjectNameCandidate({
-    value: input.fallbackName ?? extractRecordName(input.query, input.objectKey),
+    value: sanitizeRecordSubjectNameCandidate(input.fallbackName ?? extractRecordName(input.query, input.objectKey), input.objectKey),
     objectKey: input.objectKey,
     capability: input.capability,
     subjectNameParam,
@@ -2804,6 +2804,20 @@ function extractRecordWriteParamsFromQuery(input: {
     const normalized = normalizeExplicitWriteValue(rawValue, field);
     if (normalized !== undefined && hasMeaningfulValue(normalized)) {
       params[paramKey] = normalized;
+    }
+  }
+  const implicitParams = extractImplicitOptionWriteParamsFromQuery({
+    query: input.query,
+    capability: input.capability,
+    fields: input.fields,
+    currentParams: {
+      ...(input.currentParams ?? {}),
+      ...params,
+    },
+  });
+  for (const [paramKey, value] of Object.entries(implicitParams)) {
+    if (!hasMeaningfulValue(input.currentParams?.[paramKey]) && !hasMeaningfulValue(params[paramKey])) {
+      params[paramKey] = value;
     }
   }
   return params;
@@ -3082,11 +3096,101 @@ function resolveFieldOptionFromText(
   field: ShadowStandardizedField,
 ): ShadowStandardizedField['options'][number] | undefined {
   const comparable = normalizeDisplayComparable(value);
-  return field.options.find((option) => {
+  const exact = field.options.find((option) => {
     const values = [option.title, option.value, option.key, option.dicId, ...(option.aliases ?? [])]
       .filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
     return values.some((item) => normalizeDisplayComparable(item) === comparable);
   });
+  if (exact) {
+    return exact;
+  }
+
+  const fuzzyMatches = field.options.filter((option) => isSafeFieldOptionAliasMatch(value, field, option));
+  return fuzzyMatches.length === 1 ? fuzzyMatches[0] : undefined;
+}
+
+function isSafeFieldOptionAliasMatch(
+  value: string,
+  field: ShadowStandardizedField,
+  option: ShadowStandardizedField['options'][number],
+): boolean {
+  const normalizedValue = normalizeDisplayComparable(value);
+  if (!normalizedValue) {
+    return false;
+  }
+  const optionTexts = [option.title, option.value]
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map(normalizeDisplayComparable);
+  const fieldText = normalizeDisplayComparable(`${field.label} ${field.semanticSlot ?? ''} ${field.writeParameterKey ?? ''}`);
+  if (/行业|industry/.test(fieldText)) {
+    return optionTexts.some((item) => item && (
+      normalizedValue === `${item}行业`
+      || normalizedValue === `${item}业`
+    ));
+  }
+  return false;
+}
+
+function extractImplicitOptionWriteParamsFromQuery(input: {
+  query: string;
+  capability: RecordToolCapability;
+  fields: ShadowStandardizedField[];
+  currentParams?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  const normalizedSegments = splitLooseRecordWriteSegments(input.query)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (!normalizedSegments.length) {
+    return params;
+  }
+  for (const { paramKey, field } of buildWritableFieldEntries({
+    capability: input.capability,
+    fields: input.fields,
+  })) {
+    if (hasMeaningfulValue(input.currentParams?.[paramKey]) || hasMeaningfulValue(params[paramKey])) {
+      continue;
+    }
+    if (!field?.options?.length || field.writePolicy === 'read_only' || field.writePolicy === 'derived') {
+      continue;
+    }
+    const fieldText = normalizeDisplayComparable(`${field.label} ${field.semanticSlot ?? ''} ${field.writeParameterKey ?? ''}`);
+    for (const segment of normalizedSegments) {
+      if (findMatchedFieldAlias(segment, buildFieldSemanticEntry({ paramKey, field, capability: input.capability }))) {
+        continue;
+      }
+      if (!isImplicitOptionSegmentAllowed(segment, fieldText)) {
+        continue;
+      }
+      const option = resolveFieldOptionFromText(segment, field);
+      if (option) {
+        params[paramKey] = normalizeOptionHintValue(field, option);
+        break;
+      }
+    }
+  }
+  return params;
+}
+
+function splitLooseRecordWriteSegments(query: string): string[] {
+  return query
+    .replace(/^\/\S+\s*/, '')
+    .split(/[，,、；;\n]+/)
+    .map((segment) => segment.trim());
+}
+
+function isImplicitOptionSegmentAllowed(segment: string, fieldText: string): boolean {
+  const normalized = normalizeDisplayComparable(segment);
+  if (!normalized) {
+    return false;
+  }
+  if (/行业|industry/.test(fieldText)) {
+    return /行业/.test(segment);
+  }
+  if (/客户类型|customertype/.test(fieldText)) {
+    return /客户/.test(segment);
+  }
+  return false;
 }
 
 function parseNumericWriteValue(value: string): number | string {
@@ -3211,13 +3315,41 @@ function extractRecordName(query: string, objectKey: string): string {
   }
   const commandStripped = stripRecordWriteCommandPrefix(withoutSlash, labels);
   if (commandStripped && commandStripped !== withoutSlash) {
-    const candidate = cleanupCompanyName(commandStripped);
+    const candidate = cleanupCompanyName(sanitizeRecordSubjectNameCandidate(commandStripped, objectKey));
     return isMeaningfulRecordNameCandidate(candidate, objectKey) ? candidate : '';
   }
   const pattern = new RegExp(`(?:录入|创建|新增|新建|补录|查询|查一下|找一下|搜索)?(?:一个|这?个)?(?:${labels})?[，,：:\\s]*([^，。！？\\n]+)`);
   const matched = withoutSlash.match(pattern)?.[1] ?? '';
-  const candidate = cleanupCompanyName(matched) || cleanupCompanyName(withoutSlash);
+  const candidate = cleanupCompanyName(sanitizeRecordSubjectNameCandidate(matched, objectKey))
+    || cleanupCompanyName(sanitizeRecordSubjectNameCandidate(withoutSlash, objectKey));
   return isMeaningfulRecordNameCandidate(candidate, objectKey) ? candidate : '';
+}
+
+function sanitizeRecordSubjectNameCandidate(value: string, objectKey: string): string {
+  const candidate = value.trim();
+  if (!candidate || objectKey !== 'customer') {
+    return candidate;
+  }
+  const segments = candidate
+    .split(/[，,、；;\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (segments.length <= 1) {
+    return candidate;
+  }
+  const first = segments[0] ?? '';
+  if (!first) {
+    return candidate;
+  }
+  const restLooksLikeFields = segments.slice(1).some(isCustomerAttributeSegment);
+  return restLooksLikeFields ? first : candidate;
+}
+
+function isCustomerAttributeSegment(segment: string): boolean {
+  const normalized = segment.replace(/\s+/g, '');
+  return /^(?:所属)?行业[:：=]|^客户?类型[:：=]|^类型[:：=]|^客户状态[:：=]|^状态[:：=]|^联系人|^负责人|^省[:：=]|^市[:：=]|^区[:：=]/.test(normalized)
+    || /^(?:普通客户|VIP客户|合作伙伴|竞争对手|竞争对手客户|集成商|代理商|供应商|其他)$/.test(normalized)
+    || /^(?:电子|通讯|咨询|互联网|教育)行业?$/.test(normalized);
 }
 
 function isBareRecordWriteCommand(query: string, labels: string): boolean {
@@ -5562,21 +5694,25 @@ function buildRecordPreviewView(input: {
   fields?: ShadowStandardizedField[];
   shadowMetadataService?: ShadowMetadataService;
 }): RecordWritePreviewView {
+  const validationRepairRows = buildValidationRepairRows(input);
   return {
     title: input.mode === 'create' ? '待确认写入记录' : '待确认更新记录',
     summaryRows: buildSummaryRows(input),
-    missingRequiredRows: input.preview.missingRequiredParams.map((paramKey) => ({
-      label: getFieldLabel(input.capability, paramKey),
-      paramKey,
-      reason: '模板必填，必须由用户明确提供或由证据唯一确定',
-      source: 'tool',
-      options: buildFieldOptionHints(paramKey, input.fields),
-      lookup: buildFieldQuestionLookup({
+    missingRequiredRows: [
+      ...input.preview.missingRequiredParams.map((paramKey) => ({
+        label: getFieldLabel(input.capability, paramKey),
         paramKey,
-        fields: input.fields,
-        shadowMetadataService: input.shadowMetadataService,
-      }),
-    })),
+        reason: '模板必填，必须由用户明确提供或由证据唯一确定',
+        source: 'tool' as const,
+        options: buildFieldOptionHints(paramKey, input.fields),
+        lookup: buildFieldQuestionLookup({
+          paramKey,
+          fields: input.fields,
+          shadowMetadataService: input.shadowMetadataService,
+        }),
+      })),
+      ...validationRepairRows,
+    ],
     blockedRows: [
       ...input.preview.blockedReadonlyParams.map((paramKey) => ({
         label: getFieldLabel(input.capability, paramKey),
@@ -5590,14 +5726,79 @@ function buildRecordPreviewView(input: {
         reason: '缺少运行时输入',
         source: 'tool' as const,
       })),
-      ...input.preview.validationErrors.map((reason) => ({
-        label: '校验错误',
-        reason,
-        source: 'tool' as const,
-      })),
+      ...input.preview.validationErrors
+        .filter((reason) => !validationRepairRows.some((row) => row.reason === reason))
+        .map((reason) => ({
+          label: '校验错误',
+          reason,
+          source: 'tool' as const,
+        })),
     ],
     recommendedRows: buildRecommendedRows(input),
   };
+}
+
+function buildValidationRepairRows(input: {
+  requestInput: ShadowPreviewUpsertInput;
+  preview: ShadowPreviewResponse;
+  fields?: ShadowStandardizedField[];
+  shadowMetadataService?: ShadowMetadataService;
+}): RecordWritePreviewRow[] {
+  const params = readRequestParams(input.requestInput);
+  return input.preview.validationErrors
+    .map((reason) => buildValidationRepairRow({
+      reason,
+      params,
+      fields: input.fields ?? [],
+      shadowMetadataService: input.shadowMetadataService,
+    }))
+    .filter((row): row is RecordWritePreviewRow => Boolean(row));
+}
+
+function buildValidationRepairRow(input: {
+  reason: string;
+  params: Record<string, unknown>;
+  fields: ShadowStandardizedField[];
+  shadowMetadataService?: ShadowMetadataService;
+}): RecordWritePreviewRow | null {
+  const field = resolveValidationErrorField(input.reason, input.fields);
+  const paramKey = field?.writeParameterKey?.trim() || field?.semanticSlot?.trim() || field?.fieldCode?.trim();
+  if (!field || !paramKey) {
+    return null;
+  }
+  const currentValue = input.params[paramKey] ?? input.params[field.fieldCode] ?? (field.semanticSlot ? input.params[field.semanticSlot] : undefined);
+  return {
+    label: field.label || paramKey,
+    paramKey,
+    value: hasMeaningfulValue(currentValue) ? stringifyFieldValueForDisplay(field, currentValue) : undefined,
+    reason: input.reason,
+    source: 'tool',
+    options: buildFieldOptionHints(paramKey, input.fields),
+    lookup: buildFieldQuestionLookup({
+      paramKey,
+      fields: input.fields,
+      shadowMetadataService: input.shadowMetadataService,
+    }),
+  };
+}
+
+function resolveValidationErrorField(
+  reason: string,
+  fields: ShadowStandardizedField[],
+): ShadowStandardizedField | undefined {
+  const normalizedReason = normalizeDisplayComparable(reason);
+  return fields
+    .filter((field) => field.writePolicy !== 'read_only' && field.writePolicy !== 'derived' && !field.readOnly && field.edit !== false)
+    .sort((left, right) => (right.label?.length ?? 0) - (left.label?.length ?? 0))
+    .find((field) => {
+      const labels = [
+        field.label,
+        field.writeParameterKey,
+        field.semanticSlot,
+        field.fieldCode,
+      ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+      return labels.some((label) => normalizedReason.includes(normalizeDisplayComparable(label)));
+    });
 }
 
 function withRecordingFollowupRequiredRows(input: {
