@@ -178,7 +178,8 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
     (input) => {
       const userPrompt = input.messages.find((message) => message.role === 'user')?.content || '';
       const systemPrompt = input.messages.find((message) => message.role === 'system')?.content || '';
-      assert.match(systemPrompt, /只能读取“可用输入文件”清单中的具体文件路径/);
+      assert.match(systemPrompt, /只能读取“可用输入文件”清单中的具体输入文件/);
+      assert.match(systemPrompt, /输入目录\/输入子目录/);
       assert.doesNotMatch(systemPrompt, /Job 附件目录/);
       const attachmentPath = extractListItem(userPrompt, '.md');
       return {
@@ -255,6 +256,84 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
     const artifactText = await artifactResponse.text();
     assert.match(artifactText, /客户价值定位/);
     assert.match(artifactText, /多个系统间来回切换/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('POST /api/jobs preserves profile-analysis markdown attachment directory for generic text skills', async () => {
+  const tempRoot = createTempDir('skill-runtime-http-profile-analysis-');
+  const skillDir = resolve(REPO_ROOT, '3rdSkill');
+  const profilePath = writeTextFixture(
+    tempRoot,
+    'recording/profile-analysis/customer-profile.md',
+    '# 客户画像\n\n客户关注统一门户和流程审批。',
+  );
+
+  const chatClient = new QueueChatClient([
+    (input) => {
+      const userPrompt = input.messages.find((message) => message.role === 'user')?.content || '';
+      const systemPrompt = input.messages.find((message) => message.role === 'system')?.content || '';
+      assert.match(systemPrompt, /输入目录\/输入子目录/);
+      assert.doesNotMatch(systemPrompt, /不要把输入目录/);
+      assert.match(userPrompt, /inputs\/profile-analysis\/customer-profile\.md/);
+      const attachmentPath = extractListItem(userPrompt, '.md');
+      return {
+        content: null,
+        toolCalls: [
+          {
+            id: 'profile-1',
+            name: 'read_source_file',
+            arguments: JSON.stringify({
+              path: attachmentPath,
+            }),
+          },
+          {
+            id: 'profile-2',
+            name: 'write_text_artifact',
+            arguments: JSON.stringify({
+              fileName: 'customer-needs-todo-analysis.md',
+              content: '# 客户需求工作待办分析\n\n- 推进统一门户试点。',
+            }),
+          },
+        ],
+      };
+    },
+    {
+      content: 'Customer needs todo analysis generated.',
+      toolCalls: [],
+    },
+  ]);
+
+  const harness = await createRuntimeHarness({
+    config: createTestConfig({
+      rootDir: tempRoot,
+      skillDirs: [skillDir],
+      allowedRoots: [tempRoot, REPO_ROOT],
+      artifactDir: join(tempRoot, 'artifacts'),
+    }),
+    dependencySnapshot: createDependencySnapshot(),
+    chatClient,
+    webSearchClient: new StubWebSearchClient({}),
+  });
+
+  try {
+    const response = await fetch(`${harness.baseUrl}/api/jobs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        skillName: 'customer-needs-todo-analysis',
+        requestText: '请根据附件整理客户需求工作待办分析',
+        attachments: [profilePath],
+      }),
+    });
+    assert.equal(response.status, 202);
+    const createdJob = await response.json();
+    const job = await waitForJobCompletion(harness.baseUrl, createdJob.jobId);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job.error));
+    assert.equal(job.finalText, 'Customer needs todo analysis generated.');
   } finally {
     await harness.close();
   }

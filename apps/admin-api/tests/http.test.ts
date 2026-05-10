@@ -13,6 +13,7 @@ import { ApprovalClient } from '../src/approval-client.js';
 import { AgentObservabilityService } from '../src/agent-observability-service.js';
 import { AgentRunRepository } from '../src/agent-run-repository.js';
 import { createAdminApiServer } from '../src/app.js';
+import { ArtifactReportService } from '../src/artifact-report-service.js';
 import { DictionaryResolver } from '../src/dictionary-resolver.js';
 import { ExternalSkillService } from '../src/external-skill-service.js';
 import { LightCloudClient } from '../src/lightcloud-client.js';
@@ -1574,6 +1575,7 @@ async function createTestServer(options: {
   imageFetchImpl?: FetchLike;
   skillRuntimeFetchImpl?: FetchLike;
   recordingTaskService?: unknown;
+  artifactReportService?: unknown;
 } = {}) {
   const tempDir = mkdtempSync(join(tmpdir(), 'yzj-shadow-http-'));
   const fieldBoundWorkbookPath = join(tempDir, 'province-city-district.xlsx');
@@ -1695,6 +1697,7 @@ async function createTestServer(options: {
       now: () => new Date('2026-04-24T09:00:00.000Z'),
     }),
     recordingTaskService: options.recordingTaskService as any,
+    artifactReportService: options.artifactReportService as any,
   });
 
   server.listen(0);
@@ -2511,6 +2514,131 @@ test('HTTP endpoints execute image generation and return preview metadata', asyn
     assert.equal(invokePayload.generatedAt, '2026-04-24T09:00:00.000Z');
     assert.match(invokePayload.previewDataUrl, /^data:image\/png;base64,/);
     assert.equal(typeof invokePayload.latencyMs, 'number');
+  } finally {
+    runtime.server.close();
+    await once(runtime.server, 'close');
+    rmSync(runtime.tempDir, { recursive: true, force: true });
+  }
+});
+
+test('HTTP endpoints generate transient markdown report payloads', async () => {
+  const runtime = await createTestServer({
+    artifactReportService: {
+      generateMarkdownReport: async (input: { title?: string; markdown?: string }) => {
+        assert.equal(input.title, '客户拜访准备');
+        assert.match(input.markdown ?? '', /客户关注审批效率/);
+        return {
+          title: input.title,
+          status: 'succeeded',
+          jobId: 'job-markdown-report-001',
+          openUrl: '/embed/rpt_markdown_001',
+          reportSessionId: 'rpt_markdown_001',
+          isPersistent: false,
+          errorMessage: null,
+          generatedAt: '2026-05-11T09:00:00.000Z',
+        };
+      },
+    },
+  });
+
+  try {
+    const response = await fetch(`${runtime.baseUrl}/api/markdown/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: '客户拜访准备',
+        markdown: '# 客户拜访准备\n\n客户关注审批效率。',
+      }),
+    });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      status: string;
+      isPersistent: boolean;
+      openUrl?: string;
+      reportSessionId?: string;
+    };
+    assert.equal(payload.status, 'succeeded');
+    assert.equal(payload.isPersistent, false);
+    assert.equal(payload.openUrl, '/embed/rpt_markdown_001');
+    assert.equal(payload.reportSessionId, 'rpt_markdown_001');
+  } finally {
+    runtime.server.close();
+    await once(runtime.server, 'close');
+    rmSync(runtime.tempDir, { recursive: true, force: true });
+  }
+});
+
+test('HTTP endpoints reject empty transient markdown report input', async () => {
+  const runtime = await createTestServer({
+    artifactReportService: new ArtifactReportService({
+      config: createTestConfig(),
+      repository: {} as any,
+      artifactService: {} as any,
+      externalSkillService: {
+        createSkillJob: async () => {
+          throw new Error('should not create job');
+        },
+      } as any,
+    }),
+  });
+
+  try {
+    const response = await fetch(`${runtime.baseUrl}/api/markdown/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: '空报告',
+        markdown: '  ',
+      }),
+    });
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message: string };
+    assert.match(payload.message, /Markdown 内容为空/);
+  } finally {
+    runtime.server.close();
+    await once(runtime.server, 'close');
+    rmSync(runtime.tempDir, { recursive: true, force: true });
+  }
+});
+
+test('HTTP endpoints return failed transient markdown report payloads from runtime', async () => {
+  const runtime = await createTestServer({
+    artifactReportService: {
+      generateMarkdownReport: async () => ({
+        title: '客户拜访准备',
+        status: 'failed',
+        jobId: 'job-markdown-report-failed',
+        isPersistent: false,
+        errorMessage: '报告生成超时，请稍后重试。',
+        generatedAt: '2026-05-11T09:01:00.000Z',
+      }),
+    },
+  });
+
+  try {
+    const response = await fetch(`${runtime.baseUrl}/api/markdown/report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: '客户拜访准备',
+        markdown: '# 客户拜访准备',
+      }),
+    });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      status: string;
+      isPersistent: boolean;
+      errorMessage?: string;
+    };
+    assert.equal(payload.status, 'failed');
+    assert.equal(payload.isPersistent, false);
+    assert.match(payload.errorMessage ?? '', /报告生成超时/);
   } finally {
     runtime.server.close();
     await once(runtime.server, 'close');

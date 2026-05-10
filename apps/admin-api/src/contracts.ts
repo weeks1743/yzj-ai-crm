@@ -448,6 +448,22 @@ export interface ArtifactReportResponse {
   updatedAt?: string;
 }
 
+export interface MarkdownReportGenerationRequest {
+  title?: string;
+  markdown: string;
+}
+
+export interface MarkdownReportGenerationResponse {
+  title: string;
+  status: ArtifactReportStatus;
+  jobId?: string;
+  openUrl?: string;
+  reportSessionId?: string;
+  isPersistent: false;
+  errorMessage?: string | null;
+  generatedAt?: string;
+}
+
 export type ArtifactImageStatus =
   | 'not_started'
   | 'queued'

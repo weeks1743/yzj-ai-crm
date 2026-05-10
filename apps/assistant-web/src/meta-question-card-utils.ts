@@ -181,6 +181,13 @@ export function getMetaQuestionCurrentDisplay(
     ?? '';
 }
 
+export function getUpdateFieldPickerCurrentText(
+  questionCard: AssistantMetaQuestionCard,
+  question: AssistantMetaQuestion,
+): string {
+  return getMetaQuestionCurrentDisplay(questionCard, question) || '未填写';
+}
+
 export function isSameMetaAnswer(left: unknown, right: unknown): boolean {
   if (isEmptyMetaAnswer(left) && isEmptyMetaAnswer(right)) {
     return true;

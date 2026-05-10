@@ -979,6 +979,93 @@ test('createSkillJob sends structured Tongyi analysis JSON before recording mark
   }
 });
 
+test('createSkillJob includes profile markdown attachments and excludes process-only files', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-profile-attachments-'));
+  try {
+    const assetsDir = join(tempDir, 'assets');
+    const profileDir = join(tempDir, 'profile-analysis');
+    mkdirSync(assetsDir, { recursive: true });
+    mkdirSync(profileDir, { recursive: true });
+    const mindMapPath = join(assetsDir, 'mindMapSummary.json');
+    const materialPath = join(tempDir, 'recording-material.md');
+    const profilePath = join(profileDir, 'customer-profile.md');
+    const processPath = join(tempDir, 'transcription.json');
+    writeFileSync(mindMapPath, '{"mindMapSummary":[{"title":"审批效率"}]}', 'utf8');
+    writeFileSync(materialPath, '# 录音资料包\n\n客户关注审批效率。', 'utf8');
+    writeFileSync(profilePath, '# 客户画像\n\n贝斯美关注统一门户。', 'utf8');
+    writeFileSync(processPath, '{}', 'utf8');
+    const config = createTestConfig({ embeddingApiKey: null });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-profile-attachments',
+      eid: config.yzj.eid,
+      appId: config.yzj.lightCloud.appId,
+      serviceTaskId: 'audio-task-profile-attachments',
+      providerDataId: 'DATA-PROFILE',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: 'visit.mp3',
+        mimeType: 'audio/mpeg',
+        size: 123,
+        md5: 'md5-profile-attachments',
+      },
+      anchors: {},
+      servicePayload: {},
+      artifactId: null,
+      materialPath,
+      materialSource: 'generated',
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    let receivedInput: any = null;
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+      } as any,
+      client: {
+        getTask: async () => {
+          throw new Error('audio service offline during skill job lookup');
+        },
+      } as any,
+      artifactService: {} as any,
+      externalSkillService: {
+        createSkillJob: async (_skillCode: string, input: any) => {
+          receivedInput = input;
+          return {
+            jobId: 'job-recording-profile',
+            skillCode: 'ext.customer_value_positioning_pm',
+            runtimeSkillName: 'customer-value-positioning',
+            model: 'deepseek-v4-flash',
+            status: 'queued',
+            finalText: null,
+            events: [],
+            artifacts: [],
+            error: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      } as any,
+    });
+
+    await service.createSkillJob(record.taskId, {
+      skillCode: 'ext.customer_value_positioning_pm',
+    });
+
+    assert.deepEqual(receivedInput.attachments, [
+      mindMapPath,
+      materialPath,
+      profilePath,
+    ]);
+    assert.equal(receivedInput.attachments.some((item: string) => item.includes('transcription.json')), false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('getSkillJob upserts one formal analysis_material when archived recording job succeeds', async () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'recording-analysis-material-'));
   try {

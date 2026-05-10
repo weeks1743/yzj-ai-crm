@@ -23,7 +23,7 @@ import type {
 } from './contracts.js';
 import { BadRequestError, ExternalServiceError } from './errors.js';
 import { runLocalCommand } from './local-command.js';
-import { assertPathWithinRoots, resolveUserSuppliedPath } from './path-utils.js';
+import { assertPathWithinRoots, isPathWithin, resolveUserSuppliedPath } from './path-utils.js';
 import { fetchAndExtract } from './web-fetch.js';
 
 const DEFAULT_MAX_TOOL_TURNS = 12;
@@ -319,6 +319,10 @@ function resolveReadablePath(
   );
 }
 
+function isWithinInputsDir(pathValue: string, inputsDir: string): boolean {
+  return isPathWithin(inputsDir, pathValue);
+}
+
 function resolveWritablePath(
   inputPath: string,
   context: ToolExecutionContext,
@@ -477,7 +481,7 @@ function createReadSourceFileTool(): RuntimeTool {
       const sourcePath = resolveReadablePath(expectString(args, 'path'), context);
       const stat = statSync(sourcePath, { throwIfNoEntry: false });
       if (stat?.isDirectory()) {
-        if (sourcePath !== context.paths.inputsDir) {
+        if (!isWithinInputsDir(sourcePath, context.paths.inputsDir)) {
           throw new BadRequestError(`读取路径是目录，请传入具体附件文件路径: ${sourcePath}`);
         }
         const { content, truncated, files } = readSupportedInputDirectory(sourcePath);

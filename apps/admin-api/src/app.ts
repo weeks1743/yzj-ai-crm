@@ -13,6 +13,7 @@ import type {
   CompanyResearchArtifactRequest,
   ExternalSkillJobRequest,
   ImageGenerationRequest,
+  MarkdownReportGenerationRequest,
   MarkdownImageGenerationRequest,
   RecordingTaskCreateRequest,
   RecordingTaskMaterializeRequest,
@@ -599,6 +600,15 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         }
         const payload = await readJsonBody<MarkdownImageGenerationRequest>(request);
         writeJson(response, 200, await options.artifactImageService.generateMarkdownImage(payload));
+        return;
+      }
+
+      if (method === 'POST' && url.pathname === '/api/markdown/report') {
+        if (!options.artifactReportService) {
+          throw new ServiceUnavailableError('Markdown 报告生成服务未启用');
+        }
+        const payload = await readJsonBody<MarkdownReportGenerationRequest>(request);
+        writeJson(response, 200, await options.artifactReportService.generateMarkdownReport(payload));
         return;
       }
 

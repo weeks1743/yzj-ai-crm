@@ -6,6 +6,7 @@ import {
   findLatestPendingQuestionInteractionId,
   getMetaQuestionAnswerDisplay,
   getMetaQuestionCurrentDisplay,
+  getUpdateFieldPickerCurrentText,
   pickChangedMetaQuestionAnswers,
   shouldRenderMetaQuestionCard,
 } from './meta-question-card-utils';
@@ -128,6 +129,16 @@ test('update field picker displays enum labels and readable current values', () 
 
   assert.equal(getMetaQuestionAnswerDisplay({ question: status, value: 'won' }), '成交');
   assert.equal(getMetaQuestionCurrentDisplay(card, owner), '陈伟堂');
+});
+
+test('update field picker current text omits label prefix', () => {
+  const card = createUpdateCard();
+  const owner = card.questions[2]!;
+  const missing = card.questions[7]!;
+
+  assert.equal(getUpdateFieldPickerCurrentText(card, owner), '陈伟堂');
+  assert.equal(getUpdateFieldPickerCurrentText(card, missing), '未填写');
+  assert.equal(getUpdateFieldPickerCurrentText(card, owner).startsWith('当前：'), false);
 });
 
 test('cancelled question card is not renderable', () => {

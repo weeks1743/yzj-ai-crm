@@ -612,6 +612,29 @@ export interface MarkdownImageGenerationResponse extends ImageGenerationResponse
   downloadDataUrl: string;
 }
 
+export type ArtifactReportStatus =
+  | 'not_started'
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed';
+
+export interface MarkdownReportGenerationRequest {
+  title?: string;
+  markdown: string;
+}
+
+export interface MarkdownReportGenerationResponse {
+  title: string;
+  status: ArtifactReportStatus;
+  jobId?: string;
+  openUrl?: string;
+  reportSessionId?: string;
+  isPersistent: false;
+  errorMessage?: string | null;
+  generatedAt?: string;
+}
+
 export interface ExternalSkillJobRequest {
   requestText: string;
   model?: SkillRuntimeModelName;

@@ -5,7 +5,7 @@ import {
   readFileSync,
   statSync,
 } from 'node:fs';
-import { basename, extname, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { ArtifactStore, guessMimeType } from './artifact-store.js';
 import type {
   AppConfig,
@@ -155,7 +155,10 @@ export class SkillExecutor {
         throw new BadRequestError(`附件不存在或不是文件: ${attachmentPath}`);
       }
 
-      const destinationPath = join(paths.inputsDir, basename(sourcePath));
+      const destinationPath = basename(dirname(sourcePath)) === 'profile-analysis'
+        ? join(paths.inputsDir, 'profile-analysis', basename(sourcePath))
+        : join(paths.inputsDir, basename(sourcePath));
+      mkdirSync(dirname(destinationPath), { recursive: true });
       copyFileSync(sourcePath, destinationPath);
       stagedPaths.push(destinationPath);
     }
@@ -328,7 +331,7 @@ export class SkillExecutor {
         '- 只允许使用这些工具：read_skill_file, read_source_file, write_text_artifact。',
         '- 必须产出结构化 markdown，不要输出闲聊式答复。',
         '- 如果用户提供了附件，优先读取附件后再组织内容；没有附件时，直接基于 requestText 生成。',
-        '- 只能读取“可用输入文件”清单中的具体文件路径，不要把输入目录、输出目录或工作目录当作文件读取。',
+        '- 只能读取“可用输入文件”清单中的具体输入文件，或读取清单中已出现的输入目录/输入子目录；不要猜测不存在的路径，也不要读取输出目录或工作目录。',
         '- 如技能自带 template.md 或 examples，可按需读取，但不要把模板说明原样照抄到最终结果中。',
         '- 必须在结束前调用 write_text_artifact 生成 markdown 产物。',
         `- 输出 artifact 建议文件名：${skill.skillName}-${job.jobId}.md`,
@@ -339,9 +342,21 @@ export class SkillExecutor {
         `用户请求：${job.requestText}`,
         '',
         '可用输入文件：',
+        ...this.listReadableInputDirectories(paths.inputsDir, stagedAttachments).map((item) => `- ${item}`),
         ...(stagedAttachments.length > 0 ? stagedAttachments.map((item) => `- ${item}`) : ['- 无']),
       ].join('\n'),
     };
+  }
+
+  private listReadableInputDirectories(inputsDir: string, stagedAttachments: string[]): string[] {
+    const directories = new Set<string>();
+    for (const attachmentPath of stagedAttachments) {
+      const parentDir = dirname(attachmentPath);
+      if (parentDir !== inputsDir) {
+        directories.add(parentDir);
+      }
+    }
+    return [...directories].sort();
   }
 
   private async ensurePptxArtifacts(jobId: string): Promise<void> {

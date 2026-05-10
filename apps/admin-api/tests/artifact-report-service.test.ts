@@ -235,3 +235,98 @@ test('ArtifactReportService only accepts company research markdown artifacts', a
     /当前仅支持基于公司研究 Markdown 生成报告/,
   );
 });
+
+test('ArtifactReportService generates transient markdown report from shared runtime inputs', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'yzj-markdown-report-'));
+  try {
+    const createdAttachments: string[][] = [];
+    const service = new ArtifactReportService({
+      config: createTestConfig({ envFilePath: join(tempDir, '.env') }),
+      repository: new ArtifactReportRepository(createInMemoryDatabase()),
+      artifactService: {
+        getArtifact: async () => buildArtifactDetail(),
+      } as any,
+      externalSkillService: {
+        createSkillJob: async (_skillCode: string, input: { attachments?: string[] }) => {
+          createdAttachments.push(input.attachments ?? []);
+          return buildJob('queued');
+        },
+        getSkillJob: async () => buildJob('succeeded'),
+        getSkillJobArtifact: async () => {
+          throw new Error('unexpected artifact read');
+        },
+      } as any,
+    });
+
+    const report = await service.generateMarkdownReport({
+      title: '客户拜访准备',
+      markdown: '# 客户拜访准备\n\n## 讲解重点\n统一门户和流程审批。',
+    });
+
+    assert.equal(report.status, 'succeeded');
+    assert.equal(report.isPersistent, false);
+    assert.equal(report.reportSessionId, 'rpt_001');
+    assert.equal(report.openUrl, 'https://report.example/embed/rpt_001');
+    assert.equal(createdAttachments.length, 1);
+    assert.equal(createdAttachments[0]?.length, 1);
+    assert.match(
+      createdAttachments[0]?.[0] ?? '',
+      /\.local\/skill-runtime-inputs\/markdown-report-inputs\/客户拜访准备-[a-f0-9]{12}\.md$/,
+    );
+    assert.equal(
+      readFileSync(createdAttachments[0]![0]!, 'utf8'),
+      '# 客户拜访准备\n\n## 讲解重点\n统一门户和流程审批。',
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactReportService rejects empty transient markdown report input', async () => {
+  const service = new ArtifactReportService({
+    config: createTestConfig(),
+    repository: new ArtifactReportRepository(createInMemoryDatabase()),
+    artifactService: {
+      getArtifact: async () => buildArtifactDetail(),
+    } as any,
+    externalSkillService: {
+      createSkillJob: async () => {
+        throw new Error('should not create job');
+      },
+    } as any,
+  });
+
+  await assert.rejects(
+    () => service.generateMarkdownReport({ title: '空报告', markdown: '   ' }),
+    /Markdown 内容为空/,
+  );
+});
+
+test('ArtifactReportService returns failed payload when transient markdown report runtime fails', async () => {
+  const service = new ArtifactReportService({
+    config: createTestConfig(),
+    repository: new ArtifactReportRepository(createInMemoryDatabase()),
+    artifactService: {
+      getArtifact: async () => buildArtifactDetail(),
+    } as any,
+    externalSkillService: {
+      createSkillJob: async () => buildJob('queued'),
+      getSkillJob: async () => ({
+        ...buildJob('failed'),
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'report canvas timeout',
+        },
+      }),
+    } as any,
+  });
+
+  const report = await service.generateMarkdownReport({
+    title: '客户拜访准备',
+    markdown: '# 客户拜访准备',
+  });
+
+  assert.equal(report.status, 'failed');
+  assert.equal(report.isPersistent, false);
+  assert.match(report.errorMessage ?? '', /报告生成服务当前不可达|报告生成超时/);
+});

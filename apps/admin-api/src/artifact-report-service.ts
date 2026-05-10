@@ -5,6 +5,7 @@ import type {
   ArtifactReportResponse,
   ArtifactReportStatus,
   ExternalSkillJobResponse,
+  MarkdownReportGenerationResponse,
 } from './contracts.js';
 import type {
   ArtifactReportGenerationRecord,
@@ -17,6 +18,8 @@ import { writeSkillRuntimeInputFile } from './skill-runtime-inputs.js';
 
 const REPORT_GENERATION_SKILL_CODE = 'ext.report_generation';
 const LEGACY_TRANSIENT_REPORT_MESSAGE = '该报告仅保存了临时会话链接，报告会话已过期或服务已重启，请重新生成报告。';
+const MARKDOWN_REPORT_WAIT_TIMEOUT_MS = 180_000;
+const MARKDOWN_REPORT_POLL_INTERVAL_MS = 1_000;
 
 interface ReportReadyEventData {
   sessionId?: string;
@@ -168,6 +171,35 @@ export class ArtifactReportService {
     }
   }
 
+  async generateMarkdownReport(input: {
+    title?: string;
+    markdown?: string;
+  }): Promise<MarkdownReportGenerationResponse> {
+    const title = input.title?.trim() || 'Markdown 报告';
+    const markdown = input.markdown?.trim() ?? '';
+    if (!markdown) {
+      throw new BadRequestError('Markdown 内容为空，无法生成报告');
+    }
+
+    try {
+      const markdownPath = this.writeStandaloneMarkdownAttachment({ title, markdown });
+      const createdJob = await this.options.externalSkillService.createSkillJob(REPORT_GENERATION_SKILL_CODE, {
+        requestText: `请基于「${title}」生成一份可视化互动报告，适合销售和管理层在新页面查看。`,
+        attachments: [markdownPath],
+      });
+      const finishedJob = await this.waitForMarkdownReportJob(createdJob);
+      return this.toMarkdownReportResponse(title, finishedJob);
+    } catch (error) {
+      return {
+        title,
+        status: 'failed',
+        isPersistent: false,
+        errorMessage: normalizeArtifactReportErrorMessage(getErrorMessage(error)),
+        generatedAt: new Date().toISOString(),
+      };
+    }
+  }
+
   private assertCompanyResearchArtifact(detail: ArtifactDetailResponse): void {
     if (detail.artifact.kind !== 'company_research') {
       throw new BadRequestError('当前仅支持基于公司研究 Markdown 生成报告');
@@ -263,6 +295,62 @@ export class ArtifactReportService {
     return event ? event.data as ReportReadyEventData : null;
   }
 
+  private async waitForMarkdownReportJob(job: ExternalSkillJobResponse): Promise<ExternalSkillJobResponse> {
+    let current = job;
+    const startedAt = Date.now();
+
+    while (current.status !== 'succeeded' && current.status !== 'failed') {
+      if (Date.now() - startedAt >= MARKDOWN_REPORT_WAIT_TIMEOUT_MS) {
+        throw new Error('报告生成超时，请稍后重试。');
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, MARKDOWN_REPORT_POLL_INTERVAL_MS));
+      current = await this.options.externalSkillService.getSkillJob(job.jobId);
+    }
+
+    return current;
+  }
+
+  private toMarkdownReportResponse(
+    title: string,
+    job: ExternalSkillJobResponse,
+  ): MarkdownReportGenerationResponse {
+    if (job.status === 'failed') {
+      return {
+        title,
+        status: 'failed',
+        jobId: job.jobId,
+        isPersistent: false,
+        errorMessage: normalizeArtifactReportErrorMessage(job.error?.message ?? '报告生成失败'),
+        generatedAt: job.updatedAt,
+      };
+    }
+
+    const reportReady = this.findReportReadyEvent(job);
+    const sessionId = reportReady?.transientSessionId || reportReady?.sessionId;
+    const openUrl = reportReady?.transientOpenUrl || reportReady?.openUrl;
+    if (!sessionId || !openUrl) {
+      return {
+        title,
+        status: 'failed',
+        jobId: job.jobId,
+        isPersistent: false,
+        errorMessage: normalizeArtifactReportErrorMessage('report-generation 未返回可打开的报告链接'),
+        generatedAt: job.updatedAt,
+      };
+    }
+
+    return {
+      title: reportReady.subject || title,
+      status: 'succeeded',
+      jobId: job.jobId,
+      openUrl,
+      reportSessionId: sessionId,
+      isPersistent: false,
+      errorMessage: null,
+      generatedAt: reportReady.generatedAt || job.updatedAt,
+    };
+  }
+
   private mapJobStatus(status: ExternalSkillJobResponse['status']): ArtifactReportStatus {
     if (status === 'succeeded') {
       return 'succeeded';
@@ -284,6 +372,19 @@ export class ArtifactReportService {
       segments: ['artifact-report-inputs'],
       fileName: `${detail.artifact.versionId}-${contentHash}.md`,
       content: detail.markdown,
+    });
+  }
+
+  private writeStandaloneMarkdownAttachment(input: {
+    title: string;
+    markdown: string;
+  }): string {
+    const contentHash = createHash('sha256').update(input.markdown).digest('hex').slice(0, 12);
+    return writeSkillRuntimeInputFile({
+      config: this.options.config,
+      segments: ['markdown-report-inputs'],
+      fileName: `${input.title}-${contentHash}.md`,
+      content: input.markdown,
     });
   }
 
