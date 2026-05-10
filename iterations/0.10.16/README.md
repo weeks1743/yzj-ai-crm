@@ -23,7 +23,10 @@
 
 - 已通过：`pnpm --filter @yzj-ai-crm/admin-api test`。
 - 已通过：`pnpm --filter @yzj-ai-crm/admin-api build`。
-- 待线上验证：资料 `7474fd4e-7339-4d72-8164-11408c8beaab` 重新生成报告不再报附件不存在。
+- 已通过：线上重建并重启 `admin-api`、`skill-runtime`、`web`。
+- 已通过：资料 `7474fd4e-7339-4d72-8164-11408c8beaab` 重新生成报告，状态为 `succeeded`，不再报附件不存在。
+- 已通过：`admin-api` 与 `skill-runtime` 容器均可读取 `/app/.local/skill-runtime-inputs/artifact-report-inputs/c739e36e-42be-4273-854c-6bb3c346d048-6ad551f35c80.md`。
+- 已处理：线上 `/persistent-report` 由 `web` Nginx 代理到 `report-canvas-service`，用于打开持久化报告。
 
 ## 未完成项
 
