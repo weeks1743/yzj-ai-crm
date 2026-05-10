@@ -51,8 +51,6 @@ test('loadAppConfig loads required env values and defaults', () => {
   assert.equal(config.yzj.approval.fileSecret, 'approval-file-secret');
   assert.equal(config.shadow.dictionarySource, 'manual_json');
   assert.equal(config.server.port, 3001);
-  assert.equal(config.docmee.baseUrl, 'https://open.docmee.cn');
-  assert.equal(config.docmee.apiKey, null);
   assert.equal(config.storage.postgresUrl, 'postgresql://postgres:postgres@127.0.0.1:5432/yzj_ai_crm_dev');
   assert.equal(config.storage.postgresSchema, 'admin_api');
   assert.match(config.shadow.dictionaryJsonPath, /\.local\/shadow-dictionaries\.json$/);

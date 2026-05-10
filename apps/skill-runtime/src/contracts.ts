@@ -39,11 +39,6 @@ export interface AppConfig {
     apiKey: string | null;
     webSearchModel: string;
   };
-  docmee: {
-    baseUrl: string;
-    apiKey: string | null;
-    editorTokenHours: number;
-  };
   meta: {
     configSource: '.env';
     envFilePath: string;
@@ -99,8 +94,6 @@ export interface CreateJobRequest {
   model?: string;
   attachments?: string[];
   workingDirectory?: string;
-  templateId?: string;
-  presentationPrompt?: string;
 }
 
 export interface JobEvent {
@@ -115,8 +108,7 @@ export interface JobEvent {
     | 'deck_planned'
     | 'deck_rendered'
     | 'qa_report'
-    | 'previews_rendered'
-    | 'presentation_ready';
+    | 'previews_rendered';
   message: string;
   data?: unknown;
   createdAt: string;
@@ -159,8 +151,6 @@ export interface StoredJobRecord {
   requestText: string;
   attachments: string[];
   workingDirectory: string | null;
-  templateId: string | null;
-  presentationPrompt: string | null;
   status: JobStatus;
   finalText: string | null;
   error: ApiErrorResponse | null;
@@ -259,53 +249,4 @@ export interface WebFetchExtractResult {
   plainText: string;
   links: Array<{ text: string; url: string }>;
   fetchedAt: string;
-}
-
-export interface PresentationSessionResponse {
-  status: 'ok';
-  jobId: string;
-  pptId: string;
-  token: string;
-  subject: string;
-  animation: boolean;
-  expiresAt: string;
-  leaseExpireAt: string;
-  clientId: string;
-}
-
-export interface PresentationSessionRequest {
-  clientId?: string;
-  clientLabel?: string;
-  takeover?: boolean;
-}
-
-export interface PresentationSessionHeartbeatRequest {
-  clientId?: string;
-  clientLabel?: string;
-}
-
-export interface PresentationSessionHeartbeatResponse {
-  status: 'ok';
-  jobId: string;
-  clientId: string;
-  expiresAt: string;
-  leaseExpireAt: string;
-}
-
-export interface PresentationSessionCloseRequest {
-  clientId?: string;
-}
-
-export interface PresentationSessionCloseResponse {
-  status: 'closed';
-  jobId: string;
-  clientId: string;
-  released: boolean;
-}
-
-export interface PresentationSessionHolder {
-  clientId: string;
-  clientLabel: string;
-  lastActiveAt: string;
-  leaseExpireAt: string;
 }

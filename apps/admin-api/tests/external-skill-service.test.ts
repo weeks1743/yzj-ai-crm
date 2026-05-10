@@ -77,14 +77,6 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
             missingDependencies: [],
             summary: 'visit prep summary',
           },
-          {
-            skillName: 'super-ppt',
-            status: 'available',
-            supportsInvoke: true,
-            requiredDependencies: ['env:DOCMEE_API_KEY'],
-            missingDependencies: [],
-            summary: 'super-ppt summary',
-          },
         ]);
       }
       if (url.endsWith('/api/models')) {
@@ -101,7 +93,6 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
   const companySkill = skills.find((item) => item.skillCode === 'ext.company_research_pm');
   const needsTodoSkill = skills.find((item) => item.skillCode === 'ext.customer_needs_todo_analysis');
   const visitPrepSkill = skills.find((item) => item.skillCode === 'ext.yunzhijia_visit_prep');
-  const superPptSkill = skills.find((item) => item.skillCode === 'ext.super_ppt');
 
   assert.ok(companySkill);
   assert.equal(companySkill.status, '运行中');
@@ -129,35 +120,18 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
   assert.equal(visitPrepSkill.debugConfig?.artifactKind, 'markdown');
   assert.equal(visitPrepSkill.assetMaterialization?.enabled, false);
   assert.equal(service.getSkillAssetMaterialization('ext.yunzhijia_visit_prep')?.enabled, false);
-
-  assert.ok(superPptSkill);
-  assert.equal(superPptSkill.status, '运行中');
-  assert.equal(superPptSkill.provider, 'docmee-v2');
-  assert.equal(superPptSkill.model, null);
-  assert.equal(superPptSkill.debugConfig?.artifactKind, 'presentation');
-  assert.deepEqual(superPptSkill.debugConfig?.supportedModels, []);
+  assert.equal(skills.some((item) => item.skillCode === 'ext.super_ppt'), false);
+  assert.equal(skills.some((item) => item.skillCode === 'ext.audio_transcribe'), false);
 });
 
 test('ExternalSkillService forwards runtime jobs and rewrites artifact download paths', async () => {
-  let receivedTemplateId: string | undefined;
+  let receivedBody: Record<string, unknown> | undefined;
   const service = new ExternalSkillService({
     config: createTestConfig(),
-    enterprisePptTemplateResolver: {
-      getActiveTemplate: () => ({
-        templateId: 'tpl-enterprise-001',
-        name: '金蝶企业模板',
-        sourceFileName: 'kingdee.pptx',
-        isActive: true,
-        createdAt: '2026-04-25T09:00:00.000Z',
-        updatedAt: '2026-04-25T09:00:00.000Z',
-      }),
-      getDefaultPrompt: () => '企业默认 super-ppt 提示词',
-    },
     fetchImpl: (async (input, init) => {
       const url = String(input);
       if (url.endsWith('/api/jobs') && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body ?? '{}')) as { templateId?: string };
-        receivedTemplateId = body.templateId;
+        receivedBody = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>;
         return jsonResponse({
           jobId: 'job-001',
           skillName: 'customer-value-positioning',
@@ -228,7 +202,10 @@ test('ExternalSkillService forwards runtime jobs and rewrites artifact download 
   const artifact = await service.getSkillJobArtifact('job-001', 'artifact-001');
   assert.equal(artifact.artifact.fileName, 'customer-value-positioning.md');
   assert.equal(artifact.content.toString('utf8'), '# customer value positioning');
-  assert.equal(receivedTemplateId, undefined);
+  assert.deepEqual(receivedBody, {
+    skillName: 'customer-value-positioning',
+    requestText: '整理客户价值定位',
+  });
 });
 
 test('ExternalSkillService lists runtime jobs for downstream recording repair', async () => {
@@ -275,175 +252,18 @@ test('ExternalSkillService lists runtime jobs for downstream recording repair', 
   assert.equal(result.jobs[0]?.runtimeSkillName, 'customer-value-positioning');
 });
 
-test('ExternalSkillService skips enterprise template for ext.super_ppt jobs while keeping prompt', async () => {
-  let receivedTemplateId: string | undefined;
-  let receivedPresentationPrompt: string | undefined;
+test('ExternalSkillService rejects removed super-ppt skill code', async () => {
   const service = new ExternalSkillService({
     config: createTestConfig(),
-    enterprisePptTemplateResolver: {
-      getActiveTemplate: () => ({
-        templateId: 'tpl-enterprise-001',
-        name: '金蝶企业模板',
-        sourceFileName: 'kingdee.pptx',
-        isActive: true,
-        createdAt: '2026-04-25T09:00:00.000Z',
-        updatedAt: '2026-04-25T09:00:00.000Z',
-      }),
-      getDefaultPrompt: () => '你是一位拥有10年以上科技行业经验的顶级PPT设计师和解决方案专家，擅长将复杂的技术概念转化为清晰、专业、具有说服力的演示内容。请根据我提供的主题和核心内容，生成一份高质量的科技行业PPT',
-      getEffectivePrompt: () => '请基于完整材料生成专业科技行业管理层汇报PPT',
-    },
-    fetchImpl: (async (input, init) => {
-      const url = String(input);
-      if (url.endsWith('/api/jobs') && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body ?? '{}')) as {
-          templateId?: string;
-          presentationPrompt?: string;
-        };
-        receivedTemplateId = body.templateId;
-        receivedPresentationPrompt = body.presentationPrompt;
-        return jsonResponse({
-          jobId: 'job-super-ppt-001',
-          skillName: 'super-ppt',
-          model: null,
-          status: 'queued',
-          finalText: null,
-          events: [],
-          artifacts: [],
-          error: null,
-          createdAt: '2026-04-25T10:00:00.000Z',
-          updatedAt: '2026-04-25T10:00:00.000Z',
-        }, 202);
-      }
-
-      throw new Error(`Unexpected fetch url: ${url}`);
-    }) as FetchLike,
   });
 
-  const created = await service.createSkillJob('ext.super_ppt', {
-    requestText: '请基于附件生成研究汇报',
-    attachments: ['/tmp/input.md'],
-  });
-
-  assert.equal(created.skillCode, 'ext.super_ppt');
-  assert.equal(created.runtimeSkillName, 'super-ppt');
-  assert.equal(receivedTemplateId, undefined);
-  assert.equal(receivedPresentationPrompt, '请基于完整材料生成专业科技行业管理层汇报PPT');
-});
-
-test('ExternalSkillService forwards presentation session creation', async () => {
-  const service = new ExternalSkillService({
-    config: createTestConfig(),
-    fetchImpl: (async (input, init) => {
-      const url = String(input);
-      if (url.endsWith('/api/jobs/job-001/presentation-session') && init?.method === 'POST') {
-        return jsonResponse({
-          status: 'ok',
-          jobId: 'job-001',
-          pptId: 'ppt-001',
-          token: 'sk-session-001',
-          subject: '绍兴贝斯美化工企业研究',
-          animation: true,
-          expiresAt: '2026-04-25T12:00:00.000Z',
-          leaseExpireAt: '2026-04-25T11:31:30.000Z',
-          clientId: 'legacy-job-001',
-        });
-      }
-      throw new Error(`Unexpected fetch url: ${url}`);
-    }) as FetchLike,
-  });
-
-  const session = await service.createPresentationSession('job-001');
-  assert.equal(session.pptId, 'ppt-001');
-  assert.equal(session.token, 'sk-session-001');
-});
-
-test('ExternalSkillService forwards forced presentation session refresh', async () => {
-  const service = new ExternalSkillService({
-    config: createTestConfig(),
-    fetchImpl: (async (input, init) => {
-      const url = String(input);
-      if (url.endsWith('/api/jobs/job-001/presentation-session?refresh=1') && init?.method === 'POST') {
-        return jsonResponse({
-          status: 'ok',
-          jobId: 'job-001',
-          pptId: 'ppt-001',
-          token: 'sk-session-002',
-          subject: '绍兴贝斯美化工企业研究',
-          animation: true,
-          expiresAt: '2026-04-25T12:00:00.000Z',
-          leaseExpireAt: '2026-04-25T11:31:30.000Z',
-          clientId: 'legacy-job-001',
-        });
-      }
-      throw new Error(`Unexpected fetch url: ${url}`);
-    }) as FetchLike,
-  });
-
-  const session = await service.createPresentationSession('job-001', {
-    forceRefresh: true,
-  });
-  assert.equal(session.pptId, 'ppt-001');
-  assert.equal(session.token, 'sk-session-002');
-});
-
-test('ExternalSkillService forwards open/heartbeat/close presentation session operations', async () => {
-  const service = new ExternalSkillService({
-    config: createTestConfig(),
-    fetchImpl: (async (input, init) => {
-      const url = String(input);
-      if (url.endsWith('/api/jobs/job-001/presentation-session/open') && init?.method === 'POST') {
-        return jsonResponse({
-          status: 'ok',
-          jobId: 'job-001',
-          pptId: 'ppt-001',
-          token: 'sk-session-003',
-          subject: '绍兴贝斯美化工企业研究',
-          animation: false,
-          expiresAt: '2026-04-25T12:00:00.000Z',
-          leaseExpireAt: '2026-04-25T11:31:30.000Z',
-          clientId: 'client-a',
-        });
-      }
-      if (url.endsWith('/api/jobs/job-001/presentation-session/heartbeat') && init?.method === 'POST') {
-        return jsonResponse({
-          status: 'ok',
-          jobId: 'job-001',
-          clientId: 'client-a',
-          expiresAt: '2026-04-25T12:00:00.000Z',
-          leaseExpireAt: '2026-04-25T11:31:30.000Z',
-        });
-      }
-      if (url.endsWith('/api/jobs/job-001/presentation-session/close') && init?.method === 'POST') {
-        return jsonResponse({
-          status: 'closed',
-          jobId: 'job-001',
-          clientId: 'client-a',
-          released: true,
-        });
-      }
-      throw new Error(`Unexpected fetch url: ${url}`);
-    }) as FetchLike,
-  });
-
-  const opened = await service.openPresentationSession('job-001', {
-    clientId: 'client-a',
-    clientLabel: 'Chrome · client-a',
-  });
-  assert.equal(opened.statusCode, 200);
-  assert.equal((opened.payload as { token: string }).token, 'sk-session-003');
-
-  const heartbeat = await service.heartbeatPresentationSession('job-001', {
-    clientId: 'client-a',
-    clientLabel: 'Chrome · client-a',
-  });
-  assert.equal(heartbeat.statusCode, 200);
-  assert.equal((heartbeat.payload as { clientId: string }).clientId, 'client-a');
-
-  const closed = await service.closePresentationSession('job-001', {
-    clientId: 'client-a',
-  });
-  assert.equal(closed.statusCode, 200);
-  assert.equal((closed.payload as { released: boolean }).released, true);
+  await assert.rejects(
+    () => service.createSkillJob('ext.super_ppt', {
+      requestText: '请基于附件生成研究汇报',
+      attachments: ['/tmp/input.md'],
+    }),
+    /不存在该能力/,
+  );
 });
 
 test('ExternalSkillService rejects image generation when api key is missing', async () => {

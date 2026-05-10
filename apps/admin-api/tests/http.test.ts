@@ -1669,14 +1669,6 @@ async function createTestServer(options: {
             missingDependencies: [],
             summary: 'value positioning summary',
           },
-          {
-            skillName: 'super-ppt',
-            status: 'available',
-            supportsInvoke: true,
-            requiredDependencies: ['env:DOCMEE_API_KEY'],
-            missingDependencies: [],
-            summary: 'super-ppt summary',
-          },
         ]);
       }
 
@@ -2414,11 +2406,11 @@ test('HTTP endpoints expose external skill catalog and readable config errors', 
     const imageSkill = skillsPayload.find((item) => item.skillCode === 'ext.image_generate');
     const companySkill = skillsPayload.find((item) => item.skillCode === 'ext.company_research_pm');
     const visitPrepSkill = skillsPayload.find((item) => item.skillCode === 'ext.yunzhijia_visit_prep');
-    const superPptSkill = skillsPayload.find((item) => item.skillCode === 'ext.super_ppt');
     assert.ok(imageSkill);
     assert.ok(companySkill);
     assert.ok(visitPrepSkill);
-    assert.ok(superPptSkill);
+    assert.equal(skillsPayload.some((item) => item.skillCode === 'ext.super_ppt'), false);
+    assert.equal(skillsPayload.some((item) => item.skillCode === 'ext.audio_transcribe'), false);
     assert.equal(imageSkill.status, '告警中');
     assert.equal(imageSkill.implementationType, 'http_request');
     assert.equal(imageSkill.supportsInvoke, true);
@@ -2431,8 +2423,6 @@ test('HTTP endpoints expose external skill catalog and readable config errors', 
     assert.equal(visitPrepSkill.supportsInvoke, true);
     assert.equal(visitPrepSkill.debugMode, 'skill_job');
     assert.equal(visitPrepSkill.assetMaterialization?.enabled, false);
-    assert.equal(superPptSkill.implementationType, 'skill');
-    assert.equal(superPptSkill.supportsInvoke, true);
 
     const invokeResponse = await fetch(`${runtime.baseUrl}/api/external-skills/image-generate`, {
       method: 'POST',
@@ -2612,59 +2602,6 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
         });
       }
 
-      if (
-        (
-          url.endsWith('/api/jobs/job-002/presentation-session')
-          || url.endsWith('/api/jobs/job-002/presentation-session?refresh=1')
-        )
-        && init?.method === 'POST'
-      ) {
-        return jsonResponse({
-          status: 'ok',
-          jobId: 'job-002',
-          pptId: 'ppt-002',
-          token: 'sk-session-002',
-          subject: '绍兴贝斯美化工企业研究',
-          animation: true,
-          expiresAt: '2026-04-25T12:00:00.000Z',
-          leaseExpireAt: '2026-04-25T11:31:30.000Z',
-          clientId: 'legacy-job-002',
-        });
-      }
-
-      if (url.endsWith('/api/jobs/job-002/presentation-session/open') && init?.method === 'POST') {
-        return jsonResponse({
-          status: 'ok',
-          jobId: 'job-002',
-          pptId: 'ppt-002',
-          token: 'sk-session-003',
-          subject: '绍兴贝斯美化工企业研究',
-          animation: false,
-          expiresAt: '2026-04-25T12:00:00.000Z',
-          leaseExpireAt: '2026-04-25T11:31:30.000Z',
-          clientId: 'client-a',
-        });
-      }
-
-      if (url.endsWith('/api/jobs/job-002/presentation-session/heartbeat') && init?.method === 'POST') {
-        return jsonResponse({
-          status: 'ok',
-          jobId: 'job-002',
-          clientId: 'client-a',
-          expiresAt: '2026-04-25T12:00:00.000Z',
-          leaseExpireAt: '2026-04-25T11:31:30.000Z',
-        });
-      }
-
-      if (url.endsWith('/api/jobs/job-002/presentation-session/close') && init?.method === 'POST') {
-        return jsonResponse({
-          status: 'closed',
-          jobId: 'job-002',
-          clientId: 'client-a',
-          released: true,
-        });
-      }
-
       throw new Error(`Unexpected skill-runtime url: ${url}`);
     }) as FetchLike,
   });
@@ -2711,87 +2648,6 @@ test('HTTP endpoints proxy skill-runtime jobs for external skills', async () => 
     assert.equal(artifactResponse.headers.get('content-type'), 'text/markdown');
     assert.equal(await artifactResponse.text(), '# 客户价值定位');
 
-    const sessionResponse = await fetch(
-      `${runtime.baseUrl}/api/external-skills/jobs/job-002/presentation-session`,
-      {
-        method: 'POST',
-      },
-    );
-    assert.equal(sessionResponse.status, 200);
-    const sessionPayload = (await sessionResponse.json()) as {
-      pptId: string;
-      token: string;
-    };
-    assert.equal(sessionPayload.pptId, 'ppt-002');
-    assert.equal(sessionPayload.token, 'sk-session-002');
-
-    const refreshedSessionResponse = await fetch(
-      `${runtime.baseUrl}/api/external-skills/jobs/job-002/presentation-session?refresh=1`,
-      {
-        method: 'POST',
-      },
-    );
-    assert.equal(refreshedSessionResponse.status, 200);
-    const refreshedSessionPayload = (await refreshedSessionResponse.json()) as {
-      pptId: string;
-      token: string;
-    };
-    assert.equal(refreshedSessionPayload.pptId, 'ppt-002');
-    assert.equal(refreshedSessionPayload.token, 'sk-session-002');
-
-    const openedSessionResponse = await fetch(
-      `${runtime.baseUrl}/api/external-skills/jobs/job-002/presentation-session/open`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          clientId: 'client-a',
-          clientLabel: 'Chrome · client-a',
-        }),
-      },
-    );
-    assert.equal(openedSessionResponse.status, 200);
-    const openedSessionPayload = (await openedSessionResponse.json()) as {
-      token: string;
-      clientId: string;
-    };
-    assert.equal(openedSessionPayload.token, 'sk-session-003');
-    assert.equal(openedSessionPayload.clientId, 'client-a');
-
-    const heartbeatSessionResponse = await fetch(
-      `${runtime.baseUrl}/api/external-skills/jobs/job-002/presentation-session/heartbeat`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          clientId: 'client-a',
-          clientLabel: 'Chrome · client-a',
-        }),
-      },
-    );
-    assert.equal(heartbeatSessionResponse.status, 200);
-
-    const closeSessionResponse = await fetch(
-      `${runtime.baseUrl}/api/external-skills/jobs/job-002/presentation-session/close`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          clientId: 'client-a',
-        }),
-      },
-    );
-    assert.equal(closeSessionResponse.status, 200);
-    const closeSessionPayload = (await closeSessionResponse.json()) as {
-      released: boolean;
-    };
-    assert.equal(closeSessionPayload.released, true);
   } finally {
     runtime.server.close();
     await once(runtime.server, 'close');

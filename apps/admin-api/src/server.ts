@@ -10,8 +10,6 @@ import { MainAgentRuntime } from './agent-runtime.js';
 import { AgentService } from './agent-service.js';
 import { ArtifactImageRepository } from './artifact-image-repository.js';
 import { ArtifactImageService } from './artifact-image-service.js';
-import { ArtifactPresentationRepository } from './artifact-presentation-repository.js';
-import { ArtifactPresentationService } from './artifact-presentation-service.js';
 import { ArtifactRepository } from './artifact-repository.js';
 import { ArtifactService } from './artifact-service.js';
 import { createAdminApiServer } from './app.js';
@@ -22,9 +20,6 @@ import { ConfigError } from './errors.js';
 import { DashScopeEmbeddingService } from './dashscope-embedding-service.js';
 import { DeepSeekChatClient } from './deepseek-chat-client.js';
 import { DictionaryResolver } from './dictionary-resolver.js';
-import { DocmeeTemplateClient } from './docmee-template-client.js';
-import { EnterprisePptTemplateRepository } from './enterprise-ppt-template-repository.js';
-import { EnterprisePptTemplateService } from './enterprise-ppt-template-service.js';
 import { ExternalSkillService } from './external-skill-service.js';
 import { LightCloudClient } from './lightcloud-client.js';
 import { OrgSyncRepository } from './org-sync-repository.js';
@@ -156,19 +151,8 @@ const shadowMetadataService = new ShadowMetadataService({
   }),
 });
 await shadowMetadataService.initialize();
-const enterprisePptTemplateService = new EnterprisePptTemplateService({
-  config,
-  repository: new EnterprisePptTemplateRepository(database),
-  client: config.docmee.apiKey
-    ? new DocmeeTemplateClient({
-        baseUrl: config.docmee.baseUrl,
-        apiKey: config.docmee.apiKey,
-      })
-    : null,
-});
 const externalSkillService = new ExternalSkillService({
   config,
-  enterprisePptTemplateResolver: enterprisePptTemplateService,
 });
 const embeddingService = new DashScopeEmbeddingService(config);
 const artifactService = new ArtifactService({
@@ -176,12 +160,6 @@ const artifactService = new ArtifactService({
   repository: new ArtifactRepository(config),
   embeddingService,
   vectorService: new QdrantVectorService(config),
-});
-const artifactPresentationService = new ArtifactPresentationService({
-  config,
-  repository: new ArtifactPresentationRepository(database),
-  artifactService,
-  externalSkillService,
 });
 const artifactImageService = new ArtifactImageService({
   config,
@@ -246,9 +224,7 @@ const server = createAdminApiServer({
   approvalFileService,
   shadowMetadataService,
   externalSkillService,
-  enterprisePptTemplateService,
   artifactService,
-  artifactPresentationService,
   artifactImageService,
   recordingTaskService,
   agentService,

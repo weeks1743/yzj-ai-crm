@@ -143,12 +143,6 @@ export default [
         component: './settings/[settingKey]',
       },
       {
-        name: '企业PPT模板',
-        path: '/settings/ppt-templates',
-        icon: 'filePpt',
-        component: './settings/ppt-templates/index',
-      },
-      {
         name: '录音处理服务',
         path: '/settings/recording-service',
         icon: 'audio',
@@ -182,12 +176,6 @@ export default [
         redirect: '/agent-governance/policies-confirmation',
       },
     ],
-  },
-  {
-    path: '/skills/external-skills/super-ppt/editor',
-    hideInMenu: true,
-    layout: false,
-    component: './skills/external-skills/super-ppt/editor',
   },
   {
     path: '/skills/scene-assembly',

@@ -45,13 +45,10 @@ const ADMIN_TABLES = [
   'org_employees',
   'shadow_object_registry',
   'shadow_object_snapshots',
-  'enterprise_ppt_templates',
-  'enterprise_ppt_template_settings',
   'agent_runs',
   'agent_messages',
   'agent_tool_calls',
   'agent_confirmations',
-  'artifact_ppt_generations',
 ] as const;
 
 const SKILL_RUNTIME_TABLES = [
@@ -309,42 +306,6 @@ async function importAdminApi(
       counts.shadow_object_snapshots += 1;
     }
 
-    for (const row of readRows(sqlite, 'enterprise_ppt_templates')) {
-      await database.query(
-        `
-          INSERT INTO ${database.table('enterprise_ppt_templates')} (
-            template_id, name, source_file_name, is_active, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6)
-        `,
-        [
-          stringValue(row.template_id),
-          stringValue(row.name),
-          stringValue(row.source_file_name),
-          booleanValue(row.is_active),
-          stringValue(row.created_at),
-          stringValue(row.updated_at),
-        ],
-      );
-      counts.enterprise_ppt_templates += 1;
-    }
-
-    for (const row of readRows(sqlite, 'enterprise_ppt_template_settings')) {
-      await database.query(
-        `
-          INSERT INTO ${database.table('enterprise_ppt_template_settings')} (
-            singleton_id, default_prompt, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4)
-        `,
-        [
-          integerValue(row.singleton_id, 1),
-          stringValue(row.default_prompt),
-          stringValue(row.created_at),
-          stringValue(row.updated_at),
-        ],
-      );
-      counts.enterprise_ppt_template_settings += 1;
-    }
-
     for (const row of readRows(sqlite, 'agent_runs')) {
       await database.query(
         `
@@ -443,29 +404,6 @@ async function importAdminApi(
       counts.agent_confirmations += 1;
     }
 
-    for (const row of readRows(sqlite, 'artifact_ppt_generations')) {
-      await database.query(
-        `
-          INSERT INTO ${database.table('artifact_ppt_generations')} (
-            generation_id, artifact_id, version_id, title, status, job_id,
-            ppt_artifact_json, error_message, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
-        `,
-        [
-          stringValue(row.generation_id),
-          stringValue(row.artifact_id),
-          stringValue(row.version_id),
-          stringValue(row.title),
-          stringValue(row.status),
-          nullableString(row.job_id),
-          jsonParam(row.ppt_artifact_json, null),
-          nullableString(row.error_message),
-          stringValue(row.created_at),
-          stringValue(row.updated_at),
-        ],
-      );
-      counts.artifact_ppt_generations += 1;
-    }
   } finally {
     sqlite.close();
   }
@@ -488,9 +426,8 @@ async function importSkillRuntime(
         `
           INSERT INTO ${database.table('jobs')} (
             job_id, skill_name, model, request_text, attachments_json, working_directory,
-            template_id, presentation_prompt, status, final_text, error_json,
-            created_at, updated_at, started_at, finished_at
-          ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)
+            status, final_text, error_json, created_at, updated_at, started_at, finished_at
+          ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, $11, $12, $13)
         `,
         [
           stringValue(row.job_id),
@@ -499,8 +436,6 @@ async function importSkillRuntime(
           stringValue(row.request_text),
           jsonParam(row.attachments_json, []),
           nullableString(row.working_directory),
-          nullableString(row.template_id),
-          nullableString(row.presentation_prompt),
           stringValue(row.status),
           nullableString(row.final_text),
           jsonParam(row.error_json, null),

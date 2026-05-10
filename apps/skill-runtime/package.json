@@ -7,8 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.build.json",
     "test": "tsx --test tests/**/*.test.ts",
-    "test:live": "tsx --test tests/**/*.live.ts",
-    "diagnose:docmee": "tsx scripts/docmee-v2-diagnose.ts"
+    "test:live": "tsx --test tests/**/*.live.ts"
   },
   "devDependencies": {
     "@types/pg": "^8.15.6",

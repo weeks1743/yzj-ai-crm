@@ -42,7 +42,7 @@ export type ExternalSkillImplementationType =
   | 'skill'
   | 'placeholder';
 export type ExternalSkillDebugMode = 'none' | 'image_generate' | 'skill_job';
-export type ExternalSkillDebugArtifactKind = 'image' | 'markdown' | 'presentation';
+export type ExternalSkillDebugArtifactKind = 'image' | 'markdown';
 export type ExternalSkillAssetArtifactKind = 'company_research' | 'recording_material' | 'analysis_material';
 export type SkillRuntimeModelName = 'deepseek-v4-pro' | 'deepseek-v4-flash';
 export type ImageGenerationSize = 'auto' | '1024x1024' | '1536x1024' | '1024x1536';
@@ -58,8 +58,7 @@ export type ExternalSkillJobEventType =
   | 'deck_planned'
   | 'deck_rendered'
   | 'qa_report'
-  | 'previews_rendered'
-  | 'presentation_ready';
+  | 'previews_rendered';
 
 export interface ExternalSkillDebugConfig {
   defaultModel?: SkillRuntimeModelName | null;
@@ -128,10 +127,6 @@ export interface AppConfig {
   };
   server: {
     port: number;
-  };
-  docmee: {
-    baseUrl: string;
-    apiKey: string | null;
   };
   storage: {
     postgresUrl: string;
@@ -422,25 +417,6 @@ export interface RecordingTaskMaterializeResponse extends RecordingTaskResponse 
     markdown: string;
     excludedProcessFiles: string[];
   };
-}
-
-export type ArtifactPresentationStatus =
-  | 'not_started'
-  | 'queued'
-  | 'running'
-  | 'succeeded'
-  | 'failed';
-
-export interface ArtifactPresentationResponse {
-  artifactId: string;
-  versionId: string;
-  title: string;
-  status: ArtifactPresentationStatus;
-  jobId?: string;
-  pptArtifact?: ExternalSkillJobArtifact;
-  errorMessage?: string | null;
-  createdAt?: string;
-  updatedAt?: string;
 }
 
 export type ArtifactImageStatus =
@@ -1258,7 +1234,6 @@ export interface ExternalSkillJobRequest {
   model?: SkillRuntimeModelName;
   attachments?: string[];
   workingDirectory?: string;
-  presentationPrompt?: string;
 }
 
 export interface ExternalSkillJobArtifact {
@@ -1291,94 +1266,6 @@ export interface ExternalSkillJobResponse {
   error: ApiErrorResponse | null;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface ExternalSkillPresentationSessionResponse {
-  status: 'ok';
-  jobId: string;
-  pptId: string;
-  token: string;
-  subject: string;
-  animation: boolean;
-  expiresAt: string;
-  leaseExpireAt: string;
-  clientId: string;
-}
-
-export interface ExternalSkillPresentationSessionHolder {
-  clientId: string;
-  clientLabel: string;
-  lastActiveAt: string;
-  leaseExpireAt: string;
-}
-
-export interface ExternalSkillPresentationSessionOpenRequest {
-  clientId?: string;
-  clientLabel?: string;
-  takeover?: boolean;
-}
-
-export interface ExternalSkillPresentationSessionHeartbeatRequest {
-  clientId?: string;
-  clientLabel?: string;
-}
-
-export interface ExternalSkillPresentationSessionHeartbeatResponse {
-  status: 'ok';
-  jobId: string;
-  clientId: string;
-  expiresAt: string;
-  leaseExpireAt: string;
-}
-
-export interface ExternalSkillPresentationSessionCloseRequest {
-  clientId?: string;
-}
-
-export interface ExternalSkillPresentationSessionCloseResponse {
-  status: 'closed';
-  jobId: string;
-  clientId: string;
-  released: boolean;
-}
-
-export interface ExternalSkillPresentationSessionConflictResponse {
-  code: 'PRESENTATION_SESSION_CONFLICT' | 'PRESENTATION_SESSION_TAKEN_OVER' | 'PRESENTATION_SESSION_EXPIRED';
-  message: string;
-  holder?: ExternalSkillPresentationSessionHolder;
-  leaseExpireAt?: string;
-  canTakeover?: boolean;
-}
-
-export interface EnterprisePptTemplateItem {
-  templateId: string;
-  name: string;
-  sourceFileName: string;
-  isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface EnterprisePptTemplateListResponse {
-  items: EnterprisePptTemplateItem[];
-  activeTemplate: EnterprisePptTemplateItem | null;
-  defaultPrompt: string;
-  effectivePrompt: string;
-  promptMaxLength: number;
-  isFallbackApplied: boolean;
-  fallbackReason: string | null;
-}
-
-export interface EnterprisePptTemplateUploadResponse {
-  item: EnterprisePptTemplateItem;
-}
-
-export interface EnterprisePptTemplatePromptResponse {
-  defaultPrompt: string;
-  effectivePrompt: string;
-  promptMaxLength: number;
-  isFallbackApplied: boolean;
-  fallbackReason: string | null;
 }
 
 export interface YzjAccessTokenResponse {
