@@ -12,16 +12,12 @@ import type { ProColumns } from '@ant-design/pro-components';
 import type {
   AgentConfirmationAuditRow,
   AgentConfirmationListResponse,
-  AgentPlanTemplate,
-  AgentPolicy,
   AgentRunDetailResponse,
   AgentRunListResponse,
   AgentRunSummary,
   AgentToolRow,
 } from '@shared';
 import {
-  agentPlanTemplates,
-  agentPolicies,
   agentToolRows,
 } from '@shared';
 import { requestJson } from '@/utils/request';
@@ -30,22 +26,12 @@ const { Paragraph, Text } = Typography;
 
 type GovernancePageKey =
   | 'tools-objects'
-  | 'plan-templates'
-  | 'policies-confirmation'
   | 'runtime-observability';
 
 const pageMeta: Record<GovernancePageKey, { title: string; subTitle: string }> = {
   'tools-objects': {
     title: '工具与对象',
     subTitle: '统一治理工具注册表、记录对象、外部工具和元工具。',
-  },
-  'plan-templates': {
-    title: '计划模板',
-    subTitle: '管理可推荐给任务计划的模板，不配置固定场景工作流。',
-  },
-  'policies-confirmation': {
-    title: '策略与确认',
-    subTitle: '治理写回确认、字段风险、证据要求和跨租户守卫。',
   },
   'runtime-observability': {
     title: '运行观测',
@@ -69,14 +55,6 @@ const riskColor: Record<AgentToolRow['riskLevel'], string> = {
   low: 'success',
   medium: 'warning',
   high: 'error',
-};
-
-const policyActionLabels: Record<AgentPolicy['action'], string> = {
-  block: '阻断',
-  require_confirmation: '要求确认',
-  clarify: '要求澄清',
-  downgrade_to_draft: '降级草稿',
-  audit: '记录审计',
 };
 
 const executionStatusLabels: Record<string, { label: string; color: string }> = {
@@ -550,181 +528,6 @@ function ToolsObjectsView() {
   );
 }
 
-function PlanTemplatesView() {
-  const [current, setCurrent] = useState<AgentPlanTemplate | null>(null);
-  const columns: ProColumns<AgentPlanTemplate>[] = [
-    {
-      title: '模板名称',
-      dataIndex: 'name',
-      render: (_, record) => <a onClick={() => setCurrent(record)}>{record.name}</a>,
-    },
-    { title: '适用意图', dataIndex: 'intentPattern', width: 260 },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 100,
-      render: (_, record) => (
-        <Tag color={record.status === 'enabled' ? 'success' : 'default'}>
-          {record.status === 'enabled' ? '启用' : '草稿'}
-        </Tag>
-      ),
-    },
-    {
-      title: '步骤数',
-      width: 90,
-      render: (_, record) => record.steps.length,
-    },
-    {
-      title: '涉及工具',
-      render: (_, record) => Array.from(new Set(record.steps.flatMap((step) => step.toolRefs))).join(', '),
-    },
-  ];
-
-  return (
-    <>
-      <Alert
-        type="info"
-        showIcon
-        message="计划模板不是固定工作流"
-        description="模板只给任务计划提供推荐步骤、确认点和可跳过选项；智能体仍基于意图帧动态选择工具。"
-      />
-      {renderMetricCards([
-        { key: 'templates', title: '计划模板', value: `${agentPlanTemplates.length}`, helper: '当前静态治理模板' },
-        {
-          key: 'steps',
-          title: '推荐步骤',
-          value: `${agentPlanTemplates.reduce((sum, item) => sum + item.steps.length, 0)}`,
-          helper: '均可被用户裁剪或跳过',
-        },
-        { key: 'enabled', title: '启用模板', value: `${agentPlanTemplates.filter((item) => item.status === 'enabled').length}`, helper: '可被 /计划 推荐' },
-      ])}
-      <ProTable<AgentPlanTemplate>
-        style={{ marginTop: 16 }}
-        rowKey="id"
-        search={false}
-        toolBarRender={false}
-        columns={columns}
-        dataSource={agentPlanTemplates}
-      />
-      <Drawer
-        width={760}
-        open={Boolean(current)}
-        onClose={() => setCurrent(null)}
-        title="计划模板详情"
-      >
-        {current ? (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Paragraph>{current.summary}</Paragraph>
-            <ProCard title="示例输入" bordered>
-              <Space wrap>
-                {current.sampleUtterances.map((item) => (
-                  <Tag key={item}>{item}</Tag>
-                ))}
-              </Space>
-            </ProCard>
-            <ProCard title="推荐步骤" bordered>
-              <List
-                dataSource={current.steps}
-                renderItem={(step) => (
-                  <List.Item>
-                    <List.Item.Meta
-                      title={
-                        <Space wrap>
-                          <Text strong>{step.title}</Text>
-                          <Tag>{step.actionType}</Tag>
-                          {step.required ? <Tag color="blue">必选</Tag> : <Tag>可选</Tag>}
-                          {step.skippable ? <Tag color="green">可跳过</Tag> : null}
-                          {step.confirmationRequired ? <Tag color="red">需确认</Tag> : null}
-                        </Space>
-                      }
-                      description={step.toolRefs.join(', ')}
-                    />
-                  </List.Item>
-                )}
-              />
-            </ProCard>
-            <ProCard title="治理说明" bordered>
-              <List
-                dataSource={current.governanceNotes}
-                renderItem={(item) => <List.Item>{item}</List.Item>}
-              />
-            </ProCard>
-          </Space>
-        ) : null}
-      </Drawer>
-    </>
-  );
-}
-
-function PoliciesConfirmationView() {
-  const [current, setCurrent] = useState<AgentPolicy | null>(null);
-  const columns: ProColumns<AgentPolicy>[] = [
-    {
-      title: '策略',
-      dataIndex: 'name',
-      render: (_, record) => <a onClick={() => setCurrent(record)}>{record.name}</a>,
-    },
-    { title: '适用范围', dataIndex: 'target', width: 260 },
-    { title: '触发条件', dataIndex: 'trigger' },
-    {
-      title: '动作',
-      dataIndex: 'action',
-      width: 130,
-      render: (_, record) => <Tag>{policyActionLabels[record.action]}</Tag>,
-    },
-    {
-      title: '风险',
-      dataIndex: 'severity',
-      width: 100,
-      render: (_, record) => <Tag color={riskColor[record.severity]}>{record.severity}</Tag>,
-    },
-    { title: '负责人', dataIndex: 'owner', width: 130 },
-    { title: '最近触发', dataIndex: 'lastTriggered', width: 170 },
-  ];
-
-  return (
-    <>
-      <Alert
-        type="warning"
-        showIcon
-        message="确定性守卫"
-        description="策略与确认是智能体的硬边界：写入、证据、跨租户、MVP 禁用能力都在这里治理。"
-      />
-      {renderMetricCards([
-        { key: 'policies', title: '策略数', value: `${agentPolicies.length}`, helper: '确认、阻断、审计与降级' },
-        { key: 'high', title: '高风险策略', value: `${agentPolicies.filter((item) => item.severity === 'high').length}`, helper: '必须强制执行' },
-        { key: 'confirm', title: '确认类策略', value: `${agentPolicies.filter((item) => item.action === 'require_confirmation').length}`, helper: '写入前确认' },
-      ])}
-      <ProTable<AgentPolicy>
-        style={{ marginTop: 16 }}
-        rowKey="id"
-        search={false}
-        toolBarRender={false}
-        columns={columns}
-        dataSource={agentPolicies}
-      />
-      <Drawer
-        width={680}
-        open={Boolean(current)}
-        onClose={() => setCurrent(null)}
-        title="策略详情"
-      >
-        {current ? (
-          <ProDescriptions<AgentPolicy> column={1} dataSource={current}>
-            <ProDescriptions.Item label="策略名称" dataIndex="name" />
-            <ProDescriptions.Item label="适用范围" dataIndex="target" />
-            <ProDescriptions.Item label="触发条件" dataIndex="trigger" />
-            <ProDescriptions.Item label="动作">{policyActionLabels[current.action]}</ProDescriptions.Item>
-            <ProDescriptions.Item label="风险等级">{current.severity}</ProDescriptions.Item>
-            <ProDescriptions.Item label="负责人" dataIndex="owner" />
-            <ProDescriptions.Item label="最近触发" dataIndex="lastTriggered" />
-          </ProDescriptions>
-        ) : null}
-      </Drawer>
-    </>
-  );
-}
-
 function RuntimeObservabilityView() {
   const location = useLocation();
   const traceIdFromQuery = useMemo(
@@ -1063,8 +866,6 @@ export default function AgentGovernancePage() {
   const meta = pageMeta[pageKey];
   const content = {
     'tools-objects': <ToolsObjectsView />,
-    'plan-templates': <PlanTemplatesView />,
-    'policies-confirmation': <PoliciesConfirmationView />,
     'runtime-observability': <RuntimeObservabilityView />,
   }[pageKey] ?? <Empty />;
 
