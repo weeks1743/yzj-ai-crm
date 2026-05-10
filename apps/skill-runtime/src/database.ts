@@ -129,8 +129,6 @@ export async function initializeDatabaseSchema(
         request_text TEXT NOT NULL,
         attachments_json JSONB NOT NULL,
         working_directory TEXT,
-        template_id TEXT,
-        presentation_prompt TEXT,
         status TEXT NOT NULL,
         final_text TEXT,
         error_json JSONB,

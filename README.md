@@ -2,9 +2,9 @@
 
 `yzj-ai-crm` 是面向云之家 / 金蝶销售工作方式的 AI CRM 正式产品原型。项目当前不是单页 demo，而是按“管理员后台 + 用户 AI 工作台 + 后端 Agent Runtime + 外部 Skill Runtime”协同推进的同仓库工程。
 
-当前能力基线：`0.9.0`
+当前能力基线：`0.10.6`
 
-本次 README 刷新归属：`0.9.0`
+本次 README 刷新归属：`0.10.6`
 
 ## 当前进展
 
@@ -96,15 +96,8 @@
 
 - 独立外部技能执行服务。
 - 扫描 `3rdSkill/*/SKILL.md` 建立技能目录。
-- 支持公司研究、PM 文本类 skill、PPT / super-ppt 等外部能力。
+- 支持公司研究、PM 文本类 skill、通用 `pptx` 等外部能力。
 - 当前联网搜索模型由 `ARK_WEB_SEARCH_MODEL` 配置。
-
-### Super PPT Editor
-
-目录：[`apps/super-ppt-editor`](./apps/super-ppt-editor)
-
-- 承接 super-ppt 编辑器相关服务。
-- 与 `skill-runtime` 中的 PPT 生成链路协同。
 
 ### 原型存档
 
@@ -175,12 +168,11 @@
 
 - [`docs`](./docs)：正式设计文档。
 - [`iterations`](./iterations)：版本迭代记录。
-- [`iterations/0.9.0`](./iterations/0.9.0/README.md)：当前能力基线说明。
+- [`iterations/0.10.6`](./iterations/0.10.6/README.md)：当前能力基线说明。
 - [`apps/admin-api`](./apps/admin-api)：后端 Agent Runtime 与云之家 / 轻云适配。
 - [`apps/admin-pro`](./apps/admin-pro)：管理员后台。
 - [`apps/assistant-web`](./apps/assistant-web)：用户 AI 工作台。
 - [`apps/skill-runtime`](./apps/skill-runtime)：外部 Skill Runtime。
-- [`apps/super-ppt-editor`](./apps/super-ppt-editor)：Super PPT 编辑器服务。
 - [`apps/tongyi-audio-service`](./apps/tongyi-audio-service)：通义录音处理独立服务。
 - [`packages/shared`](./packages/shared)：共享类型与业务数据。
 - [`3rd`](./3rd)：官方框架参考源码。

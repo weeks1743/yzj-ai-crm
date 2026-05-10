@@ -200,26 +200,6 @@ export async function initializeDatabaseSchema(
         UNIQUE (object_key, snapshot_version)
       );
 
-      CREATE TABLE IF NOT EXISTS ${table('enterprise_ppt_templates')} (
-        template_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        source_file_name TEXT NOT NULL,
-        is_active BOOLEAN NOT NULL DEFAULT false,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS ${table('enterprise_ppt_template_settings')} (
-        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-        default_prompt TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_enterprise_ppt_single_active`)}
-      ON ${table('enterprise_ppt_templates')}(is_active)
-      WHERE is_active;
-
       CREATE TABLE IF NOT EXISTS ${table('agent_runs')} (
         run_id TEXT PRIMARY KEY,
         trace_id TEXT NOT NULL,
@@ -338,22 +318,6 @@ export async function initializeDatabaseSchema(
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_confirmations_run_status`)}
       ON ${table('agent_confirmations')}(run_id, status, created_at DESC, confirmation_id DESC);
-
-      CREATE TABLE IF NOT EXISTS ${table('artifact_ppt_generations')} (
-        generation_id TEXT PRIMARY KEY,
-        artifact_id TEXT NOT NULL,
-        version_id TEXT NOT NULL UNIQUE,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL,
-        job_id TEXT,
-        ppt_artifact_json JSONB,
-        error_message TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_artifact_ppt_generations_artifact`)}
-      ON ${table('artifact_ppt_generations')}(artifact_id, updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS ${table('artifact_image_generations')} (
         generation_id TEXT PRIMARY KEY,

@@ -1,15 +1,11 @@
 import type {
   AppConfig,
-  EnterprisePptTemplateItem,
   ExternalSkillAssetMaterializationConfig,
   ExternalSkillCatalogItem,
   ExternalSkillDebugConfig,
   ExternalSkillJobArtifact,
   ExternalSkillJobRequest,
   ExternalSkillJobResponse,
-  ExternalSkillPresentationSessionCloseRequest,
-  ExternalSkillPresentationSessionHeartbeatRequest,
-  ExternalSkillPresentationSessionOpenRequest,
   FetchLike,
   ImageGenerationQuality,
   ImageGenerationRequest,
@@ -47,13 +43,6 @@ const COMPANY_RESEARCH_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializationC
   description: '生成后沉淀为可复用公司研究资料，可被拜访准备和问答检索复用。',
 };
 
-const RECORDING_MATERIAL_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializationConfig = {
-  enabled: true,
-  artifactKind: 'recording_material',
-  label: '录音资料包',
-  description: '录音处理完成后沉淀为录音资料包，供后续分析技能消费。',
-};
-
 const RECORDING_ANALYSIS_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializationConfig = {
   enabled: true,
   artifactKind: 'analysis_material',
@@ -85,11 +74,6 @@ interface ExternalSkillServiceOptions {
   config: AppConfig;
   fetchImpl?: FetchLike;
   now?: () => Date;
-  enterprisePptTemplateResolver?: {
-    getActiveTemplate(): Promise<EnterprisePptTemplateItem | null>;
-    getDefaultPrompt(): Promise<string>;
-    getEffectivePrompt?(): Promise<string>;
-  };
 }
 
 interface ImageGenerationPayload {
@@ -112,7 +96,6 @@ interface RuntimeBackedSkillDefinition {
   requiredDependencies: string[];
   artifactKind: ExternalSkillDebugConfig['artifactKind'];
   assetMaterialization: ExternalSkillAssetMaterializationConfig;
-  requiresModel?: boolean;
   trigger: string;
   route?: string;
   owner: string;
@@ -136,22 +119,6 @@ type StaticExternalSkillDefinition =
       debugMode: 'image_generate';
       supportsInvoke: true;
       implementationType: 'http_request';
-      assetMaterialization?: ExternalSkillAssetMaterializationConfig;
-    }
-  | {
-      id: string;
-      label: string;
-      skillCode: 'ext.audio_transcribe';
-      trigger: string;
-      route?: string;
-      dependencies: string[];
-      owner: string;
-      sla: string;
-      summary: string;
-      provider: string;
-      debugMode: 'none';
-      supportsInvoke: false;
-      implementationType: 'placeholder';
       assetMaterialization?: ExternalSkillAssetMaterializationConfig;
     }
   | RuntimeBackedSkillDefinition;
@@ -242,24 +209,6 @@ const RUNTIME_SKILL_DEFINITIONS: RuntimeBackedSkillDefinition[] = [
     requestPlaceholder:
       '例如：基于公司研究 md，为绍兴贝斯美化工股份有限公司准备拜访材料，客户关注统一门户和流程审批。',
   },
-  {
-    id: 'ext-008',
-    label: 'super-ppt',
-    skillCode: 'ext.super_ppt',
-    runtimeSkillName: 'super-ppt',
-    provider: 'docmee-v2',
-    requiredDependencies: ['env:DOCMEE_API_KEY'],
-    artifactKind: 'presentation',
-    assetMaterialization: NON_MATERIALIZED_ASSET_STRATEGY,
-    requiresModel: false,
-    trigger: 'Markdown 报告 / 企业研究 PPT 生成',
-    route: '/skills/external-skills/super-ppt/editor',
-    owner: '导出能力组',
-    sla: 'P95 < 60 秒',
-    summary: '通过 Docmee V2 API 将 markdown 企业研究报告生成可继续编辑的 PPT，并支持后台直接进入编辑器。',
-    requestPlaceholder:
-      '例如：请基于附件生成适合管理层审阅的企业研究汇报 PPT。',
-  },
 ];
 
 const STATIC_EXTERNAL_SKILLS: StaticExternalSkillDefinition[] = [
@@ -280,22 +229,6 @@ const STATIC_EXTERNAL_SKILLS: StaticExternalSkillDefinition[] = [
     assetMaterialization: NON_MATERIALIZED_ASSET_STRATEGY,
   },
   ...RUNTIME_SKILL_DEFINITIONS,
-  {
-    id: 'ext-007',
-    label: '录音处理服务（内置）',
-    skillCode: 'ext.audio_transcribe',
-    trigger: '音频上传后由系统设置中的录音处理服务承接',
-    route: '/settings/recording-service',
-    dependencies: ['TONGYI_AUDIO_SERVICE_BASE_URL', 'TONGYI_DASHSCOPE_API_KEY', 'TONGYI_TINGWU_APP_ID'],
-    owner: '语音能力组',
-    sla: 'P95 < 5 分钟',
-    summary: '不再作为普通技能绑定入口；录音资料由内置服务生成标准资料包，再供会话理解、需求待办等能力消费。',
-    provider: 'tongyi_audio_service',
-    debugMode: 'none',
-    supportsInvoke: false,
-    implementationType: 'placeholder',
-    assetMaterialization: RECORDING_MATERIAL_ASSET_MATERIALIZATION,
-  },
 ];
 
 function trimTrailingSlash(value: string): string {
@@ -340,17 +273,6 @@ export class ExternalSkillService {
     definition: RuntimeBackedSkillDefinition,
     models: SkillRuntimeModelDescriptor[],
   ): ExternalSkillDebugConfig {
-    if (definition.requiresModel === false) {
-      return {
-        defaultModel: null,
-        supportedModels: [],
-        supportsAttachments: true,
-        supportsWorkingDirectory: true,
-        requestPlaceholder: definition.requestPlaceholder,
-        artifactKind: definition.artifactKind,
-      };
-    }
-
     const supportedModels = models.length > 0
       ? models.map((item) => item.name)
       : FALLBACK_SKILL_RUNTIME_MODELS;
@@ -393,28 +315,6 @@ export class ExternalSkillService {
     };
   }
 
-  private buildPlaceholderSkill(definition: Extract<StaticExternalSkillDefinition, { implementationType: 'placeholder' }>): ExternalSkillCatalogItem {
-    return {
-      id: definition.id,
-      label: definition.label,
-      skillCode: definition.skillCode,
-      type: '外部技能',
-      trigger: definition.trigger,
-      route: definition.route,
-      dependencies: definition.dependencies,
-      status: '占位中',
-      implementationType: 'placeholder',
-      supportsInvoke: false,
-      debugMode: 'none',
-      assetMaterialization: definition.assetMaterialization,
-      provider: definition.provider,
-      model: null,
-      owner: definition.owner,
-      sla: definition.sla,
-      summary: definition.summary,
-    };
-  }
-
   private buildRuntimeBackedSkill(
     definition: RuntimeBackedSkillDefinition,
     runtimeCatalog: Map<string, SkillRuntimeCatalogEntry>,
@@ -423,9 +323,7 @@ export class ExternalSkillService {
   ): ExternalSkillCatalogItem {
     const runtimeEntry = runtimeCatalog.get(definition.runtimeSkillName);
     const debugConfig = this.buildSkillDebugConfig(definition, models);
-    const displayModel = definition.requiresModel === false
-      ? null
-      : (debugConfig.defaultModel ?? DEFAULT_SKILL_RUNTIME_MODEL);
+    const displayModel = debugConfig.defaultModel ?? DEFAULT_SKILL_RUNTIME_MODEL;
 
     if (runtimeError) {
       return {
@@ -574,26 +472,14 @@ export class ExternalSkillService {
         return this.buildRuntimeBackedSkill(definition, runtimeCatalog, runtimeModels, runtimeError);
       }
 
-      return this.buildPlaceholderSkill(definition as Extract<StaticExternalSkillDefinition, { implementationType: 'placeholder' }>);
+      throw new Error(`Unsupported external skill definition: ${definition.skillCode}`);
     });
   }
 
   async createSkillJob(skillCode: string, input: ExternalSkillJobRequest): Promise<ExternalSkillJobResponse> {
     const runtimeSkill = this.getRuntimeSkillDefinition(skillCode);
-    const effectivePrompt = skillCode === 'ext.super_ppt'
-      ? (
-          this.options.enterprisePptTemplateResolver?.getEffectivePrompt
-            ? await this.options.enterprisePptTemplateResolver.getEffectivePrompt()
-            : await this.options.enterprisePptTemplateResolver?.getDefaultPrompt()
-        )
-      : null;
     const runtimeJob = await this.skillRuntimeClient.createJob(runtimeSkill.runtimeSkillName, {
       ...input,
-      ...(skillCode === 'ext.super_ppt'
-        ? {
-            presentationPrompt: effectivePrompt ?? undefined,
-          }
-        : {}),
     });
     return this.transformRuntimeJob(runtimeJob);
   }
@@ -628,27 +514,6 @@ export class ExternalSkillService {
       pageSize: result.pageSize,
       total: result.total,
     };
-  }
-
-  createPresentationSession(
-    jobId: string,
-    options?: {
-      forceRefresh?: boolean;
-    },
-  ) {
-    return this.skillRuntimeClient.createPresentationSession(jobId, options);
-  }
-
-  openPresentationSession(jobId: string, input: ExternalSkillPresentationSessionOpenRequest) {
-    return this.skillRuntimeClient.openPresentationSession(jobId, input);
-  }
-
-  heartbeatPresentationSession(jobId: string, input: ExternalSkillPresentationSessionHeartbeatRequest) {
-    return this.skillRuntimeClient.heartbeatPresentationSession(jobId, input);
-  }
-
-  closePresentationSession(jobId: string, input: ExternalSkillPresentationSessionCloseRequest) {
-    return this.skillRuntimeClient.closePresentationSession(jobId, input);
   }
 
   async getSkillJobArtifact(jobId: string, artifactId: string): Promise<{

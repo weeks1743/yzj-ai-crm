@@ -18,8 +18,6 @@ interface JobRow extends QueryResultRow {
   request_text: string;
   attachments_json: string[] | string;
   working_directory: string | null;
-  template_id: string | null;
-  presentation_prompt: string | null;
   status: JobStatus;
   final_text: string | null;
   error_json: ApiErrorResponse | string | null;
@@ -70,8 +68,6 @@ function mapJob(row: JobRow): StoredJobRecord {
     requestText: row.request_text,
     attachments: parseJsonValue<string[]>(row.attachments_json, []),
     workingDirectory: row.working_directory,
-    templateId: row.template_id,
-    presentationPrompt: row.presentation_prompt,
     status: row.status,
     finalText: row.final_text,
     error: row.error_json ? parseJsonValue<ApiErrorResponse | null>(row.error_json, null) : null,
@@ -114,8 +110,6 @@ export class JobRepository {
     requestText: string;
     attachments: string[];
     workingDirectory: string | null;
-    templateId: string | null;
-    presentationPrompt: string | null;
   }): Promise<StoredJobRecord> {
     const now = new Date().toISOString();
     const jobId = randomUUID();
@@ -128,12 +122,10 @@ export class JobRepository {
           request_text,
           attachments_json,
           working_directory,
-          template_id,
-          presentation_prompt,
           status,
           created_at,
           updated_at
-        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'queued', $9, $10)
+        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, 'queued', $7, $8)
       `,
       [
         jobId,
@@ -142,8 +134,6 @@ export class JobRepository {
         input.requestText,
         JSON.stringify(input.attachments),
         input.workingDirectory,
-        input.templateId,
-        input.presentationPrompt,
         now,
         now,
       ],

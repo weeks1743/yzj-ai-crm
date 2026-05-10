@@ -27,8 +27,6 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import type { ProColumns } from '@ant-design/pro-components';
 import type {
-  EnterprisePptTemplateItem,
-  EnterprisePptTemplateListResponse,
   ExternalSkillCatalogItem,
   ExternalSkillJobRequest,
   ExternalSkillJobResponse,
@@ -39,7 +37,6 @@ import type {
 } from '@shared';
 import { writebackPolicies } from '@shared';
 import { requestJson } from '@/utils/request';
-import { getSuperPptEditorUrl } from '@/utils/superPptEditor';
 
 const { Paragraph } = Typography;
 const { TextArea } = Input;
@@ -182,15 +179,6 @@ const imageQualityOptions = [
   { label: 'medium', value: 'medium' },
   { label: 'high', value: 'high' },
 ];
-
-interface PresentationReadyEventData {
-  pptId?: string;
-  subject?: string;
-  templateId?: string | null;
-  coverUrl?: string | null;
-  animation?: boolean;
-  artifactId?: string;
-}
 
 interface SkillJobFormValues {
   requestText: string;
@@ -497,20 +485,6 @@ function parseLineSeparatedPaths(value?: string): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
-function getPresentationReadyEvent(
-  job: ExternalSkillJobResponse | null,
-): PresentationReadyEventData | null {
-  if (!job) {
-    return null;
-  }
-
-  const event = [...job.events]
-    .reverse()
-    .find((item) => item.type === 'presentation_ready' && item.data && typeof item.data === 'object');
-
-  return event ? (event.data as PresentationReadyEventData) : null;
-}
-
 const SkillsCatalogPage = () => {
   const location = useLocation();
   const pageKey = (location.pathname.split('/').pop() ?? '') as keyof typeof pageMap;
@@ -528,8 +502,6 @@ const SkillsCatalogPage = () => {
   const [skillJobError, setSkillJobError] = useState<string | null>(null);
   const [lastSkillJobRequest, setLastSkillJobRequest] = useState<ExternalSkillJobRequest | null>(null);
   const [skillJobResult, setSkillJobResult] = useState<ExternalSkillJobResponse | null>(null);
-  const [pptTemplateInfo, setPptTemplateInfo] = useState<EnterprisePptTemplateListResponse | null>(null);
-  const [pptTemplateError, setPptTemplateError] = useState<string | null>(null);
   const [imageForm] = Form.useForm<ImageGenerationRequest>();
   const [skillJobForm] = Form.useForm<SkillJobFormValues>();
 
@@ -557,20 +529,6 @@ const SkillsCatalogPage = () => {
       .finally(() => {
         if (!cancelled) {
           setLoading(false);
-        }
-      });
-
-    void requestJson<EnterprisePptTemplateListResponse>('/api/settings/ppt-templates')
-      .then((payload) => {
-        if (!cancelled) {
-          setPptTemplateInfo(payload);
-          setPptTemplateError(null);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setPptTemplateInfo(null);
-          setPptTemplateError(error instanceof Error ? error.message : '企业 PPT 模板信息加载失败');
         }
       });
 
@@ -635,11 +593,6 @@ const SkillsCatalogPage = () => {
 
   const dataSource = isExternalSkillsPage ? externalSkills : pageMap['writeback-policies'].rows;
   const metrics = isExternalSkillsPage ? externalMetrics : pageMap['writeback-policies'].metrics;
-  const presentationReadyEvent = useMemo(
-    () => getPresentationReadyEvent(skillJobResult),
-    [skillJobResult],
-  );
-  const activePptTemplate = pptTemplateInfo?.activeTemplate ?? null;
 
   const handleInvokeImage = async (values: ImageGenerationRequest) => {
     setInvokeLoading(true);
@@ -750,31 +703,6 @@ const SkillsCatalogPage = () => {
         }
       />
 
-      {skill.skillCode === 'ext.super_ppt' ? (
-        pptTemplateError ? (
-          <Alert
-            type="warning"
-            showIcon
-            message="企业模板状态暂不可读"
-            description={pptTemplateError}
-          />
-        ) : activePptTemplate ? (
-          <Alert
-            type="success"
-            showIcon
-            message={`当前企业默认模板：${activePptTemplate.name}`}
-            description={`templateId: ${activePptTemplate.templateId}。super-ppt 会始终使用该企业默认模板生成，本次调试不支持临时覆盖。当前保存提示词：${pptTemplateInfo?.defaultPrompt ?? '未读取到'}；实际生效提示词：${pptTemplateInfo?.effectivePrompt ?? '未读取到'}${pptTemplateInfo?.isFallbackApplied ? `。${pptTemplateInfo.fallbackReason ?? ''}` : ''}`}
-          />
-        ) : (
-          <Alert
-            type="info"
-            showIcon
-            message="当前没有启用企业模板"
-            description={`本次 super-ppt 调试将回退到 Docmee 默认模板生成，不支持单次任务临时选模板。当前保存提示词：${pptTemplateInfo?.defaultPrompt ?? '未读取到'}；实际生效提示词：${pptTemplateInfo?.effectivePrompt ?? '未读取到'}${pptTemplateInfo?.isFallbackApplied ? `。${pptTemplateInfo.fallbackReason ?? ''}` : ''}`}
-          />
-        )
-      ) : null}
-
       <Form<SkillJobFormValues>
         form={skillJobForm}
         layout="vertical"
@@ -809,11 +737,7 @@ const SkillsCatalogPage = () => {
         <Form.Item label="附件路径（可选，一行一个绝对路径）" name="attachmentsText">
           <TextArea
             rows={4}
-            placeholder={
-              skill.skillCode === 'ext.super_ppt'
-                ? '例如：\n/Users/weeks/Desktop/workspaces-yzj/yzj-ai-crm/tmp/绍兴贝斯美化工企业研究报告.md'
-                : '例如：\n/abs/path/input.md\n/abs/path/context.txt'
-            }
+            placeholder="例如：\n/abs/path/input.md\n/abs/path/context.txt"
           />
         </Form.Item>
 
@@ -892,32 +816,6 @@ const SkillsCatalogPage = () => {
             <Typography.Title level={5}>产物</Typography.Title>
             {skillJobResult.artifacts.length > 0 ? (
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                {presentationReadyEvent?.pptId ? (
-                  <Alert
-                    type="success"
-                    showIcon
-                    message={`PPT 已就绪：${presentationReadyEvent.subject || presentationReadyEvent.pptId}`}
-                    description={
-                      <Space wrap>
-                        <Typography.Text type="secondary">
-                          pptId: {presentationReadyEvent.pptId}
-                        </Typography.Text>
-                        <Button
-                          type="primary"
-                          onClick={() => {
-                            window.open(
-                              getSuperPptEditorUrl(skillJobResult.jobId),
-                              '_blank',
-                              'noopener,noreferrer',
-                            );
-                          }}
-                        >
-                          独立打开编辑器
-                        </Button>
-                      </Space>
-                    }
-                  />
-                ) : null}
                 {skillJobResult.artifacts.map((artifact) => (
                   <Space key={artifact.artifactId} wrap>
                     <Typography.Text>{artifact.fileName}</Typography.Text>
@@ -946,7 +844,7 @@ const SkillsCatalogPage = () => {
                   color:
                     event.type === 'error'
                       ? 'red'
-                      : event.type === 'artifact' || event.type === 'presentation_ready'
+                      : event.type === 'artifact'
                         ? 'green'
                         : 'blue',
                   children: (

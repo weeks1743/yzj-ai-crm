@@ -11,12 +11,7 @@ import type {
   ArtifactSearchRequest,
   ArtifactImageGenerationRequest,
   CompanyResearchArtifactRequest,
-  EnterprisePptTemplatePromptResponse,
-  EnterprisePptTemplateUploadResponse,
   ExternalSkillJobRequest,
-  ExternalSkillPresentationSessionCloseRequest,
-  ExternalSkillPresentationSessionHeartbeatRequest,
-  ExternalSkillPresentationSessionOpenRequest,
   ImageGenerationRequest,
   MarkdownImageGenerationRequest,
   RecordingTaskCreateRequest,
@@ -36,9 +31,7 @@ import type { AgentPersonalSettingsService } from './agent-personal-settings-ser
 import { AgentService } from './agent-service.js';
 import { ArtifactImageService } from './artifact-image-service.js';
 import { AppError, BadRequestError, ServiceUnavailableError } from './errors.js';
-import { ArtifactPresentationService } from './artifact-presentation-service.js';
 import { ArtifactService } from './artifact-service.js';
-import { EnterprisePptTemplateService } from './enterprise-ppt-template-service.js';
 import { ExternalSkillService } from './external-skill-service.js';
 import { OrgSyncService, getRunIdFromConflict } from './org-sync-service.js';
 import type { OrgSyncRepository } from './org-sync-repository.js';
@@ -57,9 +50,7 @@ interface CreateAdminApiServerOptions {
   shadowMetadataService: ShadowMetadataService;
   approvalFileService: ApprovalFileService;
   externalSkillService: ExternalSkillService;
-  enterprisePptTemplateService: EnterprisePptTemplateService;
   artifactService?: ArtifactService;
-  artifactPresentationService?: ArtifactPresentationService;
   artifactImageService?: ArtifactImageService;
   recordingTaskService?: RecordingTaskService;
   agentService?: AgentService;
@@ -356,79 +347,6 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         return;
       }
 
-      if (method === 'GET' && url.pathname === '/api/settings/ppt-templates') {
-        writeJson(response, 200, await options.enterprisePptTemplateService.listTemplates());
-        return;
-      }
-
-      if (method === 'POST' && url.pathname === '/api/settings/ppt-templates/default-prompt') {
-        const payload = await readJsonBody<{ prompt?: string }>(request);
-        const result: EnterprisePptTemplatePromptResponse =
-          await options.enterprisePptTemplateService.updateDefaultPrompt(payload.prompt ?? '');
-        writeJson(
-          response,
-          200,
-          result,
-        );
-        return;
-      }
-
-      if (method === 'POST' && url.pathname === '/api/settings/ppt-templates/upload') {
-        const payload = await readMultipartBody(request);
-        const file = payload.files.find((item) => item.fieldName === 'file') ?? payload.files[0];
-        if (!file) {
-          throw new BadRequestError('请上传 .pptx 模板文件');
-        }
-
-        const result = await options.enterprisePptTemplateService.uploadTemplate({
-          fileName: file.fileName,
-          file: file.content,
-          name: payload.fields.name,
-        });
-        writeJson(response, 201, result satisfies EnterprisePptTemplateUploadResponse);
-        return;
-      }
-
-      if (url.pathname.startsWith('/api/settings/ppt-templates/')) {
-        const parts = url.pathname.split('/').filter(Boolean);
-        if (parts.length === 5) {
-          const templateId = decodeURIComponent(parts[3] ?? '');
-          const action = parts[4] ?? '';
-
-          if (method === 'POST' && action === 'rename') {
-            const payload = await readJsonBody<{ name?: string }>(request);
-            writeJson(
-              response,
-              200,
-              await options.enterprisePptTemplateService.renameTemplate(templateId, payload.name ?? ''),
-            );
-            return;
-          }
-
-          if (method === 'POST' && action === 'activate') {
-            writeJson(response, 200, await options.enterprisePptTemplateService.activateTemplate(templateId));
-            return;
-          }
-
-          if (method === 'GET' && action === 'download') {
-            const payload = await options.enterprisePptTemplateService.downloadTemplate(templateId);
-            response.writeHead(200, {
-              'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-              'Content-Length': String(payload.file.byteLength),
-              'Content-Disposition': `attachment; filename="${encodeURIComponent(payload.fileName)}"`,
-              'Access-Control-Allow-Origin': '*',
-            });
-            response.end(payload.file);
-            return;
-          }
-
-          if (method === 'POST' && action === 'delete') {
-            writeJson(response, 200, await options.enterprisePptTemplateService.deleteTemplate(templateId));
-            return;
-          }
-        }
-      }
-
       if (method === 'GET' && url.pathname === '/api/shadow/objects') {
         writeJson(response, 200, options.shadowMetadataService.listObjects());
         return;
@@ -712,41 +630,6 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           return;
         }
 
-        if (method === 'POST' && parts.length === 5 && parts[2] === 'jobs' && parts[4] === 'presentation-session') {
-          const jobId = decodeURIComponent(parts[3] ?? '');
-          writeJson(
-            response,
-            200,
-            await options.externalSkillService.createPresentationSession(jobId, {
-              forceRefresh: ['1', 'true'].includes(url.searchParams.get('refresh') || ''),
-            }),
-          );
-          return;
-        }
-
-        if (method === 'POST' && parts.length === 6 && parts[2] === 'jobs' && parts[4] === 'presentation-session') {
-          const jobId = decodeURIComponent(parts[3] ?? '');
-          const action = decodeURIComponent(parts[5] ?? '');
-          if (action === 'open') {
-            const payload = await readJsonBody<ExternalSkillPresentationSessionOpenRequest>(request);
-            const result = await options.externalSkillService.openPresentationSession(jobId, payload);
-            writeJson(response, result.statusCode, result.payload);
-            return;
-          }
-          if (action === 'heartbeat') {
-            const payload = await readJsonBody<ExternalSkillPresentationSessionHeartbeatRequest>(request);
-            const result = await options.externalSkillService.heartbeatPresentationSession(jobId, payload);
-            writeJson(response, result.statusCode, result.payload);
-            return;
-          }
-          if (action === 'close') {
-            const payload = await readJsonBody<ExternalSkillPresentationSessionCloseRequest>(request);
-            const result = await options.externalSkillService.closePresentationSession(jobId, payload);
-            writeJson(response, result.statusCode, result.payload);
-            return;
-          }
-        }
-
         if (method === 'GET' && parts.length === 6 && parts[2] === 'jobs' && parts[4] === 'artifacts') {
           const jobId = decodeURIComponent(parts[3] ?? '');
           const artifactId = decodeURIComponent(parts[5] ?? '');
@@ -785,15 +668,6 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           throw new ServiceUnavailableError('Artifact 服务未启用');
         }
         const parts = url.pathname.split('/').filter(Boolean);
-        if (parts.length === 4 && parts[3] === 'presentation') {
-          if (!options.artifactPresentationService) {
-            throw new ServiceUnavailableError('Artifact PPT 生成服务未启用');
-          }
-          const artifactId = decodeURIComponent(parts[2] ?? '');
-          writeJson(response, 200, await options.artifactPresentationService.getPresentation(artifactId));
-          return;
-        }
-
         if (parts.length === 4 && parts[3] === 'image') {
           if (!options.artifactImageService) {
             throw new ServiceUnavailableError('Artifact 图片生成服务未启用');
@@ -812,15 +686,6 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
 
       if (method === 'POST' && url.pathname.startsWith('/api/artifacts/')) {
         const parts = url.pathname.split('/').filter(Boolean);
-        if (parts.length === 4 && parts[3] === 'presentation') {
-          if (!options.artifactPresentationService) {
-            throw new ServiceUnavailableError('Artifact PPT 生成服务未启用');
-          }
-          const artifactId = decodeURIComponent(parts[2] ?? '');
-          writeJson(response, 202, await options.artifactPresentationService.ensurePresentation(artifactId));
-          return;
-        }
-
         if (parts.length === 4 && parts[3] === 'image') {
           if (!options.artifactImageService) {
             throw new ServiceUnavailableError('Artifact 图片生成服务未启用');

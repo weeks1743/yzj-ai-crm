@@ -20,7 +20,6 @@ import type {
 import { createSkillRuntimeServer } from '../src/app.js';
 import { ArtifactStore } from '../src/artifact-store.js';
 import { openDatabase } from '../src/database.js';
-import { DocmeeClient } from '../src/docmee-client.js';
 import { JobRepository } from '../src/job-repository.js';
 import { loadSkillsFromDirectories } from '../src/skill-loader.js';
 import { SkillCatalogService } from '../src/skill-catalog-service.js';
@@ -74,7 +73,6 @@ export function createDependencySnapshot(overrides: Record<string, boolean> = {}
   const keys = [
     'env:DEEPSEEK_API_KEY',
     'env:ARK_API_KEY',
-    'env:DOCMEE_API_KEY',
     'command:python3',
     'command:markitdown',
     'command:soffice',
@@ -111,9 +109,6 @@ export function createTestConfig(options: {
   deepseekApiKey?: string | null;
   arkApiKey?: string | null;
   arkWebSearchModel?: string;
-  docmeeBaseUrl?: string;
-  docmeeApiKey?: string | null;
-  docmeeEditorTokenHours?: number;
 }): AppConfig {
   const rootDir = options.rootDir ?? createTempDir('skill-runtime-config-');
   const artifactDir = options.artifactDir ?? join(rootDir, 'artifacts');
@@ -141,11 +136,6 @@ export function createTestConfig(options: {
       baseUrl: 'https://ark.example/api/v3',
       apiKey: options.arkApiKey ?? 'test-ark-key',
       webSearchModel: options.arkWebSearchModel ?? 'doubao-seed-2-0-lite-260215',
-    },
-    docmee: {
-      baseUrl: options.docmeeBaseUrl ?? 'https://docmee.example',
-      apiKey: options.docmeeApiKey ?? 'test-docmee-key',
-      editorTokenHours: options.docmeeEditorTokenHours ?? 1,
     },
     meta: {
       configSource: '.env',
@@ -252,7 +242,6 @@ export async function createRuntimeHarness(options: {
   chatClient: ChatCompletionClient;
   webSearchClient: WebSearchClient;
   fetchImpl?: FetchLike;
-  docmeeFetchImpl?: FetchLike;
 }) {
   const database = await openDatabase(
     options.config.storage.postgresUrl,
@@ -262,18 +251,12 @@ export async function createRuntimeHarness(options: {
   const artifactStore = new ArtifactStore(options.config.storage.artifactDir, repository);
   const loadedSkills = loadSkillsFromDirectories(options.config.runtime.skillDirs);
   const catalogService = new SkillCatalogService(loadedSkills, options.dependencySnapshot);
-  const docmeeClient = new DocmeeClient({
-    baseUrl: options.config.docmee.baseUrl,
-    apiKey: options.config.docmee.apiKey ?? 'test-docmee-key',
-    fetchImpl: options.docmeeFetchImpl ?? options.fetchImpl,
-  });
   const executor = new SkillExecutor({
     config: options.config,
     repository,
     artifactStore,
     chatClient: options.chatClient,
     webSearchClient: options.webSearchClient,
-    docmeeClient,
     fetchImpl: options.fetchImpl,
   });
   const service = new SkillRuntimeService({
@@ -282,7 +265,6 @@ export async function createRuntimeHarness(options: {
     repository,
     artifactStore,
     executor,
-    docmeeClient,
   });
   const server = createSkillRuntimeServer({ service });
   server.listen(0);

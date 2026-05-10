@@ -47,9 +47,6 @@ test('openDatabase creates admin-api PostgreSQL tables for fresh schema', async 
         'agent_runs',
         'agent_tool_calls',
         'artifact_image_generations',
-        'artifact_ppt_generations',
-        'enterprise_ppt_template_settings',
-        'enterprise_ppt_templates',
         'org_employees',
         'org_sync_runs',
         'recording_audio_tasks',
@@ -75,7 +72,7 @@ test('openDatabase initialization is idempotent', async () => {
       `,
       [schema],
     );
-    assert.equal(Number(row.total), 15);
+    assert.equal(Number(row.total), 12);
   } finally {
     await second.dropSchema();
     await second.close();
@@ -120,14 +117,6 @@ test('SQLite to PostgreSQL migration imports legacy dictionary bindings into sna
         PRIMARY KEY (object_key, field_code, snapshot_version)
       );
 
-      CREATE TABLE enterprise_ppt_templates (
-        template_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        source_file_name TEXT NOT NULL,
-        is_active INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
     `);
     legacyAdmin
       .prepare(
@@ -188,15 +177,6 @@ test('SQLite to PostgreSQL migration imports legacy dictionary bindings into sna
         }),
         '2026-04-23T09:00:00.000Z',
       );
-    legacyAdmin
-      .prepare(
-        `
-          INSERT INTO enterprise_ppt_templates (
-            template_id, name, source_file_name, is_active, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run('tpl-1', '默认模板', 'template.pptx', 1, '2026-04-23T09:00:00.000Z', '2026-04-23T09:00:00.000Z');
     legacyAdmin.close();
 
     const legacySkill = new DatabaseSync(skillSqlitePath);
@@ -208,8 +188,6 @@ test('SQLite to PostgreSQL migration imports legacy dictionary bindings into sna
         request_text TEXT NOT NULL,
         attachments_json TEXT NOT NULL,
         working_directory TEXT,
-        template_id TEXT,
-        presentation_prompt TEXT,
         status TEXT NOT NULL,
         final_text TEXT,
         error_json TEXT,
@@ -251,7 +229,6 @@ test('SQLite to PostgreSQL migration imports legacy dictionary bindings into sna
     });
 
     assert.equal(summary.adminApi.tables.shadow_object_snapshots, 1);
-    assert.equal(summary.adminApi.tables.enterprise_ppt_templates, 1);
     assert.equal(summary.skillRuntime.tables.jobs, 1);
 
     const adminDatabase = await openDatabase(POSTGRES_URL, adminSchema);
@@ -260,10 +237,6 @@ test('SQLite to PostgreSQL migration imports legacy dictionary bindings into sna
       assert.equal(snapshot?.dictionaryBindings.length, 1);
       assert.equal(snapshot?.dictionaryBindings[0]?.fieldCode, 'Pw_0');
       assert.equal(snapshot?.dictionaryBindings[0]?.entries[0]?.dicId, 'd005a1');
-      const activeTemplate = await adminDatabase.queryOne<{ template_id: string }>(
-        `SELECT template_id FROM ${adminDatabase.table('enterprise_ppt_templates')} WHERE is_active = true`,
-      );
-      assert.equal(activeTemplate.template_id, 'tpl-1');
     } finally {
       await adminDatabase.dropSchema();
       await adminDatabase.close();

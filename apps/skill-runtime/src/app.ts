@@ -2,9 +2,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type {
   ApiErrorResponse,
   CreateJobRequest,
-  PresentationSessionCloseRequest,
-  PresentationSessionHeartbeatRequest,
-  PresentationSessionRequest,
 } from './contracts.js';
 import { AppError, BadRequestError } from './errors.js';
 import { SkillRuntimeService } from './skill-runtime-service.js';
@@ -120,41 +117,6 @@ export function createSkillRuntimeServer(options: {
 
         if (method === 'GET' && parts.length === 3) {
           writeJson(response, 200, await options.service.getJob(jobId));
-          return;
-        }
-
-        if (method === 'POST' && parts.length === 5 && parts[3] === 'presentation-session') {
-          const operation = parts[4];
-          if (operation === 'open') {
-            const payload = await readJsonBody<PresentationSessionRequest>(request);
-            writeJson(response, 200, await options.service.openPresentationSession(jobId, payload));
-            return;
-          }
-          if (operation === 'heartbeat') {
-            const payload = await readJsonBody<PresentationSessionHeartbeatRequest>(request);
-            writeJson(response, 200, await options.service.heartbeatPresentationSession(jobId, payload));
-            return;
-          }
-          if (operation === 'close') {
-            const payload = await readJsonBody<PresentationSessionCloseRequest>(request);
-            writeJson(response, 200, await options.service.closePresentationSession(jobId, payload));
-            return;
-          }
-        }
-
-        if (method === 'POST' && parts.length === 4 && parts[3] === 'presentation-session') {
-          const payload = await readJsonBody<PresentationSessionRequest>(request);
-          if (payload.clientId?.trim()) {
-            writeJson(response, 200, await options.service.openPresentationSession(jobId, payload));
-            return;
-          }
-          writeJson(
-            response,
-            200,
-            await options.service.createPresentationSession(jobId, {
-              forceRefresh: ['1', 'true'].includes(url.searchParams.get('refresh') || ''),
-            }),
-          );
           return;
         }
 

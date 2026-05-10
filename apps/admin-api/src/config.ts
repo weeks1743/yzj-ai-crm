@@ -54,8 +54,6 @@ export const ADMIN_API_ENV_CONTRACT_KEYS = [
   'TONGYI_AUDIO_OUTPUT_DIR',
   'TONGYI_AUDIO_FIXTURE_OUTPUT_DIR',
   'ADMIN_API_PORT',
-  'SUPER_PPT_EDITOR_PORT',
-  'SUPER_PPT_EDITOR_BASE_URL',
   'ADMIN_API_POSTGRES_SCHEMA',
   'MONGODB_DB',
   'QDRANT_API_KEY',
@@ -75,9 +73,6 @@ export const ADMIN_API_ENV_CONTRACT_KEYS = [
   'ARK_BASE_URL',
   'ARK_API_KEY',
   'ARK_WEB_SEARCH_MODEL',
-  'DOCMEE_BASE_URL',
-  'DOCMEE_API_KEY',
-  'DOCMEE_EDITOR_TOKEN_HOURS',
 ] as const;
 
 const ENV_COMPATIBILITY_HINTS = [
@@ -369,10 +364,6 @@ export function loadAppConfig(options: LoadAppConfigOptions = {}): AppConfig {
     },
     server: {
       port: parsePort(env.ADMIN_API_PORT),
-    },
-    docmee: {
-      baseUrl: (env.DOCMEE_BASE_URL || 'https://open.docmee.cn').trim(),
-      apiKey: env.DOCMEE_API_KEY?.trim() || null,
     },
     storage: {
       postgresUrl: adminPostgresUrl,

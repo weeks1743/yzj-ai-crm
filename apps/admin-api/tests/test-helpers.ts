@@ -19,8 +19,6 @@ interface TestConfigOptions {
   skillRuntimeBaseUrl?: string;
   tongyiAudioServiceBaseUrl?: string;
   tongyiAudioPublicBaseUrl?: string;
-  docmeeBaseUrl?: string;
-  docmeeApiKey?: string | null;
   mongodbUri?: string;
   mongodbDb?: string;
   qdrantUrl?: string;
@@ -162,10 +160,6 @@ export function createTestConfig(options: TestConfigOptions = {}): AppConfig {
     },
     server: {
       port: 3001,
-    },
-    docmee: {
-      baseUrl: options.docmeeBaseUrl ?? 'https://open.docmee.cn',
-      apiKey: options.docmeeApiKey ?? 'test-docmee-key',
     },
     storage: {
       postgresUrl: (options.postgresUrl || process.env.ADMIN_API_POSTGRES_URL || DEFAULT_POSTGRES_URL).trim(),
