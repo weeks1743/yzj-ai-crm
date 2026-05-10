@@ -107,8 +107,8 @@
 
 ## 10. GitHub 推送约定
 
-- 若推送或拉取 GitHub 远端时遇到网络问题，默认优先尝试本地代理，而不是反复重试裸连。
-- 当前仓库可使用以下代理环境变量进行 GitHub 推送：
+- 执行 `git push`、`git pull`、`git fetch` 等 GitHub 远端操作时，默认必须使用本地代理，不再先裸连。
+- 当前仓库统一使用以下代理环境变量进行 GitHub 远端操作：
   - `export http_proxy=http://127.0.0.1:1087`
   - `export https_proxy=http://127.0.0.1:1087`
-- 执行 `git push`、`git pull`、`git fetch` 等 GitHub 远端操作前，若裸连失败，可先注入上述代理环境再执行。
+- 示例：`http_proxy=http://127.0.0.1:1087 https_proxy=http://127.0.0.1:1087 git push origin main`。
