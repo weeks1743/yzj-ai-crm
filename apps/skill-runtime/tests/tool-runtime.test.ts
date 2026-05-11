@@ -403,6 +403,101 @@ test('read_source_file reads supported text files from inputs subdirectory', asy
   assert.ok(toolMessage?.content.includes('统一门户试点'));
 });
 
+test('read_source_file treats missing inputs subdirectory as optional empty inputs', async () => {
+  const tempDir = createTempDir('tool-read-missing-inputs-subdir-');
+  const inputsDir = join(tempDir, 'inputs');
+  const outputsDir = join(tempDir, 'outputs');
+  const workspaceDir = join(tempDir, 'workspace');
+  const missingProfileDir = join(inputsDir, 'profile-analysis');
+  writeTextFixture(tempDir, 'inputs/recording-material.md', '# 录音资料包\n\n客户关注预算审批。');
+  const context: ToolExecutionContext = {
+    job: {
+      jobId: 'job-read-missing-inputs-subdir',
+      skillName: 'customer-value-positioning',
+      model: 'deepseek-v4-pro',
+      requestText: '基于录音生成客户价值定位',
+      attachments: [],
+      workingDirectory: null,
+      status: 'running',
+      finalText: null,
+      error: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    },
+    skill: {
+      skillName: 'customer-value-positioning',
+      skillFilePath: `${tempDir}/customer-value-positioning/SKILL.md`,
+      rawContent: '',
+      promptContent: 'customer value positioning prompt',
+      frontmatter: {},
+      profile: {
+        skillName: 'customer-value-positioning',
+        displayName: 'customer value positioning',
+        description: 'customer value positioning',
+        arguments: [],
+        allowedTools: [],
+        baseDir: tempDir,
+        supportFiles: [],
+        examples: [],
+        hasTemplate: false,
+      },
+    },
+    paths: {
+      jobHomeDir: tempDir,
+      workspaceDir,
+      inputsDir,
+      outputsDir,
+      skillDir: tempDir,
+      artifactDir: tempDir,
+    },
+    webSearchClient: {
+      async search() {
+        throw new Error('not used');
+      },
+    },
+    emitEvent() {},
+    publishTextArtifact() {
+      throw new Error('not used');
+    },
+    publishFileArtifact() {
+      throw new Error('not used');
+    },
+  };
+
+  const client = new QueueChatClient([
+    {
+      content: null,
+      toolCalls: [
+        {
+          id: 'call-read-missing-profile-dir',
+          name: 'read_source_file',
+          arguments: JSON.stringify({ path: missingProfileDir }),
+        },
+      ],
+    },
+    {
+      content: 'done',
+      toolCalls: [],
+    },
+  ]);
+
+  const result = await runToolLoop({
+    client,
+    model: 'deepseek-v4-pro',
+    systemPrompt: 'system',
+    userPrompt: 'user',
+    context,
+    tools: createGenericTextTools(),
+  });
+
+  assert.equal(result.finalText, 'done');
+  const toolMessage = client.calls[1]?.messages.find((message) => message.role === 'tool');
+  assert.ok(toolMessage?.content.includes('"files":[]'));
+  assert.ok(toolMessage?.content.includes('"content":""'));
+});
+
 test('runToolLoop supports explicit stop conditions for pptx QA pass', async () => {
   const tempDir = createTempDir('tool-loop-stop-');
   const context: ToolExecutionContext = {

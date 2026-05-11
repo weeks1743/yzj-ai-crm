@@ -280,13 +280,29 @@ function readSupportedInputDirectory(pathValue: string): {
   truncated: boolean;
   files: string[];
 } {
+  const stat = statSync(pathValue, { throwIfNoEntry: false });
+  if (!stat) {
+    return {
+      content: '',
+      truncated: false,
+      files: [],
+    };
+  }
+  if (!stat.isDirectory()) {
+    throw new BadRequestError(`读取路径不是目录: ${pathValue}`);
+  }
+
   const entries = readdirSync(pathValue, { withFileTypes: true })
     .filter((entry) => entry.isFile() && GENERIC_TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase()))
     .map((entry) => join(pathValue, entry.name))
     .sort();
 
   if (!entries.length) {
-    throw new BadRequestError(`输入目录中没有可读取的文本附件: ${pathValue}`);
+    return {
+      content: '',
+      truncated: false,
+      files: [],
+    };
   }
 
   const content = entries.map((filePath) => {
@@ -494,7 +510,7 @@ function createReadSourceFileTool(): RuntimeTool {
       const args = expectObject(rawArgs);
       const sourcePath = resolveReadablePath(expectString(args, 'path'), context);
       const stat = statSync(sourcePath, { throwIfNoEntry: false });
-      if (stat?.isDirectory()) {
+      if (stat?.isDirectory() || (!stat && isWithinInputsDir(sourcePath, context.paths.inputsDir))) {
         if (!isWithinInputsDir(sourcePath, context.paths.inputsDir)) {
           throw new BadRequestError(`读取路径是目录，请传入具体附件文件路径: ${sourcePath}`);
         }
