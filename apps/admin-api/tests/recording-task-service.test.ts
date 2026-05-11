@@ -1060,8 +1060,9 @@ test('createSkillJob includes profile markdown attachments and excludes process-
     assert.deepEqual(receivedInput.attachments, [
       mindMapPath,
       materialPath,
-      profilePath,
+      profileDir,
     ]);
+    assert.notEqual(receivedInput.attachments.includes(profilePath), true);
     assert.equal(receivedInput.attachments.some((item: string) => item.includes('transcription.json')), false);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

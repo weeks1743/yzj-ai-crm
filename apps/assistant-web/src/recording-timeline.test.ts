@@ -8,14 +8,14 @@ const task = (taskId: string, timelineAnchorMessageId?: string | null) => ({
   timelineAnchorMessageId,
 });
 
-test('recording timeline places unanchored recordings after chat messages', () => {
+test('recording timeline places unanchored recordings before chat messages', () => {
   const timeline = buildRecordingTimeline(
     [message('m1'), message('m2')],
     [task('recording-1')],
   );
 
-  assert.deepEqual(timeline.map((item) => item.kind), ['messages', 'recording-task']);
-  assert.equal(timeline[1]?.key, 'recording:recording-1');
+  assert.deepEqual(timeline.map((item) => item.kind), ['recording-task', 'messages']);
+  assert.equal(timeline[0]?.key, 'recording:recording-1');
 });
 
 test('recording timeline inserts recording after its anchor message', () => {
@@ -35,7 +35,7 @@ test('recording timeline treats missing anchor as unanchored', () => {
     [task('recording-1', 'missing-message')],
   );
 
-  assert.deepEqual(timeline.map((item) => item.kind), ['messages', 'recording-task']);
+  assert.deepEqual(timeline.map((item) => item.kind), ['recording-task', 'messages']);
 });
 
 test('recording timeline supports multiple recording cards and followup messages', () => {

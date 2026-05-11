@@ -151,7 +151,24 @@ export class SkillExecutor {
     for (const attachmentPath of job.attachments) {
       const sourcePath = this.ensureAllowedInputPath(attachmentPath);
       const stat = statSync(sourcePath, { throwIfNoEntry: false });
-      if (!stat?.isFile()) {
+      if (!stat) {
+        throw new BadRequestError(`附件不存在或不是文件: ${attachmentPath}`);
+      }
+
+      if (stat.isDirectory()) {
+        const destinationDir = join(paths.inputsDir, basename(sourcePath));
+        mkdirSync(destinationDir, { recursive: true });
+        for (const sourceFile of walkFiles(sourcePath)) {
+          const relativePath = relative(sourcePath, sourceFile);
+          const destinationPath = join(destinationDir, relativePath);
+          mkdirSync(dirname(destinationPath), { recursive: true });
+          copyFileSync(sourceFile, destinationPath);
+        }
+        stagedPaths.push(destinationDir);
+        continue;
+      }
+
+      if (!stat.isFile()) {
         throw new BadRequestError(`附件不存在或不是文件: ${attachmentPath}`);
       }
 

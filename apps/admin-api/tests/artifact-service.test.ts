@@ -181,6 +181,90 @@ test('createCompanyResearchArtifact upserts qdrant payload with tenant and ancho
   assert.equal(upsertInput.chunks.length, 1);
 });
 
+test('createAnalysisMaterialArtifact saves visit prep as analysis material', async () => {
+  const config = createTestConfig({ embeddingApiKey: null });
+  const artifact = {
+    artifactId: 'artifact-visit-prep-001',
+    versionId: 'version-visit-prep-001',
+    version: 1,
+    kind: 'analysis_material' as const,
+    title: '绍兴贝斯美化工股份有限公司 客户拜访准备',
+    sourceToolCode: 'ext.yunzhijia_visit_prep',
+    vectorStatus: 'pending_embedding' as ArtifactVectorStatus,
+    anchors: [
+      { type: 'customer' as const, id: 'customer-bsm-001', name: '绍兴贝斯美化工股份有限公司', role: 'primary' as const },
+      { type: 'company' as const, id: '绍兴贝斯美化工股份有限公司', name: '绍兴贝斯美化工股份有限公司', role: 'related' as const },
+    ],
+    chunkCount: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  let savedInput: any = null;
+  const repository = {
+    saveAnalysisMaterialArtifact: async (input: any) => {
+      savedInput = input;
+      return {
+        artifact,
+        markdown: input.markdown,
+        summary: input.summary,
+        eid: input.eid,
+        appId: input.appId,
+      };
+    },
+    updateVectorStatus: async (
+      _artifactId: string,
+      _versionId: string,
+      vectorStatus: ArtifactVectorStatus,
+      chunkCount: number,
+    ) => ({
+      ...artifact,
+      vectorStatus,
+      chunkCount,
+    }),
+  };
+  const service = new ArtifactService({
+    config,
+    repository: repository as any,
+    embeddingService: {
+      isConfigured: () => false,
+      embedTexts: async () => {
+        throw new Error('should not embed without key');
+      },
+    } as any,
+    vectorService: {
+      buildFilter: () => ({ must: [] }),
+      upsertChunks: async () => {
+        throw new Error('should not upsert without embedding');
+      },
+      search: async () => [],
+    } as any,
+  });
+
+  const result = await service.createAnalysisMaterialArtifact({
+    title: artifact.title,
+    markdown: '# 客户拜访准备\n\n## 客户画像\n贝斯美关注统一门户。',
+    sourceToolCode: 'ext.yunzhijia_visit_prep',
+    anchors: artifact.anchors,
+    summary: '拜访准备摘要',
+    skillCode: 'ext.yunzhijia_visit_prep',
+    sourceJobId: 'job-visit-prep-001',
+    sourceFile: {
+      name: '绍兴贝斯美化工股份有限公司 公司研究.md',
+      mimeType: 'text/markdown',
+    },
+  });
+
+  assert.equal(result.artifact.kind, 'analysis_material');
+  assert.equal(result.artifact.sourceToolCode, 'ext.yunzhijia_visit_prep');
+  assert.equal(result.artifact.vectorStatus, 'pending_config');
+  assert.equal(savedInput.eid, config.yzj.eid);
+  assert.equal(savedInput.appId, config.yzj.lightCloud.appId);
+  assert.equal(savedInput.title, artifact.title);
+  assert.equal(savedInput.skillCode, 'ext.yunzhijia_visit_prep');
+  assert.equal(savedInput.sourceJobId, 'job-visit-prep-001');
+  assert.equal(savedInput.sourceFile.name, '绍兴贝斯美化工股份有限公司 公司研究.md');
+});
+
 test('findLatestCompanyResearchArtifact returns latest valid markdown by company anchor', async () => {
   const config = createTestConfig({ embeddingApiKey: null });
   let lookupInput: any = null;

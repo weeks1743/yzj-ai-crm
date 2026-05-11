@@ -214,7 +214,54 @@ test('ArtifactReportService reports legacy transient-only reports as requiring r
   );
 });
 
-test('ArtifactReportService only accepts company research markdown artifacts', async () => {
+test('ArtifactReportService accepts visit prep analysis material reports', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'yzj-visit-prep-report-'));
+  const database = createInMemoryDatabase();
+  const createdAttachments: string[][] = [];
+  let createCalls = 0;
+  try {
+    const service = new ArtifactReportService({
+      config: createTestConfig({ envFilePath: join(tempDir, '.env') }),
+      repository: new ArtifactReportRepository(database),
+      artifactService: {
+        getArtifact: async () => buildArtifactDetail({
+          artifactId: 'artifact-visit-prep-001',
+          versionId: 'version-visit-prep-001',
+          kind: 'analysis_material',
+          title: '绍兴贝斯美化工股份有限公司 客户拜访准备',
+          sourceToolCode: 'ext.yunzhijia_visit_prep',
+        }),
+      } as any,
+      externalSkillService: {
+        createSkillJob: async (_skillCode: string, input: { attachments?: string[] }) => {
+          createCalls += 1;
+          createdAttachments.push(input.attachments ?? []);
+          return buildJob('queued');
+        },
+        getSkillJob: async () => buildJob('succeeded'),
+        getSkillJobArtifact: async () => {
+          throw new Error('unexpected artifact read');
+        },
+      } as any,
+    });
+
+    const report = await service.ensureReport('artifact-visit-prep-001');
+
+    assert.equal(report.status, 'succeeded');
+    assert.equal(report.isPersistent, true);
+    assert.equal(report.openUrl, '/api/artifacts/artifact-visit-prep-001/report/open');
+    assert.equal(createCalls, 1);
+    assert.equal(createdAttachments.length, 1);
+    assert.match(
+      createdAttachments[0]?.[0] ?? '',
+      /\.local\/skill-runtime-inputs\/artifact-report-inputs\/version-visit-prep-001-[a-f0-9]{12}\.md$/,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactReportService rejects unrelated analysis material reports', async () => {
   const database = createInMemoryDatabase();
   const service = new ArtifactReportService({
     config: createTestConfig(),
@@ -232,7 +279,7 @@ test('ArtifactReportService only accepts company research markdown artifacts', a
 
   await assert.rejects(
     () => service.ensureReport('artifact-001'),
-    /当前仅支持基于公司研究 Markdown 生成报告/,
+    /当前仅支持基于公司研究或客户拜访准备 Markdown 生成报告/,
   );
 });
 

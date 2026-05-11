@@ -21,7 +21,7 @@ function buildConfig(tempDir: string): AppConfig {
   };
 }
 
-function buildArtifactDetail(): ArtifactDetailResponse {
+function buildArtifactDetail(input: Partial<ArtifactDetailResponse['artifact']> = {}): ArtifactDetailResponse {
   return {
     artifact: {
       artifactId: 'artifact-001',
@@ -41,6 +41,7 @@ function buildArtifactDetail(): ArtifactDetailResponse {
       chunkCount: 4,
       createdAt: '2026-04-28T00:00:00.000Z',
       updatedAt: '2026-04-28T00:00:00.000Z',
+      ...input,
     },
     markdown: [
       '# 上海松井机械有限公司 公司研究',
@@ -144,6 +145,68 @@ test('ArtifactImageService stores image binary on local filesystem and metadata 
     assert.equal(loaded.status, 'succeeded');
     assert.equal(loaded.prompt, generated.prompt);
     assert.equal(loaded.generationId, generated.generationId);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('ArtifactImageService generates image for visit prep analysis material through artifact flow', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'yzj-visit-prep-artifact-image-'));
+  const database = createInMemoryDatabase();
+  const detail = {
+    ...buildArtifactDetail({
+      artifactId: 'artifact-visit-prep-001',
+      versionId: 'version-visit-prep-001',
+      kind: 'analysis_material',
+      title: '绍兴贝斯美化工股份有限公司 客户拜访准备',
+      sourceToolCode: 'ext.yunzhijia_visit_prep',
+    }),
+    markdown: [
+      '# 绍兴贝斯美化工股份有限公司 客户拜访准备',
+      '',
+      '## 客户画像',
+      '贝斯美关注统一门户和流程审批。',
+      '',
+      '## 方案匹配',
+      '围绕统一门户、流程审批、移动协同展开价值讲解。',
+    ].join('\n'),
+  };
+  let capturedPrompt = '';
+  const service = new ArtifactImageService({
+    config: buildConfig(tempDir),
+    repository: new ArtifactImageRepository(database),
+    artifactService: {
+      getArtifact: async () => detail,
+    } as any,
+    externalSkillService: {
+      generateImage: async (input: any) => {
+        capturedPrompt = input.prompt;
+        return {
+          skillCode: 'ext.image_generate',
+          model: 'gpt-image-2',
+          provider: 'linkapi_images_provider',
+          size: input.size,
+          quality: input.quality,
+          previewDataUrl: `data:image/png;base64,${Buffer.from('visit-prep-artifact-image').toString('base64')}`,
+          mimeType: 'image/png',
+          latencyMs: 123,
+          generatedAt: '2026-04-28T09:00:00.000Z',
+        };
+      },
+    } as any,
+  });
+
+  try {
+    const generated = await service.generateImage('artifact-visit-prep-001', {
+      size: '1536x1024',
+      quality: 'auto',
+    });
+
+    assert.equal(generated.status, 'succeeded');
+    assert.equal(generated.artifactId, 'artifact-visit-prep-001');
+    assert.match(capturedPrompt, /绍兴贝斯美化工股份有限公司 客户拜访准备/);
+    assert.match(capturedPrompt, /统一门户和流程审批/);
+    assert.equal(generated.byteSize, Buffer.byteLength('visit-prep-artifact-image'));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

@@ -10796,9 +10796,10 @@ function readYunzhijiaVisitPrepAssetMaterialization(
     getSkillAssetMaterialization?: ExternalSkillService['getSkillAssetMaterialization'];
   };
   return externalSkillService.getSkillAssetMaterialization?.(YUNZHIJIA_VISIT_PREP_RUNTIME_TOOL) ?? {
-    enabled: false,
-    label: '本轮对话结果',
-    description: '客户拜访准备仅返回本轮对话 Markdown，不沉淀为资料资产。',
+    enabled: true,
+    artifactKind: 'analysis_material',
+    label: '客户拜访准备资料',
+    description: '客户拜访准备生成后沉淀为可复用分析资料，可按公司研究同一链路生成图片和报告。',
   };
 }
 

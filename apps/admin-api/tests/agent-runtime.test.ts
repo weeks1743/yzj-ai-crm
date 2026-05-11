@@ -6945,7 +6945,7 @@ test('Agent runtime blocks visit prep when selected customer has no company rese
   assert.match(response.message.content, /\/公司研究 绍兴贝斯美化工股份有限公司/);
 });
 
-test('Agent runtime invokes visit prep with selected customer research and does not save analysis material', async () => {
+test('Agent runtime invokes visit prep with selected customer research and saves analysis material', async () => {
   const repository = new AgentRunRepository(createInMemoryDatabase());
   const calls: Array<{ tool: string; input?: any }> = [];
   const companyName = '绍兴贝斯美化工股份有限公司';
@@ -6962,11 +6962,6 @@ test('Agent runtime invokes visit prep with selected customer research and does 
       },
     },
     externalSkillService: {
-      getSkillAssetMaterialization: () => ({
-        enabled: false,
-        label: '本轮对话结果',
-        description: '客户拜访准备仅返回本轮对话 Markdown，不沉淀为资料资产。',
-      }),
       createSkillJob: async (toolCode: string, payload: any) => {
         calls.push({ tool: toolCode, input: payload });
         return { jobId: 'job-visit-prep-001', status: 'running', artifacts: [] };
@@ -7019,7 +7014,21 @@ test('Agent runtime invokes visit prep with selected customer research and does 
       },
       createAnalysisMaterialArtifact: async (input: any) => {
         calls.push({ tool: 'artifact.analysis_material', input });
-        throw new Error('visit prep should not create analysis material when materialization is disabled');
+        return {
+          artifact: {
+            artifactId: 'artifact-visit-prep-001',
+            versionId: 'version-visit-prep-001',
+            version: 1,
+            kind: 'analysis_material',
+            title: input.title,
+            sourceToolCode: input.sourceToolCode,
+            vectorStatus: 'indexed',
+            anchors: input.anchors,
+            chunkCount: 2,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        };
       },
       search: async () => ({ evidence: [], qdrantFilter: {}, vectorStatus: 'searched', query: '' }),
     },
@@ -7044,14 +7053,36 @@ test('Agent runtime invokes visit prep with selected customer research and does 
     /\.local\/skill-runtime-inputs\/agent-runtime-attachments\/[^/]+\/.+-company-research\.md$/,
   );
   assert.doesNotThrow(() => readFileSync(skillCall.input.attachments[0], 'utf8'));
-  assert.equal(artifactCall, undefined);
-  assert.deepEqual(response.message.extraInfo.evidence ?? [], []);
+  assert.ok(artifactCall);
+  assert.equal(artifactCall.input.title, `${companyName} 客户拜访准备`);
+  assert.equal(artifactCall.input.sourceToolCode, 'ext.yunzhijia_visit_prep');
+  assert.equal(artifactCall.input.skillCode, 'ext.yunzhijia_visit_prep');
+  assert.equal(artifactCall.input.markdown, visitPrepMarkdown);
+  assert.deepEqual(
+    artifactCall.input.anchors.map((item: any) => [item.type, item.id, item.name]),
+    [
+      ['customer', 'customer-bsm-001', companyName],
+      ['company', companyName, companyName],
+    ],
+  );
+  assert.deepEqual(response.message.extraInfo.evidence?.map((item) => ({
+    artifactId: item.artifactId,
+    versionId: item.versionId,
+    kind: item.kind,
+    title: item.title,
+    sourceToolCode: item.sourceToolCode,
+  })), [{
+    artifactId: 'artifact-visit-prep-001',
+    versionId: 'version-visit-prep-001',
+    kind: 'analysis_material',
+    title: `${companyName} 客户拜访准备`,
+    sourceToolCode: 'ext.yunzhijia_visit_prep',
+  }]);
   assert.equal(response.message.attachments?.[0]?.name, 'yunzhijia-visit-prep-job-visit-prep-001.md');
   assert.equal(response.message.attachments?.[0]?.type, 'text/markdown');
-  assert.doesNotMatch(response.message.content, /客户拜访准备已生成/);
-  assert.doesNotMatch(response.message.content, /资料沉淀：本轮对话结果/);
+  assert.match(response.message.content, /客户拜访准备已生成/);
+  assert.match(response.message.content, /资料：绍兴贝斯美化工股份有限公司 客户拜访准备 第 1 版/);
   assert.match(response.message.content, /客户画像速览/);
-  assert.equal(response.message.content, visitPrepMarkdown);
 });
 
 test('Agent runtime blocks visit prep when skill job fails without degraded material', async () => {

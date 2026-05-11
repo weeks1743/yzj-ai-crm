@@ -17,6 +17,7 @@ import { BadRequestError, NotFoundError, getErrorMessage } from './errors.js';
 import { writeSkillRuntimeInputFile } from './skill-runtime-inputs.js';
 
 const REPORT_GENERATION_SKILL_CODE = 'ext.report_generation';
+const VISIT_PREP_SKILL_CODE = 'ext.yunzhijia_visit_prep';
 const LEGACY_TRANSIENT_REPORT_MESSAGE = '该报告仅保存了临时会话链接，报告会话已过期或服务已重启，请重新生成报告。';
 const MARKDOWN_REPORT_WAIT_TIMEOUT_MS = 180_000;
 const MARKDOWN_REPORT_POLL_INTERVAL_MS = 1_000;
@@ -54,6 +55,14 @@ function normalizeArtifactReportErrorMessage(message: string): string {
   }
 
   return trimmed;
+}
+
+function isReportableArtifact(detail: ArtifactDetailResponse): boolean {
+  return detail.artifact.kind === 'company_research'
+    || (
+      detail.artifact.kind === 'analysis_material'
+      && detail.artifact.sourceToolCode === VISIT_PREP_SKILL_CODE
+    );
 }
 
 export class ArtifactReportService {
@@ -129,7 +138,7 @@ export class ArtifactReportService {
 
   async ensureReport(artifactId: string): Promise<ArtifactReportResponse> {
     const detail = await this.options.artifactService.getArtifact(artifactId);
-    this.assertCompanyResearchArtifact(detail);
+    this.assertReportableArtifact(detail);
 
     const existing = await this.options.repository.getByVersion(detail.artifact.versionId);
     if (existing && existing.status !== 'failed') {
@@ -200,12 +209,12 @@ export class ArtifactReportService {
     }
   }
 
-  private assertCompanyResearchArtifact(detail: ArtifactDetailResponse): void {
-    if (detail.artifact.kind !== 'company_research') {
-      throw new BadRequestError('当前仅支持基于公司研究 Markdown 生成报告');
+  private assertReportableArtifact(detail: ArtifactDetailResponse): void {
+    if (!isReportableArtifact(detail)) {
+      throw new BadRequestError('当前仅支持基于公司研究或客户拜访准备 Markdown 生成报告');
     }
     if (!detail.markdown.trim()) {
-      throw new BadRequestError('公司研究 Markdown 内容为空，无法生成报告');
+      throw new BadRequestError('Markdown 资料为空，无法生成报告');
     }
   }
 

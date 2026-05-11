@@ -51,9 +51,10 @@ const RECORDING_ANALYSIS_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializatio
 };
 
 const VISIT_PREP_ASSET_MATERIALIZATION: ExternalSkillAssetMaterializationConfig = {
-  enabled: false,
-  label: '本轮对话结果',
-  description: '客户拜访准备仅返回本轮对话 Markdown，不沉淀为资料资产，也不进入向量检索。',
+  enabled: true,
+  artifactKind: 'analysis_material',
+  label: '客户拜访准备资料',
+  description: '客户拜访准备生成后沉淀为可复用分析资料，可按公司研究同一链路生成图片和报告。',
 };
 
 const NON_MATERIALIZED_ASSET_STRATEGY: ExternalSkillAssetMaterializationConfig = {

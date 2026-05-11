@@ -264,11 +264,12 @@ test('POST /api/jobs runs generic text skill flow and publishes markdown artifac
 test('POST /api/jobs preserves profile-analysis markdown attachment directory for generic text skills', async () => {
   const tempRoot = createTempDir('skill-runtime-http-profile-analysis-');
   const skillDir = resolve(REPO_ROOT, '3rdSkill');
-  const profilePath = writeTextFixture(
+  writeTextFixture(
     tempRoot,
     'recording/profile-analysis/customer-profile.md',
     '# 客户画像\n\n客户关注统一门户和流程审批。',
   );
+  const profileDir = join(tempRoot, 'recording/profile-analysis');
 
   const chatClient = new QueueChatClient([
     (input) => {
@@ -276,8 +277,9 @@ test('POST /api/jobs preserves profile-analysis markdown attachment directory fo
       const systemPrompt = input.messages.find((message) => message.role === 'system')?.content || '';
       assert.match(systemPrompt, /输入目录\/输入子目录/);
       assert.doesNotMatch(systemPrompt, /不要把输入目录/);
-      assert.match(userPrompt, /inputs\/profile-analysis\/customer-profile\.md/);
-      const attachmentPath = extractListItem(userPrompt, '.md');
+      assert.match(userPrompt, /inputs\/profile-analysis/);
+      assert.doesNotMatch(userPrompt, /customer-profile\.md/);
+      const attachmentPath = extractListItem(userPrompt, 'profile-analysis');
       return {
         content: null,
         toolCalls: [
@@ -326,7 +328,7 @@ test('POST /api/jobs preserves profile-analysis markdown attachment directory fo
       body: JSON.stringify({
         skillName: 'customer-needs-todo-analysis',
         requestText: '请根据附件整理客户需求工作待办分析',
-        attachments: [profilePath],
+        attachments: [profileDir],
       }),
     });
     assert.equal(response.status, 202);

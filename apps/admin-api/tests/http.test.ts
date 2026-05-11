@@ -2425,7 +2425,8 @@ test('HTTP endpoints expose external skill catalog and readable config errors', 
     assert.equal(visitPrepSkill.implementationType, 'skill');
     assert.equal(visitPrepSkill.supportsInvoke, true);
     assert.equal(visitPrepSkill.debugMode, 'skill_job');
-    assert.equal(visitPrepSkill.assetMaterialization?.enabled, false);
+    assert.equal(visitPrepSkill.assetMaterialization?.enabled, true);
+    assert.equal(visitPrepSkill.assetMaterialization?.artifactKind, 'analysis_material');
 
     const invokeResponse = await fetch(`${runtime.baseUrl}/api/external-skills/image-generate`, {
       method: 'POST',

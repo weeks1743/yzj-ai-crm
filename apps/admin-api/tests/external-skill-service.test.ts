@@ -127,8 +127,10 @@ test('ExternalSkillService merges runtime skills into external skill catalog', a
   assert.equal(visitPrepSkill.runtimeSkillName, 'yunzhijia-visit-prep');
   assert.equal(visitPrepSkill.debugMode, 'skill_job');
   assert.equal(visitPrepSkill.debugConfig?.artifactKind, 'markdown');
-  assert.equal(visitPrepSkill.assetMaterialization?.enabled, false);
-  assert.equal(service.getSkillAssetMaterialization('ext.yunzhijia_visit_prep')?.enabled, false);
+  assert.equal(visitPrepSkill.assetMaterialization?.enabled, true);
+  assert.equal(visitPrepSkill.assetMaterialization?.artifactKind, 'analysis_material');
+  assert.equal(service.getSkillAssetMaterialization('ext.yunzhijia_visit_prep')?.enabled, true);
+  assert.equal(service.getSkillAssetMaterialization('ext.yunzhijia_visit_prep')?.artifactKind, 'analysis_material');
 
   assert.ok(reportSkill);
   assert.equal(reportSkill.status, '运行中');

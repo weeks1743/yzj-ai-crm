@@ -1243,11 +1243,7 @@ function resolveProfileMarkdownAttachmentPaths(taskDir: string): string[] {
   if (!stat?.isDirectory()) {
     return [];
   }
-  return readdirSync(profileDir)
-    .filter((fileName) => extname(fileName).toLowerCase() === '.md')
-    .sort()
-    .map((fileName) => resolve(profileDir, fileName))
-    .filter((filePath) => statSync(filePath, { throwIfNoEntry: false })?.isFile());
+  return [profileDir];
 }
 
 function hasMeaningfulMarkdownMaterial(materialPath: string): boolean {

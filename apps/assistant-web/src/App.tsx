@@ -90,10 +90,6 @@ import type {
   ConversationSession,
   ExternalSkillJobResponse,
   ExternalSkillJobStatus,
-  MarkdownImageGenerationRequest,
-  MarkdownImageGenerationResponse,
-  MarkdownReportGenerationRequest,
-  MarkdownReportGenerationResponse,
   ShadowObjectKey,
   YzjAuthIdentityResponse,
 } from '@shared/types';
@@ -129,7 +125,7 @@ import {
 import {
   canGenerateEvidenceImage,
   getEvidenceCardTitle,
-  isCompanyResearchEvidenceCard,
+  isReportableEvidenceCard,
   isRecordingMaterialEvidenceCard,
   sanitizeEvidenceText,
 } from './evidence-card-utils';
@@ -153,13 +149,6 @@ import {
   pickChangedMetaQuestionAnswers,
   shouldRenderMetaQuestionCard,
 } from './meta-question-card-utils';
-import {
-  buildAttachmentImageKey,
-  getVisibleMessageAttachments,
-  isMarkdownAttachment,
-  resolveVisitPrepMarkdownImageTarget,
-  type VisitPrepMarkdownImageTarget,
-} from './visit-prep-markdown-image-utils';
 import { useMarkdownTheme } from './use-markdown-theme';
 import brandLogo from '@shared/assets/logo.png';
 
@@ -333,8 +322,6 @@ type OpenRecordingEvidenceHandler = (evidence: AssistantEvidenceCard) => void;
 type ArtifactActionTarget = Pick<AssistantEvidenceCard, 'artifactId' | 'versionId' | 'title' | 'kind' | 'sourceToolCode'>;
 type GenerateImageHandler = (target: ArtifactActionTarget) => void;
 type GenerateReportHandler = (target: Pick<ArtifactActionTarget, 'artifactId' | 'versionId' | 'title'>) => void;
-type GenerateMarkdownImageHandler = (target: VisitPrepMarkdownImageTarget) => void;
-type GenerateMarkdownReportHandler = (target: VisitPrepMarkdownImageTarget) => void;
 type MetaQuestionSubmitHandler = (input: {
   runId: string;
   interactionId: string;
@@ -417,23 +404,6 @@ interface ArtifactReportPayload {
   errorMessage?: string | null;
   createdAt?: string;
   updatedAt?: string;
-}
-
-type MarkdownImageStatus = 'not_started' | 'queued' | 'succeeded' | 'failed';
-
-interface MarkdownImagePayload extends Partial<MarkdownImageGenerationResponse> {
-  key: string;
-  title: string;
-  status: MarkdownImageStatus;
-  errorMessage?: string | null;
-}
-
-interface MarkdownReportPayload extends Partial<MarkdownReportGenerationResponse> {
-  key: string;
-  title: string;
-  status: ArtifactReportStatus;
-  isPersistent: false;
-  errorMessage?: string | null;
 }
 
 interface ArtifactDetailPayload {
@@ -1669,16 +1639,25 @@ function getVisibleReferenceLabels(references?: string[]) {
   ));
 }
 
+function getVisibleMessageAttachments(info: {
+  message?: Pick<AssistantChatMessage, 'attachments'>;
+  originMessage?: Pick<AssistantChatMessage, 'attachments'>;
+  attachments?: AssistantChatMessage['attachments'];
+}): NonNullable<AssistantChatMessage['attachments']> {
+  return (
+    info.message?.attachments
+    ?? info.originMessage?.attachments
+    ?? info.attachments
+    ?? []
+  ).filter((attachment) => Boolean(attachment?.name));
+}
+
 function isImageGenerating(status?: ArtifactImageStatus) {
   return status === 'queued';
 }
 
 function isReportGenerating(status?: ArtifactReportStatus) {
   return status === 'queued' || status === 'running';
-}
-
-function isMarkdownImageGenerating(status?: MarkdownImageStatus) {
-  return status === 'queued';
 }
 
 function getImageButtonLabel(image?: ArtifactImagePayload) {
@@ -1692,29 +1671,6 @@ function getImageButtonLabel(image?: ArtifactImagePayload) {
     return '重新生成图片';
   }
   return '重新生成图片';
-}
-
-function getMarkdownImageButtonLabel(image?: MarkdownImagePayload) {
-  if (!image || image.status === 'not_started') {
-    return '生成图片';
-  }
-  if (isMarkdownImageGenerating(image.status)) {
-    return '图片生成中';
-  }
-  return '重新生成图片';
-}
-
-function getMarkdownReportButtonLabel(report?: MarkdownReportPayload) {
-  if (!report || report.status === 'not_started') {
-    return '生成报告';
-  }
-  if (isReportGenerating(report.status)) {
-    return '报告生成中';
-  }
-  if (report.status === 'succeeded' && report.openUrl) {
-    return '打开报告';
-  }
-  return '重新生成报告';
 }
 
 function getReportButtonLabel(report?: ArtifactReportPayload) {
@@ -1741,16 +1697,6 @@ function getReportErrorMessage(report?: ArtifactReportPayload) {
     return report.errorMessage || '报告生成失败，可重新生成。';
   }
   return null;
-}
-
-function downloadDataUrl(dataUrl: string, fileName: string): void {
-  const anchor = document.createElement('a');
-  anchor.href = dataUrl;
-  anchor.download = fileName;
-  anchor.rel = 'noopener noreferrer';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
 }
 
 function getRecordingViewerTargetPath(taskId: string): string {
@@ -3838,9 +3784,6 @@ function AssistantMessageContent({
   onGenerateImage,
   onGenerateReport,
   onOpenReport,
-  onGenerateMarkdownImage,
-  onGenerateMarkdownReport,
-  onOpenMarkdownReport,
   onOpenRecord,
   onSubmitQuestionCard,
   onCancelQuestionCard,
@@ -3848,8 +3791,6 @@ function AssistantMessageContent({
   submittedQuestionInteractionIds,
   imageByArtifactId,
   reportByArtifactId,
-  imageByAttachmentKey,
-  reportByAttachmentKey,
 }: {
   identity: YzjAuthIdentityResponse;
   content: string;
@@ -3861,9 +3802,6 @@ function AssistantMessageContent({
   onGenerateImage: GenerateImageHandler;
   onGenerateReport: GenerateReportHandler;
   onOpenReport: (report: ArtifactReportPayload) => void;
-  onGenerateMarkdownImage: GenerateMarkdownImageHandler;
-  onGenerateMarkdownReport: GenerateMarkdownReportHandler;
-  onOpenMarkdownReport: (report: MarkdownReportPayload) => void;
   onOpenRecord?: OpenRecordHandler;
   onSubmitQuestionCard?: MetaQuestionSubmitHandler;
   onCancelQuestionCard?: MetaQuestionCancelHandler;
@@ -3871,8 +3809,6 @@ function AssistantMessageContent({
   submittedQuestionInteractionIds?: Set<string>;
   imageByArtifactId: Record<string, ArtifactImagePayload>;
   reportByArtifactId: Record<string, ArtifactReportPayload>;
-  imageByAttachmentKey: Record<string, MarkdownImagePayload>;
-  reportByAttachmentKey: Record<string, MarkdownReportPayload>;
 }) {
   const evidence = (info.extraInfo?.evidence ?? []) as AssistantEvidenceCard[];
   const groupedEvidence = useMemo(() => groupEvidenceByArtifact(evidence), [evidence]);
@@ -3881,13 +3817,6 @@ function AssistantMessageContent({
   const pendingInteraction = info.extraInfo?.agentTrace?.pendingInteraction as PendingInteractionView | null | undefined;
   const referenceLabels = getVisibleReferenceLabels(info.extraInfo?.references);
   const visibleAttachments = getVisibleMessageAttachments(info);
-  const visitPrepMarkdownImageTarget = resolveVisitPrepMarkdownImageTarget({ content, info });
-  const visitPrepMarkdownImage = visitPrepMarkdownImageTarget
-    ? imageByAttachmentKey[visitPrepMarkdownImageTarget.key]
-    : undefined;
-  const visitPrepMarkdownReport = visitPrepMarkdownImageTarget
-    ? reportByAttachmentKey[visitPrepMarkdownImageTarget.key]
-    : undefined;
 
   return (
     <div className={styles.assistantMessageShell}>
@@ -3921,68 +3850,6 @@ function AssistantMessageContent({
           >
             {content}
           </XMarkdown>
-          {visitPrepMarkdownImageTarget ? (
-            <div className={styles.markdownImageActions}>
-              <Button
-                type="link"
-                size="small"
-                icon={<PictureOutlined />}
-                loading={isMarkdownImageGenerating(visitPrepMarkdownImage?.status)}
-                disabled={isMarkdownImageGenerating(visitPrepMarkdownImage?.status)}
-                style={{ paddingInline: 0 }}
-                onClick={() => onGenerateMarkdownImage(visitPrepMarkdownImageTarget)}
-              >
-                {getMarkdownImageButtonLabel(visitPrepMarkdownImage)}
-              </Button>
-              <Button
-                type="link"
-                size="small"
-                icon={<FundProjectionScreenOutlined />}
-                loading={isReportGenerating(visitPrepMarkdownReport?.status)}
-                disabled={isReportGenerating(visitPrepMarkdownReport?.status)}
-                style={{ paddingInline: 0 }}
-                onClick={() => {
-                  if (visitPrepMarkdownReport?.status === 'succeeded' && visitPrepMarkdownReport.openUrl) {
-                    onOpenMarkdownReport(visitPrepMarkdownReport);
-                    return;
-                  }
-                  onGenerateMarkdownReport(visitPrepMarkdownImageTarget);
-                }}
-              >
-                {getMarkdownReportButtonLabel(visitPrepMarkdownReport)}
-              </Button>
-              {visitPrepMarkdownImage?.status === 'failed' && visitPrepMarkdownImage.errorMessage ? (
-                <div className={styles.evidenceErrorText}>{visitPrepMarkdownImage.errorMessage}</div>
-              ) : null}
-              {visitPrepMarkdownReport?.status === 'failed' && visitPrepMarkdownReport.errorMessage ? (
-                <div className={styles.evidenceErrorText}>{visitPrepMarkdownReport.errorMessage}</div>
-              ) : null}
-              {visitPrepMarkdownImage?.status === 'succeeded' && visitPrepMarkdownImage.previewDataUrl ? (
-                <div className={styles.evidenceImagePreview}>
-                  <Image
-                    src={visitPrepMarkdownImage.previewDataUrl}
-                    alt={`${visitPrepMarkdownImage.title || '客户拜访准备'} 配图`}
-                    preview={{ mask: '预览图片' }}
-                  />
-                  {visitPrepMarkdownImage.downloadDataUrl ? (
-                    <Button
-                      className={styles.evidenceImageDownload}
-                      type="primary"
-                      shape="circle"
-                      size="small"
-                      icon={<DownloadOutlined />}
-                      aria-label="下载图片"
-                      title="下载图片"
-                      onClick={() => downloadDataUrl(
-                        visitPrepMarkdownImage.downloadDataUrl!,
-                        visitPrepMarkdownImage.fileName || `${visitPrepMarkdownImage.title || '客户拜访准备'}.png`,
-                      )}
-                    />
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
         </div>
       )}
 
@@ -3992,18 +3859,6 @@ function AssistantMessageContent({
           <div className={styles.attachmentList}>
             {visibleAttachments.map((attachment: any) => {
               const canOpen = typeof attachment.url === 'string' && attachment.url && attachment.url !== '#attachment';
-              const attachmentTarget: VisitPrepMarkdownImageTarget | null = canOpen && isMarkdownAttachment(attachment)
-                ? {
-                    key: buildAttachmentImageKey({ name: attachment.name, url: attachment.url }),
-                    title: attachment.name,
-                    attachment: {
-                      name: attachment.name,
-                      url: attachment.url,
-                      type: attachment.type,
-                    },
-                  }
-                : null;
-              const markdownImage = attachmentTarget ? imageByAttachmentKey[attachmentTarget.key] : undefined;
               return canOpen ? (
                 <div
                   key={`${attachment.name}:${attachment.url}`}
@@ -4019,47 +3874,7 @@ function AssistantMessageContent({
                     >
                       {attachment.name}
                     </Button>
-                    {attachmentTarget ? (
-                      <Button
-                        type="link"
-                        size="small"
-                        icon={<PictureOutlined />}
-                        loading={isMarkdownImageGenerating(markdownImage?.status)}
-                        disabled={isMarkdownImageGenerating(markdownImage?.status)}
-                        style={{ paddingInline: 0 }}
-                        onClick={() => onGenerateMarkdownImage(attachmentTarget)}
-                      >
-                        {getMarkdownImageButtonLabel(markdownImage)}
-                      </Button>
-                    ) : null}
                   </div>
-                  {markdownImage?.status === 'failed' && markdownImage.errorMessage ? (
-                    <div className={styles.evidenceErrorText}>{markdownImage.errorMessage}</div>
-                  ) : null}
-                  {markdownImage?.status === 'succeeded' && markdownImage.previewDataUrl ? (
-                    <div className={styles.evidenceImagePreview}>
-                      <Image
-                        src={markdownImage.previewDataUrl}
-                        alt={`${markdownImage.title || attachment.name} 配图`}
-                        preview={{ mask: '预览图片' }}
-                      />
-                      {markdownImage.downloadDataUrl ? (
-                        <Button
-                          className={styles.evidenceImageDownload}
-                          type="primary"
-                          shape="circle"
-                          size="small"
-                          icon={<DownloadOutlined />}
-                          aria-label="下载图片"
-                          title="下载图片"
-                          onClick={() => downloadDataUrl(
-                            markdownImage.downloadDataUrl!,
-                            markdownImage.fileName || `${attachment.name}.png`,
-                          )}
-                        />
-                      ) : null}
-                    </div>
-                  ) : null}
                 </div>
               ) : (
                 <Tag key={attachment.name} color="blue">
@@ -4118,7 +3933,7 @@ function AssistantMessageContent({
 	                  {(() => {
 	                    const recordingMaterialEvidence = isRecordingMaterialEvidenceCard(item);
 	                    const canGenerateImage = canGenerateEvidenceImage(item);
-	                    const canGenerateReport = isCompanyResearchEvidenceCard(item);
+	                    const canGenerateReport = isReportableEvidenceCard(item);
 	                    const image = canGenerateImage
 	                      ? imageByArtifactId[item.artifactId]
 	                      : undefined;
@@ -4747,9 +4562,6 @@ function buildRole(
   onGenerateImage: GenerateImageHandler,
   onGenerateReport: GenerateReportHandler,
   onOpenReport: (report: ArtifactReportPayload) => void,
-  onGenerateMarkdownImage: GenerateMarkdownImageHandler,
-  onGenerateMarkdownReport: GenerateMarkdownReportHandler,
-  onOpenMarkdownReport: (report: MarkdownReportPayload) => void,
   onOpenRecord: OpenRecordHandler,
   onSubmitQuestionCard: MetaQuestionSubmitHandler,
   onCancelQuestionCard: MetaQuestionCancelHandler,
@@ -4757,8 +4569,6 @@ function buildRole(
   submittedQuestionInteractionIds: Set<string>,
   imageByArtifactId: Record<string, ArtifactImagePayload>,
   reportByArtifactId: Record<string, ArtifactReportPayload>,
-  imageByAttachmentKey: Record<string, MarkdownImagePayload>,
-  reportByAttachmentKey: Record<string, MarkdownReportPayload>,
 ): BubbleListProps['role'] {
   return {
     assistant: {
@@ -4812,9 +4622,6 @@ function buildRole(
 	          onGenerateImage={onGenerateImage}
 	          onGenerateReport={onGenerateReport}
 	          onOpenReport={onOpenReport}
-	          onGenerateMarkdownImage={onGenerateMarkdownImage}
-	          onGenerateMarkdownReport={onGenerateMarkdownReport}
-	          onOpenMarkdownReport={onOpenMarkdownReport}
           onOpenRecord={onOpenRecord}
           onSubmitQuestionCard={onSubmitQuestionCard}
           onCancelQuestionCard={onCancelQuestionCard}
@@ -4822,8 +4629,6 @@ function buildRole(
 	          submittedQuestionInteractionIds={submittedQuestionInteractionIds}
 	          imageByArtifactId={imageByArtifactId}
 	          reportByArtifactId={reportByArtifactId}
-		          imageByAttachmentKey={imageByAttachmentKey}
-		          reportByAttachmentKey={reportByAttachmentKey}
 	        />
       ),
     },
@@ -4853,7 +4658,12 @@ function ArtifactMarkdownDrawer({
   onOpenReport: (report: ArtifactReportPayload) => void;
 }) {
   const anchorTags = buildArtifactAnchorTags(state.artifact?.anchors);
-  const canGenerateReport = state.artifact?.kind === 'company_research';
+  const canGenerateReport = state.artifact
+    ? isReportableEvidenceCard({
+        kind: state.artifact.kind,
+        sourceToolCode: state.artifact.sourceToolCode,
+      })
+    : false;
   const reportGenerating = isReportGenerating(report?.status);
   const staleWarning = Boolean(
     state.artifact
@@ -5046,8 +4856,6 @@ function AssistantConversationRuntime({
   });
   const [imageByArtifactId, setImageByArtifactId] = useState<Record<string, ArtifactImagePayload>>({});
   const [reportByArtifactId, setReportByArtifactId] = useState<Record<string, ArtifactReportPayload>>({});
-  const [imageByAttachmentKey, setImageByAttachmentKey] = useState<Record<string, MarkdownImagePayload>>({});
-  const [reportByAttachmentKey, setReportByAttachmentKey] = useState<Record<string, MarkdownReportPayload>>({});
   const [recordingTasks, setRecordingTasks] = useState<RecordingTaskCardState[]>(
     () => loadPersistedRecordingTasks(runtimeScope, activeConversationKey),
   );
@@ -5629,7 +5437,7 @@ function AssistantConversationRuntime({
   useEffect(() => {
     const missingReports = Array.from(new Set(
       visibleEvidenceCards
-        .filter((item) => isCompanyResearchEvidenceCard(item) && item.artifactId && !reportByArtifactId[item.artifactId])
+        .filter((item) => isReportableEvidenceCard(item) && item.artifactId && !reportByArtifactId[item.artifactId])
         .map((item) => item.artifactId),
     ));
 
@@ -5821,169 +5629,6 @@ function AssistantConversationRuntime({
       }
     },
     [handleOpenReport, messageApi, reportByArtifactId],
-  );
-
-  const handleGenerateMarkdownImage = React.useCallback<GenerateMarkdownImageHandler>(
-    async (target) => {
-      const existing = imageByAttachmentKey[target.key];
-      if (isMarkdownImageGenerating(existing?.status)) {
-        return;
-      }
-
-      setImageByAttachmentKey((current) => ({
-        ...current,
-        [target.key]: {
-          key: target.key,
-          title: target.title,
-          status: 'queued',
-        },
-      }));
-
-      try {
-        let markdown = target.markdown?.trim() ?? '';
-        if (target.attachment) {
-          const markdownResponse = await fetch(target.attachment.url);
-          if (!markdownResponse.ok) {
-            throw new Error(`Markdown 附件读取失败：${await readApiErrorMessage(markdownResponse)}`);
-          }
-          markdown = (await markdownResponse.text()).trim();
-        }
-        if (!markdown) {
-          throw new Error('Markdown 内容为空，无法生成图片');
-        }
-        const request: MarkdownImageGenerationRequest = {
-          title: target.title,
-          markdown,
-          size: '1536x1024',
-          quality: 'auto',
-        };
-        const imageResponse = await fetch('/api/markdown/image', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(request),
-        });
-        if (!imageResponse.ok) {
-          throw new Error(await readApiErrorMessage(imageResponse));
-        }
-
-        const payload = (await imageResponse.json()) as MarkdownImageGenerationResponse;
-        setImageByAttachmentKey((current) => ({
-          ...current,
-          [target.key]: {
-            ...payload,
-            key: target.key,
-            title: payload.title || target.title,
-            status: 'succeeded',
-          },
-        }));
-        messageApi.success('图片已生成');
-        window.requestAnimationFrame(() => {
-          safeScrollToBottom();
-        });
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : '图片生成失败';
-        setImageByAttachmentKey((current) => ({
-          ...current,
-          [target.key]: {
-            key: target.key,
-            title: target.title,
-            status: 'failed',
-            errorMessage,
-          },
-        }));
-        messageApi.error(errorMessage);
-      }
-    },
-    [imageByAttachmentKey, messageApi, safeScrollToBottom],
-  );
-
-  const handleOpenMarkdownReport = React.useCallback((report: MarkdownReportPayload) => {
-    if (!report.openUrl) {
-      messageApi.warning('报告链接尚未生成。');
-      return;
-    }
-    window.open(report.openUrl, '_blank', 'noopener,noreferrer');
-  }, [messageApi]);
-
-  const handleGenerateMarkdownReport = React.useCallback<GenerateMarkdownReportHandler>(
-    async (target) => {
-      const existing = reportByAttachmentKey[target.key];
-      if (isReportGenerating(existing?.status)) {
-        return;
-      }
-
-      setReportByAttachmentKey((current) => ({
-        ...current,
-        [target.key]: {
-          key: target.key,
-          title: target.title,
-          status: 'queued',
-          isPersistent: false,
-        },
-      }));
-
-      try {
-        let markdown = target.markdown?.trim() ?? '';
-        if (target.attachment) {
-          const markdownResponse = await fetch(target.attachment.url);
-          if (!markdownResponse.ok) {
-            throw new Error(`Markdown 附件读取失败：${await readApiErrorMessage(markdownResponse)}`);
-          }
-          markdown = (await markdownResponse.text()).trim();
-        }
-        if (!markdown) {
-          throw new Error('Markdown 内容为空，无法生成报告');
-        }
-        const request: MarkdownReportGenerationRequest = {
-          title: target.title,
-          markdown,
-        };
-        const reportResponse = await fetch('/api/markdown/report', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(request),
-        });
-        if (!reportResponse.ok) {
-          throw new Error(await readApiErrorMessage(reportResponse));
-        }
-
-        const payload = (await reportResponse.json()) as MarkdownReportGenerationResponse;
-        const nextReport: MarkdownReportPayload = {
-          ...payload,
-          key: target.key,
-          title: payload.title || target.title,
-          status: payload.status,
-          isPersistent: false,
-        };
-        setReportByAttachmentKey((current) => ({
-          ...current,
-          [target.key]: nextReport,
-        }));
-        if (payload.status === 'succeeded' && payload.openUrl) {
-          messageApi.success('报告已生成');
-          handleOpenMarkdownReport(nextReport);
-        } else {
-          messageApi.error(payload.errorMessage || '报告生成失败，可重新生成');
-        }
-        window.requestAnimationFrame(() => {
-          safeScrollToBottom();
-        });
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : '报告生成失败';
-        setReportByAttachmentKey((current) => ({
-          ...current,
-          [target.key]: {
-            key: target.key,
-            title: target.title,
-            status: 'failed',
-            isPersistent: false,
-            errorMessage,
-          },
-        }));
-        messageApi.error(errorMessage);
-      }
-    },
-    [handleOpenMarkdownReport, messageApi, reportByAttachmentKey, safeScrollToBottom],
   );
 
   const handleSubmitQuestionCard = React.useCallback<MetaQuestionSubmitHandler>(
@@ -6263,24 +5908,19 @@ function AssistantConversationRuntime({
   }, [handleOpenRecord, requestFromRecordingTask]);
 
   const role = useMemo(
-    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleOpenRecordingEvidence, handleGenerateImage, handleGenerateReport, handleOpenReport, handleGenerateMarkdownImage, handleGenerateMarkdownReport, handleOpenMarkdownReport, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, imageByArtifactId, reportByArtifactId, imageByAttachmentKey, reportByAttachmentKey),
+    () => buildRole(runtimeScope.identity, styles, markdownClassName, handleOpenArtifactCard, handleOpenRecordingEvidence, handleGenerateImage, handleGenerateReport, handleOpenReport, handleOpenRecord, handleSubmitQuestionCard, handleCancelQuestionCard, activeQuestionInteractionId, submittedQuestionInteractionIds, imageByArtifactId, reportByArtifactId),
     [
       activeQuestionInteractionId,
       handleCancelQuestionCard,
-      handleGenerateMarkdownReport,
-      handleGenerateMarkdownImage,
       handleGenerateImage,
       handleGenerateReport,
       handleOpenArtifactCard,
       handleOpenRecordingEvidence,
-      handleOpenMarkdownReport,
       handleOpenReport,
       handleOpenRecord,
       handleSubmitQuestionCard,
-      imageByAttachmentKey,
       imageByArtifactId,
       markdownClassName,
-      reportByAttachmentKey,
       reportByArtifactId,
       runtimeScope.identity,
       submittedQuestionInteractionIds,

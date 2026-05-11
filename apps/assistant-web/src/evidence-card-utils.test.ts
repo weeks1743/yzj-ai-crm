@@ -5,9 +5,11 @@ import {
   compactEvidenceSnippet,
   getEvidenceCardTitle,
   isCompanyResearchEvidenceCard,
+  isReportableEvidenceCard,
   isRecordingEvidenceCard,
   isRecordingMaterialEvidenceCard,
   isLikelyInternalEvidenceId,
+  isVisitPrepEvidenceCard,
 } from './evidence-card-utils';
 
 test('evidence card helpers strip internal identifiers from visible text', () => {
@@ -56,7 +58,28 @@ test('company research evidence is recognized for legacy and current cards', () 
 
   assert.equal(isCompanyResearchEvidenceCard(legacyCard), true);
   assert.equal(isCompanyResearchEvidenceCard(currentCard), true);
+  assert.equal(isReportableEvidenceCard(legacyCard), true);
+  assert.equal(isReportableEvidenceCard(currentCard), true);
   assert.equal(canGenerateEvidenceImage(legacyCard), true);
+});
+
+test('visit prep analysis material is reportable and image-enabled', () => {
+  const card = {
+    artifactId: 'artifact-visit-prep-001',
+    versionId: 'version-visit-prep-001',
+    kind: 'analysis_material' as const,
+    title: '绍兴贝斯美化工股份有限公司 客户拜访准备',
+    version: 1,
+    sourceToolCode: 'ext.yunzhijia_visit_prep',
+    anchorLabel: '绍兴贝斯美化工股份有限公司',
+    snippet: '拜访准备摘要',
+  };
+
+  assert.equal(isCompanyResearchEvidenceCard(card), false);
+  assert.equal(isVisitPrepEvidenceCard(card), true);
+  assert.equal(isReportableEvidenceCard(card), true);
+  assert.equal(canGenerateEvidenceImage(card), true);
+  assert.equal(getEvidenceCardTitle(card), '绍兴贝斯美化工股份有限公司 客户拜访准备');
 });
 
 test('recording evidence cards use recording-facing title fallback and disable image generation', () => {
@@ -91,6 +114,7 @@ test('analysis material opens as research content and offers image generation', 
 
   assert.equal(isRecordingEvidenceCard(card), false);
   assert.equal(isRecordingMaterialEvidenceCard(card), false);
+  assert.equal(isReportableEvidenceCard(card), false);
   assert.equal(canGenerateEvidenceImage(card), true);
   assert.equal(getEvidenceCardTitle(card), '贝斯美拜访 - 拜访会话理解');
 });

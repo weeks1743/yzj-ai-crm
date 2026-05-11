@@ -20,6 +20,10 @@ const companyResearchSourceToolCodes = new Set([
   'ext.company_research_pm',
 ]);
 
+const visitPrepSourceToolCodes = new Set([
+  'ext.yunzhijia_visit_prep',
+]);
+
 export function isLikelyInternalEvidenceId(value?: string | null): boolean {
   const normalized = (value ?? '').replace(/\s+/g, '').trim();
   if (!normalized) {
@@ -61,6 +65,19 @@ export function isCompanyResearchEvidenceCard(
 ): boolean {
   const kind = item.kind as EvidenceCardKind | undefined;
   return kind === 'company_research' || companyResearchSourceToolCodes.has(item.sourceToolCode.trim());
+}
+
+export function isVisitPrepEvidenceCard(
+  item: Pick<AssistantEvidenceCard, 'kind' | 'sourceToolCode'>,
+): boolean {
+  const kind = item.kind as EvidenceCardKind | undefined;
+  return kind === 'analysis_material' && visitPrepSourceToolCodes.has(item.sourceToolCode.trim());
+}
+
+export function isReportableEvidenceCard(
+  item: Pick<AssistantEvidenceCard, 'kind' | 'sourceToolCode'>,
+): boolean {
+  return isCompanyResearchEvidenceCard(item) || isVisitPrepEvidenceCard(item);
 }
 
 export function canGenerateEvidenceImage(
