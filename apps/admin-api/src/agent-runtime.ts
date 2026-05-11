@@ -74,6 +74,14 @@ interface InterruptedGraphOutput extends Partial<MainAgentGraphState> {
   __interrupt__?: unknown;
 }
 
+type MainAgentRuntimeDirectOutput = MainAgentGraphState & {
+  __directRuntimeOutput: true;
+};
+
+function isDirectRuntimeState(value: MainAgentGraphState | Command | MainAgentRuntimeDirectOutput): value is MainAgentRuntimeDirectOutput {
+  return Boolean(value && typeof value === 'object' && '__directRuntimeOutput' in value);
+}
+
 export interface MainAgentRuntimeOptions {
   config: AppConfig;
   registry: AgentToolRegistry;
@@ -94,8 +102,9 @@ export interface MainAgentRuntimeInvokeInput {
   contextFrame?: ContextFrame | null;
   contextCandidates?: ContextReferenceCandidate[];
   resumeFallback?: {
-    pendingInteraction: PendingInteraction;
+    pendingInteraction?: PendingInteraction;
     selectedTool?: AgentToolSelection;
+    pendingConfirmation?: ConfirmationRequest;
   } | null;
 }
 
@@ -147,6 +156,40 @@ export class MainAgentRuntime {
       },
     };
     const graphInput = await this.buildGraphInput(input, config);
+    if (isDirectRuntimeState(graphInput)) {
+      const status: AgentExecutionStatus = graphInput.status;
+      const executionState = buildExecutionState({
+        runId: input.runId,
+        traceId: input.traceId,
+        status,
+        currentStepKey: graphInput.currentStepKey,
+        message: graphInput.headline,
+        startedAt: input.startedAt,
+      });
+      return {
+        intentFrame: graphInput.intentFrame!,
+        legacyIntentFrame: graphInput.intentFrame!.legacyIntentFrame,
+        taskPlan: finishRuntimePlan(graphInput.taskPlan!, status),
+        executionState,
+        toolCalls: graphInput.toolCalls,
+        evidence: graphInput.evidence,
+        content: graphInput.content,
+        headline: graphInput.headline,
+        references: graphInput.references,
+        attachments: graphInput.attachments,
+        uiSurfaces: graphInput.uiSurfaces ?? [],
+        qdrantFilter: graphInput.qdrantFilter,
+        contextFrame: graphInput.contextFrame ?? null,
+        selectedTool: graphInput.selectedTool,
+        pendingConfirmation: graphInput.pendingConfirmation ?? null,
+        pendingInteraction: graphInput.pendingInteraction ?? null,
+        continuationResolution: graphInput.continuationResolution ?? null,
+        resolvedContext: graphInput.resolvedContext ?? null,
+        semanticResolution: graphInput.semanticResolution ?? null,
+        toolArbitration: graphInput.toolArbitration ?? null,
+        policyDecisions: graphInput.policyDecisions,
+      };
+    }
     const graphOutput = await this.graph.invoke(graphInput as never, config) as InterruptedGraphOutput;
     const state = normalizeGraphOutput(graphOutput, input);
     const status: AgentExecutionStatus = state.status;
@@ -187,7 +230,7 @@ export class MainAgentRuntime {
   private async buildGraphInput(
     input: MainAgentRuntimeInvokeInput,
     config: { configurable: { thread_id: string } },
-  ): Promise<MainAgentGraphState | Command> {
+  ): Promise<MainAgentGraphState | Command | MainAgentRuntimeDirectOutput> {
     const invocationUpdate = buildInvocationUpdate(input);
     if (input.request.resume?.action === 'provide_input') {
       const snapshot = await this.readGraphState(config);
@@ -261,6 +304,16 @@ export class MainAgentRuntime {
 
     if (input.request.resume?.action === 'confirm_writeback') {
       const decision = input.request.resume satisfies AgentResumeDecision;
+      const snapshot = await this.readGraphState(config);
+      const values = snapshot?.values as Partial<MainAgentGraphState> | undefined;
+      const fallbackConfirmation = input.resumeFallback?.pendingConfirmation;
+      if (fallbackConfirmation && (fallbackConfirmation.status !== 'pending' || !values?.pendingConfirmation)) {
+        return await this.executeRecoveredConfirmation({
+          input,
+          pendingConfirmation: fallbackConfirmation,
+          decision,
+        });
+      }
       return new Command({
         resume: decision,
         update: invocationUpdate,
@@ -298,6 +351,100 @@ export class MainAgentRuntime {
       return await this.graph.getState(config);
     } catch {
       return null;
+    }
+  }
+
+  private async executeRecoveredConfirmation(input: {
+    input: MainAgentRuntimeInvokeInput;
+    pendingConfirmation: ConfirmationRequest;
+    decision: Extract<AgentResumeDecision, { action: 'confirm_writeback' }>;
+  }): Promise<MainAgentRuntimeDirectOutput> {
+    const commitToolCode = input.pendingConfirmation.toolCode.replace('.preview_', '.commit_');
+    const tool = this.options.registry.assert(commitToolCode);
+    const selectedTool: AgentToolSelection = {
+      toolCode: commitToolCode,
+      reason: '从持久化确认状态恢复执行确认写回工具。',
+      input: {
+        confirmationId: input.pendingConfirmation.confirmationId,
+      },
+      confidence: 1,
+    };
+    const taskPlan = buildRecoveredConfirmationPlan(commitToolCode);
+    const intentFrame = buildRecoveredConfirmationIntent(input.pendingConfirmation);
+    try {
+      const result = await tool.execute(
+        {
+          request: input.input.request,
+          intentFrame,
+          taskPlan,
+          selectedTool,
+          contextFrame: input.input.contextFrame ?? null,
+          resolvedContext: null,
+          resumeDecision: input.decision,
+        },
+        {
+          runId: input.input.runId,
+          traceId: input.input.traceId,
+          eid: input.input.eid,
+          appId: input.input.appId,
+          operatorOpenId: input.input.operatorOpenId,
+          config: this.options.config,
+          contextFrame: input.input.contextFrame ?? null,
+          resolvedContext: null,
+        },
+      );
+      return {
+        __directRuntimeOutput: true,
+        ...this.buildInitialState(input.input),
+        intentFrame,
+        taskPlan: markConfirmationPlan(taskPlan, result.status),
+        selectedTool,
+        status: result.status,
+        currentStepKey: result.currentStepKey ?? null,
+        content: result.content,
+        headline: result.headline,
+        references: result.references,
+        evidence: result.evidence ?? [],
+        attachments: result.attachments ?? [],
+        uiSurfaces: result.uiSurfaces ?? [],
+        qdrantFilter: result.qdrantFilter,
+        contextFrame: result.contextFrame !== undefined ? result.contextFrame : input.input.contextFrame ?? null,
+        toolArbitration: result.toolArbitration ?? null,
+        toolCalls: result.toolCalls,
+        pendingConfirmation: result.pendingConfirmation ?? input.pendingConfirmation,
+        pendingInteraction: null,
+        policyDecisions: result.policyDecisions ?? [],
+        resumeDecision: input.decision,
+        continuationResolution: {
+          usedContinuation: true,
+          action: input.decision.decision === 'approve' ? 'confirm_writeback' : 'reject_writeback',
+          reason: input.decision.decision === 'approve'
+            ? '从持久化确认状态恢复用户确认写回。'
+            : '从持久化确认状态恢复用户拒绝写回。',
+          toolCode: input.pendingConfirmation.toolCode,
+        },
+      };
+    } catch (error) {
+      return {
+        __directRuntimeOutput: true,
+        ...this.buildInitialState(input.input),
+        ...buildToolUnavailableState({
+          state: {
+            ...this.buildInitialState(input.input),
+            intentFrame,
+            taskPlan,
+            selectedTool,
+            pendingConfirmation: input.pendingConfirmation,
+            resumeDecision: input.decision,
+          },
+          selectedTool,
+          currentStepKey: 'confirm-writeback',
+          error,
+        }),
+        intentFrame,
+        taskPlan,
+        selectedTool,
+      };
     }
   }
 
@@ -1037,6 +1184,64 @@ function buildRecoveredTaskPlan(toolCode: string): TaskPlan {
       },
     ],
     evidenceRequired: false,
+  };
+}
+
+function buildRecoveredConfirmationPlan(toolCode: string): TaskPlan {
+  return {
+    planId: `plan-${randomUUID().slice(0, 8)}`,
+    kind: 'tool_confirmation',
+    title: '恢复写回确认执行计划',
+    status: 'running',
+    steps: [
+      {
+        key: 'restore-confirmation',
+        title: '恢复待确认写回',
+        actionType: 'meta',
+        toolRefs: ['meta.confirm_writeback'],
+        required: true,
+        skippable: false,
+        confirmationRequired: false,
+        status: 'succeeded',
+      },
+      {
+        key: 'confirm-writeback',
+        title: '继续执行确认写回',
+        actionType: 'confirm',
+        toolRefs: [toolCode],
+        required: true,
+        skippable: false,
+        confirmationRequired: true,
+        status: 'pending',
+      },
+    ],
+    evidenceRequired: false,
+  };
+}
+
+function buildRecoveredConfirmationIntent(pendingConfirmation: ConfirmationRequest): GenericIntentFrame {
+  return {
+    actionType: 'write',
+    goal: pendingConfirmation.summary || pendingConfirmation.title || '恢复记录写回确认',
+    target: { kind: 'record' },
+    inputMaterials: [],
+    constraints: [],
+    missingSlots: [],
+    confidence: 0.8,
+    source: 'fallback',
+    fallbackReason: '从持久化写回确认恢复执行。',
+    legacyIntentFrame: {
+      actionType: 'write',
+      goal: pendingConfirmation.summary || pendingConfirmation.title || '恢复记录写回确认',
+      targetType: 'unknown',
+      targets: [],
+      inputMaterials: [],
+      constraints: [],
+      missingSlots: [],
+      confidence: 0.8,
+      source: 'fallback',
+      fallbackReason: '从持久化写回确认恢复执行。',
+    },
   };
 }
 

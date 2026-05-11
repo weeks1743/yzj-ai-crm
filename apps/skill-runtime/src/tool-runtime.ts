@@ -413,7 +413,7 @@ function summarizeResult(value: unknown): unknown {
 function createReadSkillFileTool(): RuntimeTool {
   return {
     name: 'read_skill_file',
-    description: 'Read a text file bundled with the current skill.',
+    description: 'Read a text file bundled with the current skill. Use relativePath, usually template.md or an example path.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -427,7 +427,7 @@ function createReadSkillFileTool(): RuntimeTool {
     },
     async execute(rawArgs, context) {
       const args = expectObject(rawArgs);
-      const relativePath = expectString(args, 'relativePath');
+      const relativePath = resolveSkillFileRelativePath(args, context);
       const filePath = resolveSkillPath(relativePath, context);
       const { content, truncated } = readTextFile(filePath);
       return {
@@ -437,6 +437,20 @@ function createReadSkillFileTool(): RuntimeTool {
       };
     },
   };
+}
+
+function resolveSkillFileRelativePath(
+  args: Record<string, unknown>,
+  context: ToolExecutionContext,
+): string {
+  const explicit = optionalString(args, 'relativePath');
+  if (explicit) {
+    return explicit;
+  }
+  if (context.skill.profile.hasTemplate) {
+    return 'template.md';
+  }
+  throw new BadRequestError('tool 参数 relativePath 必须是非空字符串');
 }
 
 function createWriteTextArtifactTool(): RuntimeTool {

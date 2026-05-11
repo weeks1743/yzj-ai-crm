@@ -1008,9 +1008,10 @@ const useStyles = createStyles(({ token, css }) => ({
   `,
   recordingTaskStack: css`
     width: min(100%, 840px);
-    margin-top: 12px;
+    margin: 12px auto 0;
     display: grid;
     gap: 12px;
+    flex: none;
   `,
   recordingTaskCard: css`
     border-radius: 8px;
@@ -1607,6 +1608,13 @@ function getRecordingSkillJobStatusLabel(status?: ExternalSkillJobStatus) {
     return '失败';
   }
   return '未开始';
+}
+
+function getRecordingSkillArtifactDisplayLabel(
+  job: Pick<RecordingSkillJobState, 'label'>,
+  artifactIndex = 0,
+) {
+  return artifactIndex === 0 ? `${job.label}结果` : `${job.label}结果 ${artifactIndex + 1}`;
 }
 
 function isRecordingSkillJobRunning(status?: ExternalSkillJobStatus) {
@@ -4407,14 +4415,14 @@ function RecordingTaskCard({
                 </span>
                 {job.status === 'succeeded' && job.artifacts?.length ? (
                   <Space size={4}>
-                    {job.artifacts.slice(0, 2).map((artifact) => (
+                    {job.artifacts.slice(0, 2).map((artifact, index) => (
                       <Button
                         key={artifact.artifactId}
                         size="small"
                         type="link"
                         onClick={() => onOpenSkillArtifact(job, artifact)}
                       >
-                        {artifact.fileName}
+                        {getRecordingSkillArtifactDisplayLabel(job, index)}
                       </Button>
                     ))}
                   </Space>
@@ -6154,7 +6162,7 @@ function AssistantConversationRuntime({
     setArtifactViewer({
       open: true,
       loading: true,
-      title: artifact.fileName || job.label,
+      title: getRecordingSkillArtifactDisplayLabel(job),
       markdown: '',
       error: null,
     });
@@ -6168,7 +6176,7 @@ function AssistantConversationRuntime({
       setArtifactViewer({
         open: true,
         loading: false,
-        title: artifact.fileName || job.label,
+        title: getRecordingSkillArtifactDisplayLabel(job),
         markdown,
         error: null,
       });
@@ -6176,7 +6184,7 @@ function AssistantConversationRuntime({
       setArtifactViewer({
         open: true,
         loading: false,
-        title: artifact.fileName || job.label,
+        title: getRecordingSkillArtifactDisplayLabel(job),
         markdown: '',
         error: error instanceof Error ? error.message : '无法读取外部技能产物',
       });
@@ -6242,14 +6250,14 @@ function AssistantConversationRuntime({
       {
         type: 'record.preview_create',
         objectKey: 'followup',
-	        source: {
-	          kind: 'recording_material',
-	          recordingTaskId: task.taskId,
-	          artifactId: task.material?.artifactId,
-	          fileName: task.file.fileName,
-	          sourceFileMd5: task.file.md5,
-	          anchors: task.anchors,
-	        },
+        source: {
+          kind: 'recording_material',
+          recordingTaskId: task.taskId,
+          artifactId: task.material?.artifactId,
+          fileName: task.file.fileName,
+          sourceFileMd5: task.file.md5,
+          anchors: task.anchors,
+        },
       },
     );
   }, [handleOpenRecord, requestFromRecordingTask]);
@@ -6784,9 +6792,9 @@ function AssistantConversationRuntime({
               status: job.status,
               errorMessage: job.errorMessage,
               jobId: job.jobId,
-              artifacts: job.artifacts?.map((artifact) => ({
+              artifacts: job.artifacts?.map((artifact, index) => ({
                 artifactId: artifact.artifactId,
-                fileName: artifact.fileName,
+                fileName: getRecordingSkillArtifactDisplayLabel(job, index),
               })),
             })),
         }))}

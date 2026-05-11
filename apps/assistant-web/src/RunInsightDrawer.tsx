@@ -775,7 +775,7 @@ export function RunInsightDrawer({
             {job.errorMessage ? <Text type="danger">{job.errorMessage}</Text> : null}
             {job.artifacts?.length ? (
               <Text type="secondary">
-                产物：{job.artifacts.map((artifact) => artifact.fileName).join('、')}
+                产物：{job.artifacts.map((artifact, index) => artifact.fileName || `分析结果 ${index + 1}`).join('、')}
               </Text>
             ) : null}
           </Space>

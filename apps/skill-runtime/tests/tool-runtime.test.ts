@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
-import { createTempDir, QueueChatClient, writeTextFixture } from './test-helpers.js';
+import { createTempDir, QueueChatClient, writeSkillFixture, writeTextFixture } from './test-helpers.js';
 import { createPptxGenJsInstance } from '../src/pptxgenjs-runtime.js';
 import { createGenericTextTools, createPptxTools, runToolLoop, type ToolExecutionContext } from '../src/tool-runtime.js';
 
@@ -198,6 +198,111 @@ test('read_source_file reads staged inputs directory as combined text attachment
   const toolMessage = client.calls[1]?.messages.find((message) => message.role === 'tool');
   assert.ok(toolMessage?.content.includes('mindMapSummary.json'));
   assert.ok(toolMessage?.content.includes('客户关注预算审批'));
+});
+
+test('read_skill_file falls back to template.md when relativePath is omitted', async () => {
+  const tempDir = createTempDir('tool-read-skill-template-fallback-');
+  const skillDir = writeSkillFixture(
+    tempDir,
+    'customer-value-positioning',
+    [
+      '---',
+      'name: customer-value-positioning',
+      'description: demo',
+      '---',
+      '',
+      'demo prompt',
+    ].join('\n'),
+    {
+      'template.md': '# 客户价值定位模板\n\n## 当前客户关注点',
+    },
+  );
+  const context: ToolExecutionContext = {
+    job: {
+      jobId: 'job-read-template-fallback',
+      skillName: 'customer-value-positioning',
+      model: 'deepseek-v4-pro',
+      requestText: '基于录音生成客户价值定位',
+      attachments: [],
+      workingDirectory: null,
+      status: 'running',
+      finalText: null,
+      error: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    },
+    skill: {
+      skillName: 'customer-value-positioning',
+      skillFilePath: join(skillDir, 'SKILL.md'),
+      rawContent: '',
+      promptContent: 'customer value positioning prompt',
+      frontmatter: {},
+      profile: {
+        skillName: 'customer-value-positioning',
+        displayName: 'customer value positioning',
+        description: 'customer value positioning',
+        arguments: [],
+        allowedTools: [],
+        baseDir: skillDir,
+        supportFiles: ['template.md'],
+        examples: [],
+        hasTemplate: true,
+      },
+    },
+    paths: {
+      jobHomeDir: tempDir,
+      workspaceDir: tempDir,
+      inputsDir: tempDir,
+      outputsDir: tempDir,
+      skillDir,
+      artifactDir: tempDir,
+    },
+    webSearchClient: {
+      async search() {
+        throw new Error('not used');
+      },
+    },
+    emitEvent() {},
+    publishTextArtifact() {
+      throw new Error('not used');
+    },
+    publishFileArtifact() {
+      throw new Error('not used');
+    },
+  };
+
+  const client = new QueueChatClient([
+    {
+      content: null,
+      toolCalls: [
+        {
+          id: 'call-read-template',
+          name: 'read_skill_file',
+          arguments: JSON.stringify({}),
+        },
+      ],
+    },
+    {
+      content: 'done',
+      toolCalls: [],
+    },
+  ]);
+
+  const result = await runToolLoop({
+    client,
+    model: 'deepseek-v4-pro',
+    systemPrompt: 'system',
+    userPrompt: 'user',
+    context,
+    tools: createGenericTextTools(),
+  });
+
+  assert.equal(result.finalText, 'done');
+  const toolMessage = client.calls[1]?.messages.find((message) => message.role === 'tool');
+  assert.ok(toolMessage?.content.includes('template.md'));
+  assert.ok(toolMessage?.content.includes('客户价值定位模板'));
 });
 
 test('read_source_file reads supported text files from inputs subdirectory', async () => {

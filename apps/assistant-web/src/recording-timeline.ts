@@ -52,14 +52,6 @@ export function buildRecordingTimeline<
     unanchoredTasks.push(task);
   }
 
-  for (const task of unanchoredTasks) {
-    entries.push({
-      kind: 'recording-task',
-      key: `recording:${task.taskId}`,
-      task,
-    });
-  }
-
   let messageGroup: Message[] = [];
   const flushMessages = () => {
     if (!messageGroup.length) {
@@ -89,6 +81,14 @@ export function buildRecordingTimeline<
     }
   }
   flushMessages();
+
+  for (const task of unanchoredTasks) {
+    entries.push({
+      kind: 'recording-task',
+      key: `recording:${task.taskId}`,
+      task,
+    });
+  }
 
   return entries;
 }

@@ -2721,7 +2721,7 @@ test('ShadowMetadataService does not derive opportunity or followup titles from 
     const followupWidgetValue = (followupPreview.requestBody as {
       data: Array<{ widgetValue: Record<string, unknown> }>;
     }).data[0]?.widgetValue ?? {};
-    assert.equal(followupWidgetValue._S_TITLE, '完成现场回访并记录问题');
+    assert.equal(followupWidgetValue._S_TITLE, '华东制造样板客户的跟进记录');
     assert.doesNotMatch(String(followupWidgetValue._S_TITLE ?? ''), new RegExp(operatorOpenId));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -3092,6 +3092,12 @@ test('ShadowMetadataService normalizes opportunity and followup complex fields a
       },
     });
     assert.equal(followupPreview.readyToSend, true);
+    assert.equal(
+      (followupPreview.requestBody as {
+        data: Array<{ widgetValue: Record<string, unknown> }>;
+      }).data[0]?.widgetValue._S_TITLE,
+      '华东制造样板客户的华东制造样板商机跟进记录',
+    );
     assert.deepEqual(
       (followupPreview.requestBody as {
         data: Array<{ widgetValue: Record<string, unknown> }>;

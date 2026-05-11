@@ -37,12 +37,21 @@ export class AgentService {
     const contextFrame = await this.options.repository.findContextFrame(request.conversationKey);
     const contextCandidates = await this.options.repository.findContextCandidates(request.conversationKey);
     const focusedName = contextFrame?.subject?.name ?? await this.options.repository.findFocusedCompany(request.conversationKey);
-    const resumeFallback = request.resume?.action === 'provide_input' || request.resume?.action === 'cancel_interaction'
+    const pendingInteractionFallback = request.resume?.action === 'provide_input' || request.resume?.action === 'cancel_interaction'
       ? await this.options.repository.findPendingInteractionState({
           runId: request.resume.runId,
           conversationKey: request.conversationKey,
           interactionId: request.resume.interactionId,
         })
+      : null;
+    const pendingConfirmationFallback = request.resume?.action === 'confirm_writeback' && request.resume.confirmationId
+      ? await this.options.repository.findConfirmation(request.resume.runId, request.resume.confirmationId)
+      : null;
+    const resumeFallback = pendingInteractionFallback || pendingConfirmationFallback
+      ? {
+          ...(pendingInteractionFallback ?? {}),
+          ...(pendingConfirmationFallback ? { pendingConfirmation: pendingConfirmationFallback } : {}),
+        }
       : null;
 
     const output = await this.runRuntime({

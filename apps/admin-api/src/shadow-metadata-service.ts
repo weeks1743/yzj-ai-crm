@@ -584,6 +584,68 @@ function deriveReadableTitleFallback(
   return '';
 }
 
+function classifyFollowupRelationField(field: ShadowStandardizedField): 'customer' | 'opportunity' | null {
+  if (!field.relationBinding) {
+    return null;
+  }
+
+  const text = [
+    field.label,
+    field.semanticSlot,
+    field.writeParameterKey,
+    field.searchParameterKey,
+    field.fieldCode,
+    field.relationBinding.modelName,
+  ].filter((item): item is string => Boolean(item?.trim())).join(' ');
+
+  if (/商机|机会|opportunity/i.test(text)) {
+    return 'opportunity';
+  }
+  if (/客户|公司|customer/i.test(text)) {
+    return 'customer';
+  }
+  return null;
+}
+
+function readFollowupRelationDisplay(input: {
+  snapshot: ShadowObjectSnapshotRecord;
+  widgetValue: Record<string, unknown>;
+  relation: 'customer' | 'opportunity';
+}): string {
+  for (const field of input.snapshot.normalizedFields) {
+    if (classifyFollowupRelationField(field) !== input.relation) {
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(input.widgetValue, field.fieldCode)) {
+      continue;
+    }
+    const display = readDisplayTextFromUnknown(input.widgetValue[field.fieldCode]);
+    if (display) {
+      return display;
+    }
+  }
+  return '';
+}
+
+function deriveFollowupRelationTitle(
+  snapshot: ShadowObjectSnapshotRecord,
+  widgetValue: Record<string, unknown>,
+): string {
+  if (snapshot.objectKey !== 'followup') {
+    return '';
+  }
+
+  const customer = readFollowupRelationDisplay({ snapshot, widgetValue, relation: 'customer' });
+  if (!customer) {
+    return '';
+  }
+
+  const opportunity = readFollowupRelationDisplay({ snapshot, widgetValue, relation: 'opportunity' });
+  return opportunity
+    ? compactDerivedTitle(`${customer}的${opportunity}跟进记录`)
+    : compactDerivedTitle(`${customer}的跟进记录`);
+}
+
 function resolveWritePolicy(widget: YzjApprovalWidget): ShadowFieldWritePolicy {
   if (widget.codeId === '_S_TITLE' && hasAutoDerivedTitle(widget)) {
     return 'derived';
@@ -3586,6 +3648,10 @@ export class ShadowMetadataService {
     }
 
     const templateTitle = this.getSnapshotTemplateTitle(params.snapshot) ?? mapShadowObjectLabel(params.snapshot.objectKey);
+    const followupRelationTitle = deriveFollowupRelationTitle(params.snapshot, params.widgetValue);
+    if (followupRelationTitle) {
+      return followupRelationTitle;
+    }
 
     if (!titleEntity || !Array.isArray(titleEntity.list)) {
       return hasAutoDerivedTitle(widget) ? templateTitle : undefined;

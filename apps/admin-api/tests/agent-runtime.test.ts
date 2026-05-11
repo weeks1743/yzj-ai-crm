@@ -306,12 +306,12 @@ function createAgentTestService(input: {
   config?: AppConfig;
   repository: AgentRunRepository;
   intentFrame: IntentFrame | ((request: { query: string }) => IntentFrame);
-	  shadowMetadataService?: unknown;
-	  orgSyncRepository?: unknown;
-		  externalSkillService?: unknown;
-		  artifactService?: unknown;
-		  recordingTaskService?: unknown;
-	}) {
+  shadowMetadataService?: unknown;
+  orgSyncRepository?: unknown;
+  externalSkillService?: unknown;
+  artifactService?: unknown;
+  recordingTaskService?: unknown;
+}) {
   const config = input.config ?? createTestConfig();
   const resolveTestIntentFrame = (request: { query: string }) =>
     typeof input.intentFrame === 'function' ? input.intentFrame(request) : input.intentFrame;
@@ -346,7 +346,7 @@ function createAgentTestService(input: {
       }),
     }) as any,
     orgSyncRepository: input.orgSyncRepository as any,
-	    externalSkillService: (input.externalSkillService ?? {
+    externalSkillService: (input.externalSkillService ?? {
       createSkillJob: async () => {
         throw new Error('not used');
       },
@@ -369,9 +369,9 @@ function createAgentTestService(input: {
       getArtifact: async () => {
         throw new Error('not used');
       },
-		    }) as any,
-		    recordingTaskService: input.recordingTaskService as any,
-		  });
+    }) as any,
+    recordingTaskService: input.recordingTaskService as any,
+  });
 
   return {
     service: new AgentService({
@@ -636,6 +636,18 @@ function createFollowupWriteFields(): ShadowStandardizedField[] {
         formCodeId: 'customer-form',
         modelName: '客户',
         displayCol: '_S_NAME',
+      },
+    }),
+    createSearchField({
+      fieldCode: 'Bd_opportunity',
+      label: '商机',
+      widgetType: 'basicDataWidget',
+      writeParameterKey: 'linked_opportunity_form_inst_id',
+      relationBinding: {
+        kind: 'basic_data',
+        formCodeId: 'opportunity-form',
+        modelName: '商机',
+        displayCol: '_S_TITLE',
       },
     }),
     createSearchField({
@@ -1329,6 +1341,23 @@ test('Agent runtime keeps recording source while requiring followup archive anch
       executeGet: async () => ({ record: null }),
       previewUpsert: async (objectKey: ShadowObjectKey, input: any) => {
         previewInputs.push(input);
+        const widgetValue: Record<string, unknown> = { ...(input.params ?? {}) };
+        if (input.params?.linked_customer_form_inst_id) {
+          widgetValue.Bd_customer = [{
+            id: input.params.linked_customer_form_inst_id,
+            showName: '绍兴贝斯美化工股份有限公司',
+            _S_TITLE: '绍兴贝斯美化工股份有限公司',
+            _S_NAME: '绍兴贝斯美化工股份有限公司',
+          }];
+        }
+        if (input.params?.linked_opportunity_form_inst_id) {
+          widgetValue.Bd_opportunity = [{
+            id: input.params.linked_opportunity_form_inst_id,
+            showName: '贝斯美数字化升级项目',
+            _S_TITLE: '贝斯美数字化升级项目',
+            _S_NAME: '贝斯美数字化升级项目',
+          }];
+        }
         return {
           objectKey,
           operation: 'upsert',
@@ -1341,7 +1370,7 @@ test('Agent runtime keeps recording source while requiring followup archive anch
           readyToSend: true,
           requestBody: {
             formCodeId: 'followup-form-001',
-            data: [{ widgetValue: input.params ?? {} }],
+            data: [{ widgetValue }],
           },
         };
       },
@@ -1395,6 +1424,9 @@ test('Agent runtime keeps recording source while requiring followup archive anch
   assert.equal(continued.executionState.status, 'waiting_confirmation');
   assert.equal(previewInputs.at(-1)?.params.linked_opportunity_form_inst_id, 'opportunity-bsm-001');
   assert.equal((continued.message.extraInfo.agentTrace.pendingConfirmation?.requestInput as any)?.agentControl?.source?.recordingTaskId, 'recording-task-842f8e39');
+  assert.match(continued.message.content, /客户编号：绍兴贝斯美化工股份有限公司/);
+  assert.match(continued.message.content, /商机：贝斯美数字化升级项目/);
+  assert.doesNotMatch(continued.message.content, /确认 ID|customer-bsm-001|opportunity-bsm-001/);
 });
 
 test('Agent runtime does not create duplicate followup for archived recording task', async () => {
@@ -1529,7 +1561,23 @@ test('Agent runtime archives recording material after confirmed followup create'
         readyToSend: true,
         requestBody: {
           formCodeId: 'followup-form-001',
-          data: [{ widgetValue: input.params ?? {} }],
+          data: [{
+            widgetValue: {
+              ...(input.params ?? {}),
+              Bd_customer: [{
+                id: input.params?.linked_customer_form_inst_id,
+                showName: '绍兴贝斯美化工股份有限公司',
+                _S_TITLE: '绍兴贝斯美化工股份有限公司',
+                _S_NAME: '绍兴贝斯美化工股份有限公司',
+              }],
+              Bd_opportunity: [{
+                id: input.params?.linked_opportunity_form_inst_id,
+                showName: '贝斯美数字化升级项目',
+                _S_TITLE: '贝斯美数字化升级项目',
+                _S_NAME: '贝斯美数字化升级项目',
+              }],
+            },
+          }],
         },
       }),
       executeUpsert: async (_objectKey: string, input: any) => {
@@ -1539,7 +1587,26 @@ test('Agent runtime archives recording material after confirmed followup create'
           operation: 'upsert',
           mode: 'live',
           writeMode: 'create',
-          requestBody: { formCodeId: 'followup-form-001', data: [{ widgetValue: input.params ?? {} }] },
+          requestBody: {
+            formCodeId: 'followup-form-001',
+            data: [{
+              widgetValue: {
+                ...(input.params ?? {}),
+                Bd_customer: [{
+                  id: input.params?.linked_customer_form_inst_id,
+                  showName: '绍兴贝斯美化工股份有限公司',
+                  _S_TITLE: '绍兴贝斯美化工股份有限公司',
+                  _S_NAME: '绍兴贝斯美化工股份有限公司',
+                }],
+                Bd_opportunity: [{
+                  id: input.params?.linked_opportunity_form_inst_id,
+                  showName: '贝斯美数字化升级项目',
+                  _S_TITLE: '贝斯美数字化升级项目',
+                  _S_NAME: '贝斯美数字化升级项目',
+                }],
+              },
+            }],
+          },
           formInstIds: ['followup-bsm-001'],
         };
       },
@@ -1598,7 +1665,10 @@ test('Agent runtime archives recording material after confirmed followup create'
     approved.message.extraInfo.agentTrace.toolCalls.some((item) => item.toolCode === 'artifact.recording_material.archive'),
     true,
   );
+  assert.match(approved.message.content, /客户编号：绍兴贝斯美化工股份有限公司/);
+  assert.match(approved.message.content, /商机：贝斯美数字化升级项目/);
   assert.match(approved.message.content, /录音资料归档/);
+  assert.doesNotMatch(approved.message.content, /确认 ID|工具：|customer-bsm-001|opportunity-bsm-001/);
 });
 
 test('Agent runtime keeps direct audio requests on recording material tool', async () => {
@@ -3626,6 +3696,7 @@ test('Agent runtime previews record writeback before approve or reject decision'
   assert.equal(pending?.userPreview?.summaryRows[0]?.label, '客户名称');
   assert.equal(pending?.userPreview?.summaryRows[0]?.value, '测试客户');
   assert.match(preview.message.content, /客户名称：测试客户/);
+  assert.doesNotMatch(preview.message.content, /确认 ID|record\.customer\.preview_create/);
   assert.equal(executeUpsertCount, 0);
 
   const approved = await service.chat({
@@ -3645,6 +3716,24 @@ test('Agent runtime previews record writeback before approve or reject decision'
   assert.equal(approved.message.extraInfo.agentTrace.selectedTool?.toolCode, 'record.customer.commit_create');
   assert.match(approved.message.content, /已写入字段/);
   assert.match(approved.message.content, /建议继续补充/);
+  assert.doesNotMatch(approved.message.content, /确认 ID|工具：|record\.customer\.commit_create/);
+  assert.equal(executeUpsertCount, 1);
+
+  const repeated = await service.chat({
+    conversationKey: 'conv-record-confirm-approve',
+    sceneKey: 'chat',
+    query: '确认写回',
+    tenantContext: { operatorOpenId: 'operator-001' },
+    resume: {
+      runId: preview.executionState.runId,
+      action: 'confirm_writeback',
+      decision: 'approve',
+      confirmationId: pending?.confirmationId,
+    },
+  });
+
+  assert.equal(repeated.executionState.status, 'completed');
+  assert.match(repeated.message.content, /此前已确认并写入记录系统/);
   assert.equal(executeUpsertCount, 1);
 });
 

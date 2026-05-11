@@ -911,6 +911,20 @@ export class AgentRunRepository {
     return row ? mapConfirmationRow(row) : null;
   }
 
+  async findConfirmation(runId: string, confirmationId: string): Promise<ConfirmationRequest | null> {
+    const row = await this.database.queryMaybeOne<ConfirmationRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('agent_confirmations')}
+        WHERE run_id = $1 AND confirmation_id = $2
+        LIMIT 1
+      `,
+      [runId, confirmationId],
+    );
+
+    return row ? mapConfirmationRow(row) : null;
+  }
+
   async resolveConfirmation(input: {
     runId: string;
     confirmationId: string;

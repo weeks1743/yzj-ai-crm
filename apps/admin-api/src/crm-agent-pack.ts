@@ -5631,6 +5631,60 @@ function readWidgetValue(requestBody: unknown): Record<string, unknown> {
     : {};
 }
 
+function stringifyResolvedFieldValueForDisplay(
+  field: ShadowStandardizedField,
+  value: unknown,
+): string {
+  if (!hasMeaningfulValue(value)) {
+    return '';
+  }
+
+  if (field.widgetType === 'basicDataWidget') {
+    const display = stringifyRecordDisplayCandidate(value);
+    return display || getRecordFieldFallbackLabel(field.label, inferRelationTargetObjectKey(field));
+  }
+
+  if (field.widgetType === 'personSelectWidget') {
+    const display = stringifyPersonFieldValueForDisplay(value).trim();
+    return display && !isLikelyInternalRecordIdentifier(display) && !isOpaquePersonSelectionDisplay(display)
+      ? display
+      : getRecordFieldFallbackLabel(field.label);
+  }
+
+  const display = stringifyFieldValueForDisplay(field, value).trim();
+  return display && !isLikelyInternalRecordIdentifier(display)
+    ? display
+    : getRecordFieldFallbackLabel(field.label, inferRelationTargetObjectKey(field));
+}
+
+function stringifySummaryParamValueForDisplay(input: {
+  paramKey: string;
+  value: unknown;
+  widgetValue: Record<string, unknown>;
+  fields?: ShadowStandardizedField[];
+}): string {
+  const field = findFieldByParamKey(input.paramKey, input.fields);
+  if (field?.widgetType === 'personSelectWidget') {
+    const paramDisplay = stringifyFieldValueForDisplay(field, input.value).trim();
+    if (paramDisplay) {
+      return paramDisplay;
+    }
+  }
+
+  if (field && Object.prototype.hasOwnProperty.call(input.widgetValue, field.fieldCode)) {
+    const previewDisplay = stringifyResolvedFieldValueForDisplay(field, input.widgetValue[field.fieldCode]);
+    if (previewDisplay) {
+      return previewDisplay;
+    }
+  }
+
+  const rawDisplay = stringifyRecordParamValueForDisplay(input.paramKey, input.value, input.fields).trim();
+  if (rawDisplay && !isLikelyInternalRecordIdentifier(rawDisplay)) {
+    return rawDisplay;
+  }
+  return field ? getRecordFieldFallbackLabel(field.label, inferRelationTargetObjectKey(field)) : rawDisplay;
+}
+
 function buildSummaryRows(input: {
   requestInput: ShadowPreviewUpsertInput;
   preview: ShadowPreviewResponse;
@@ -5638,17 +5692,22 @@ function buildSummaryRows(input: {
   fields?: ShadowStandardizedField[];
 }): RecordWritePreviewRow[] {
   const params = readRequestParams(input.requestInput);
+  const widgetValue = readWidgetValue(input.preview.requestBody);
   const paramRows = orderParamKeys(Object.keys(params), input.capability)
     .filter((paramKey) => hasMeaningfulValue(params[paramKey]))
     .map((paramKey) => ({
       label: getFieldLabel(input.capability, paramKey),
-      value: stringifyRecordParamValueForDisplay(paramKey, params[paramKey], input.fields),
+      value: stringifySummaryParamValueForDisplay({
+        paramKey,
+        value: params[paramKey],
+        widgetValue,
+        fields: input.fields,
+      }),
       paramKey,
       source: 'input' as const,
     }));
 
   const existingParamKeys = new Set(paramRows.map((row) => row.paramKey));
-  const widgetValue = readWidgetValue(input.preview.requestBody);
   const derivedRows = (input.capability.derivedFieldRefs ?? [])
     .filter((paramKey) => !existingParamKeys.has(paramKey) && hasMeaningfulValue(widgetValue[paramKey]))
     .map((paramKey) => ({
@@ -6025,13 +6084,19 @@ function stringifyFieldValueForDisplay(field: ShadowStandardizedField, value: un
   }
 
   if (field.widgetType === 'personSelectWidget') {
-    return stringifyPersonFieldValueForDisplay(value);
+    const display = stringifyPersonFieldValueForDisplay(value);
+    return display && !isOpaquePersonSelectionDisplay(display)
+      ? display
+      : getRecordFieldFallbackLabel(field.label);
   }
 
   return stringifyPreviewValue(value);
 }
 
 function stringifyPersonFieldValueForDisplay(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map(stringifyPersonFieldValueForDisplay).filter(Boolean).join('、');
+  }
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const person = value as Record<string, unknown>;
     const displayParts = [
@@ -6044,6 +6109,11 @@ function stringifyPersonFieldValueForDisplay(value: unknown): string {
     }
   }
   return stringifyPreviewValue(value);
+}
+
+function isOpaquePersonSelectionDisplay(value: string): boolean {
+  const normalized = value.replace(/\s+/g, '').trim();
+  return Boolean(normalized) && /^(?:open|uid|user|person|employee)[-_][A-Za-z0-9_-]+$/i.test(normalized);
 }
 
 function findDisplayOption(
@@ -6223,18 +6293,13 @@ function buildPendingInteraction(input: {
 }
 
 function buildPreviewConfirmationContent(input: {
-  confirmationId: string;
-  toolCode: string;
   userPreview: RecordWritePreviewView;
-  debugPayload: unknown;
-  capability: RecordToolCapability;
 }): string {
   const lines = [
     '## 请确认是否写入这条记录',
     ...input.userPreview.summaryRows.map((row) => `- ${row.label}：${row.value ?? ''}`),
     '',
-    `- 确认 ID：\`${input.confirmationId}\``,
-    '- 确认后才会执行真实轻云写回。',
+    '- 确认后将执行记录系统写回。',
   ];
 
   const recommended = input.userPreview.recommendedRows ?? [];
@@ -7834,18 +7899,19 @@ async function executeRecordPreviewTool(
     };
   }
 
-	  const confirmation: ConfirmationRequest = {
-	    confirmationId: randomUUID(),
-	    runId: context.runId,
-	    toolCode: input.selectedTool.toolCode,
-    title: `${objectKey} ${mode} 写回确认`,
-    summary: `确认后将通过轻云记录系统执行 ${objectKey} ${mode} 写回。`,
-	    preview,
-	    userPreview,
-	    debugPayload: preview,
-	    requestInput: buildConfirmationRequestInput(requestInput, activeAgentControl),
-	    status: 'pending',
-	    createdAt: new Date().toISOString(),
+  const objectLabel = mapRecordObjectLabel(objectKey);
+  const confirmation: ConfirmationRequest = {
+    confirmationId: randomUUID(),
+    runId: context.runId,
+    toolCode: input.selectedTool.toolCode,
+    title: `${objectLabel}写回确认`,
+    summary: `确认后将通过记录系统执行${objectLabel}${mode === 'create' ? '新增' : '更新'}。`,
+    preview,
+    userPreview,
+    debugPayload: preview,
+    requestInput: buildConfirmationRequestInput(requestInput, activeAgentControl),
+    status: 'pending',
+    createdAt: new Date().toISOString(),
     decidedAt: null,
   };
   await options.repository.saveConfirmation(confirmation);
@@ -7855,11 +7921,7 @@ async function executeRecordPreviewTool(
     status: 'waiting_confirmation',
     currentStepKey: 'confirm-writeback',
     content: buildPreviewConfirmationContent({
-      confirmationId: confirmation.confirmationId,
-      toolCode: input.selectedTool.toolCode,
       userPreview,
-      debugPayload: preview,
-      capability,
     }),
     headline: '等待写回确认',
     references: ['meta.confirm_writeback', input.selectedTool.toolCode],
@@ -7887,13 +7949,45 @@ async function executeRecordCommitTool(
   const toolCall = createToolCall(context.runId, input.selectedTool.toolCode, confirmationId);
   const pending = await options.repository.findPendingConfirmation(context.runId, confirmationId);
   if (!pending) {
-    finishToolCall(toolCall, 'failed', '未找到待确认写回请求');
+    const existing = confirmationId
+      ? await options.repository.findConfirmation(context.runId, confirmationId)
+      : null;
+    if (existing?.status === 'approved') {
+      finishToolCall(toolCall, 'succeeded', 'confirmation already approved');
+      const objectLabel = mapRecordObjectLabel(objectKey);
+      return {
+        status: 'completed',
+        content: [
+          '## 写回已完成',
+          `- 这条${objectLabel}此前已确认并写入记录系统，无需重复提交。`,
+        ].join('\n'),
+        headline: `${objectLabel}写回完成`,
+        references: ['meta.confirm_writeback'],
+        toolCalls: [toolCall],
+        pendingConfirmation: existing,
+      };
+    }
+    if (existing?.status === 'rejected') {
+      finishToolCall(toolCall, 'skipped', 'confirmation already rejected');
+      return {
+        status: 'cancelled',
+        content: '写回确认已取消，本次不会执行记录系统写入。',
+        headline: '写回已取消',
+        references: ['meta.confirm_writeback'],
+        toolCalls: [toolCall],
+        pendingConfirmation: existing,
+      };
+    }
+    finishToolCall(toolCall, 'failed', existing ? '写回确认已失效' : '未找到待确认写回请求');
     return {
       status: 'failed',
-      content: '未找到待确认写回请求，无法执行真实写回。',
-      headline: '写回确认不存在',
+      content: existing
+        ? '写回确认已失效，请重新发起预览后再确认。'
+        : '未找到待确认写回请求，无法执行真实写回。',
+      headline: existing ? '写回确认已失效' : '写回确认不存在',
       references: ['meta.confirm_writeback'],
       toolCalls: [toolCall],
+      pendingConfirmation: existing ?? undefined,
     };
   }
 
@@ -7906,7 +8000,7 @@ async function executeRecordCommitTool(
     finishToolCall(toolCall, 'skipped', '用户拒绝写回');
     return {
       status: 'cancelled',
-      content: `已取消写回确认：\`${confirmationId}\`。`,
+      content: '已取消写回确认，本次不会执行记录系统写入。',
       headline: '写回已取消',
       references: ['meta.confirm_writeback'],
       toolCalls: [toolCall],
@@ -7914,9 +8008,9 @@ async function executeRecordCommitTool(
     };
   }
 
-	  const pendingRequestInput = pending.requestInput as unknown as ShadowPreviewUpsertInput;
-	  const requestInput = stripRecordAgentControl(pendingRequestInput as unknown as Record<string, unknown>) as unknown as ShadowPreviewUpsertInput;
-	  const result = await options.shadowMetadataService.executeUpsert(objectKey, requestInput);
+  const pendingRequestInput = pending.requestInput as unknown as ShadowPreviewUpsertInput;
+  const requestInput = stripRecordAgentControl(pendingRequestInput as unknown as Record<string, unknown>) as unknown as ShadowPreviewUpsertInput;
+  const result = await options.shadowMetadataService.executeUpsert(objectKey, requestInput);
   const commitPreview: ShadowPreviewResponse = {
     objectKey,
     operation: 'upsert',
@@ -7942,17 +8036,17 @@ async function executeRecordCommitTool(
     runId: context.runId,
     confirmationId,
     status: 'approved',
-	  }) ?? pending;
-	  finishToolCall(toolCall, 'succeeded', `formInstIds=${result.formInstIds.join(',')}`);
-	  const archiveResult = await archiveRecordingMaterialAfterFollowupCommit({
-	    options,
-	    objectKey,
-	    mode,
-	    context,
-	    requestInput: pendingRequestInput,
-	    followupId: result.formInstIds[0],
-	  });
-	  const recommendedRows = userPreview.recommendedRows ?? [];
+  }) ?? pending;
+  finishToolCall(toolCall, 'succeeded', `formInstIds=${result.formInstIds.join(',')}`);
+  const archiveResult = await archiveRecordingMaterialAfterFollowupCommit({
+    options,
+    objectKey,
+    mode,
+    context,
+    requestInput: pendingRequestInput,
+    followupId: result.formInstIds[0],
+  });
+  const recommendedRows = userPreview.recommendedRows ?? [];
   const committedContextFrame = buildCommittedRecordContextFrame({
     objectKey,
     mode,
@@ -7963,18 +8057,17 @@ async function executeRecordCommitTool(
     contextFrame: context.contextFrame ?? null,
     resolvedContext: context.resolvedContext ?? null,
   });
+  const objectLabel = mapRecordObjectLabel(objectKey);
   return {
     status: 'completed',
     content: [
       '## 写回已完成',
-      `- 工具：\`${input.selectedTool.toolCode}\``,
-      `- 确认 ID：\`${confirmationId}\``,
-      `- 系统记录：已生成 ${result.formInstIds.length} 条记录`,
+      `- 记录系统：已写入 ${result.formInstIds.length} 条${objectLabel}`,
       '',
       '## 已写入字段',
       ...(userPreview.summaryRows.length
         ? userPreview.summaryRows.map((row) => `- ${row.label}：${row.value ?? ''}`)
-        : ['- 暂无可展示字段摘要，请查看调试 trace。']),
+        : ['- 暂无可展示字段摘要。']),
       ...(recommendedRows.length
         ? [
             '',
@@ -7982,20 +8075,20 @@ async function executeRecordCommitTool(
             `- ${recommendedRows.map((row) => row.label).join('、')}`,
             `- 可以继续说：补充这条记录的${recommendedRows.slice(0, 3).map((row) => row.label).join('、')}。`,
           ]
-	        : []),
-	      ...(archiveResult.contentLines.length ? ['', ...archiveResult.contentLines] : []),
-	    ].join('\n'),
-    headline: `${objectKey} ${mode} 写回完成`,
-    references: [input.selectedTool.toolCode, 'meta.confirm_writeback'],
-	    toolCalls: [toolCall, ...archiveResult.toolCalls],
+        : []),
+      ...(archiveResult.contentLines.length ? ['', ...archiveResult.contentLines] : []),
+    ].join('\n'),
+    headline: `${objectLabel}写回完成`,
+    references: ['meta.confirm_writeback'],
+    toolCalls: [toolCall, ...archiveResult.toolCalls],
     contextFrame: committedContextFrame,
     pendingConfirmation: {
       ...approved,
       userPreview,
       debugPayload: result,
     },
-	  };
-	}
+  };
+}
 
 async function archiveRecordingMaterialAfterFollowupCommit(input: {
   options: CrmAgentPackOptions;
