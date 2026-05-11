@@ -490,7 +490,8 @@ test('requestArchiveTask repairs downstream analysis for already archived record
     assert.equal(response.archive?.status, 'archived');
     assert.equal(skillRequests.length, 1);
     assert.equal(skillRequests[0].skillCode, 'ext.customer_value_positioning_pm');
-    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
+    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录绑定/);
+    assert.doesNotMatch(skillRequests[0].input.requestText, /customer-bsm-001|opportunity-bsm-001|followup-bsm-001/);
     assert.equal(analysisInputs.length, 1);
     assert.equal(analysisInputs[0].skillCode, 'ext.customer_value_positioning_pm');
     assert.deepEqual(
@@ -973,6 +974,7 @@ test('createSkillJob sends structured Tongyi analysis JSON before recording mark
     assert.match(receivedInput.requestText, /通义结构化分析 JSON/);
     assert.match(receivedInput.requestText, /mindMapSummary\.json/);
     assert.match(receivedInput.requestText, /不要读取 transcription\.json/);
+    assert.doesNotMatch(receivedInput.requestText, /客户：星海精工|商机：MES 试点/);
     assert.equal(receivedInput.attachments.some((item: string) => item.includes('transcription.json')), false);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -1484,7 +1486,9 @@ test('rerunCompletedSkillJobs waits for rerun and persists formal customer value
 
     assert.equal(count, 1);
     assert.deepEqual(skillRequests.map((item) => item.skillCode), ['ext.customer_value_positioning_pm']);
-    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
+    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录绑定/);
+    assert.match(skillRequests[0].input.requestText, /不要在 Markdown 标题或正文中输出内部记录 ID/);
+    assert.doesNotMatch(skillRequests[0].input.requestText, /customer-bsm-001|opportunity-bsm-001|followup-bsm-001/);
     assert.equal(analysisInputs.length, 1);
     assert.equal(analysisInputs[0].skillCode, 'ext.customer_value_positioning_pm');
     assert.equal(analysisInputs[0].sourceJobId, 'job-value-rerun');
@@ -1602,7 +1606,8 @@ test('ensureCoreAnalysisMaterials reruns visit understanding and needs analysis 
       'ext.visit_conversation_understanding',
       'ext.customer_needs_todo_analysis',
     ]);
-    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录锚点/);
+    assert.match(skillRequests[0].input.requestText, /正式客户、商机和跟进记录绑定/);
+    assert.doesNotMatch(skillRequests[0].input.requestText, /customer-bsm-001|opportunity-bsm-001|followup-bsm-001/);
     assert.deepEqual(
       analysisInputs[1].anchors.map((item: any) => `${item.type}:${item.id}:${item.bindingStatus ?? ''}`),
       [
@@ -1827,6 +1832,7 @@ test('getTask completes pending archive and reruns existing downstream analysis 
     assert.equal(recordingInputs.length, 1);
     assert.equal(skillRequests.length, 1);
     assert.match(skillRequests[0].input.requestText, /不得输出“未关联客户\/商机”“未关联商机”“录音未绑定”/);
+    assert.doesNotMatch(skillRequests[0].input.requestText, /customer-bsm-001|opportunity-bsm-001|followup-bsm-001/);
     assert.equal(analysisInputs.length, 1);
     assert.deepEqual(
       analysisInputs[0].anchors.map((item: any) => `${item.type}:${item.id}:${item.bindingStatus ?? ''}`),

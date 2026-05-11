@@ -1274,16 +1274,13 @@ function uniquePaths(paths: string[]): string[] {
 }
 
 function buildRecordingSkillRequestText(label: string, record: RecordingTaskRecord): string {
-  const anchors = [
-    record.anchors.customer ? `客户：${record.anchors.customer}` : '',
-    record.anchors.opportunity ? `商机：${record.anchors.opportunity}` : '',
-    record.anchors.followup ? `跟进记录：${record.anchors.followup}` : '',
-  ].filter(Boolean);
   const hasFormalContext = Boolean(record.anchors.customer && record.anchors.opportunity && record.anchors.followup);
   return [
     `请执行「${label}」。`,
     `输入材料是附件中的通义结构化录音分析文件和录音资料包，来源录音文件：${record.file.fileName}。`,
-    anchors.length ? `建议关联上下文：${anchors.join('；')}。` : '当前录音未绑定客户/商机，请仅基于资料包内容输出分析结论。',
+    hasFormalContext
+      ? '本次录音已完成正式客户、商机和跟进记录绑定；这些绑定只用于归档关系，不要在 Markdown 标题或正文中输出内部记录 ID。客户名、商机名等可展示信息请以附件资料包内容为准。'
+      : '当前录音未绑定完整客户、商机和跟进记录，请仅基于资料包内容输出分析结论。',
     hasFormalContext
       ? '本次请求已提供正式客户、商机和跟进记录锚点；Markdown 标题和正文不得输出“未关联客户/商机”“未关联商机”“录音未绑定”等旧上下文描述。'
       : '如缺少正式客户或商机锚点，请在标题和结论中明确标记为待绑定上下文。',
