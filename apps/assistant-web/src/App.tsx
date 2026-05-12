@@ -12,7 +12,6 @@ import {
   PictureOutlined,
   PlusOutlined,
   ProductOutlined,
-  SettingOutlined,
   ShareAltOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
@@ -80,8 +79,6 @@ import type {
   AgentConversationListResponse,
   AgentConversationUpsertRequest,
   AgentClientAction,
-  AgentPersonalSettingsResponse,
-  AgentPersonalSettingsUpdateRequest,
   AgentMetaQuestionOptionsResponse,
   AgentRunDetailResponse,
   AgentRunListResponse,
@@ -189,7 +186,7 @@ const DEPRECATED_WORKBENCH_ROUTES = new Set([
 const RECORD_RESULT_A2UI_CATALOG_ID = 'local://yzj-crm/record-result/v1';
 const RECORD_RESULT_TABLE_PAGE_SIZE = 5;
 const REMOTE_CONVERSATION_RUN_PAGE_SIZE = 50;
-const PERSONAL_SETTINGS_ROUTE = '/settings/personal';
+const AUDIO_ATTACHMENT_ACCEPT = '.wav,.mp3,audio/wav,audio/mpeg';
 
 function buildAssistantStorageKeys(identity: YzjAuthIdentityResponse) {
   const storageScope = buildAssistantConversationKey('storage', identity.operatorOpenId);
@@ -213,30 +210,6 @@ function buildAssistantRuntimeScope(identity: YzjAuthIdentityResponse) {
 }
 
 type AssistantRuntimeScope = ReturnType<typeof buildAssistantRuntimeScope>;
-
-function buildDefaultPersonalSettings(identity: YzjAuthIdentityResponse): AgentPersonalSettingsResponse {
-  return {
-    eid: identity.eid,
-    appId: identity.appId,
-    operatorOpenId: identity.operatorOpenId,
-    displayName: identity.userName || '云之家用户',
-    roleLabel: identity.source === 'ticket' ? '云之家销售' : '金蝶云之家销售',
-    soulPrompt: '',
-    isDefaultSoulPrompt: true,
-    updatedAt: null,
-  };
-}
-
-const DEFAULT_PERSONAL_SETTINGS: AgentPersonalSettingsResponse = {
-  eid: '',
-  appId: '',
-  operatorOpenId: ASSISTANT_LOCAL_IDENTITY.operatorOpenId,
-  displayName: ASSISTANT_LOCAL_IDENTITY.userName,
-  roleLabel: '金蝶云之家销售',
-  soulPrompt: '',
-  isDefaultSoulPrompt: true,
-  updatedAt: null,
-};
 
 const recordResultCatalog: Catalog = {
   $id: RECORD_RESULT_A2UI_CATALOG_ID,
@@ -653,72 +626,6 @@ const useStyles = createStyles(({ token, css }) => ({
   sideFooterInfo: css`
     min-width: 0;
     flex: 1;
-  `,
-  sideFooterButton: css`
-    flex: none;
-  `,
-  settingsPage: css`
-    height: 100%;
-    width: calc(100% - 280px);
-    min-width: 0;
-    overflow-y: auto;
-    background: ${token.colorBgContainer};
-    padding: 32px 40px;
-    box-sizing: border-box;
-  `,
-  settingsInner: css`
-    max-width: 920px;
-    margin: 0 auto;
-  `,
-  settingsHeader: css`
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 20px;
-  `,
-  settingsTitle: css`
-    margin: 0;
-    color: ${token.colorText};
-    font-size: 24px;
-    line-height: 1.25;
-    font-weight: 700;
-  `,
-  settingsDescription: css`
-    margin-top: 8px;
-    color: ${token.colorTextSecondary};
-    line-height: 1.7;
-  `,
-  settingsPanel: css`
-    border: 1px solid ${token.colorBorderSecondary};
-    border-radius: 8px;
-    background: ${token.colorBgContainer};
-    box-shadow: 0 14px 38px rgba(15, 23, 42, 0.06);
-  `,
-  settingsPanelBody: css`
-    padding: 20px;
-  `,
-  settingsTextarea: css`
-    width: 100%;
-    margin-top: 14px;
-    font-family:
-      AlibabaPuHuiTi,
-      "Alibaba Sans",
-      ${token.fontFamily},
-      sans-serif;
-    line-height: 1.75;
-  `,
-  settingsActions: css`
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    margin-top: 14px;
-  `,
-  settingsMeta: css`
-    margin-top: 12px;
-    color: ${token.colorTextTertiary};
-    font-size: 12px;
-    line-height: 1.6;
   `,
   chat: css`
     height: 100%;
@@ -1489,7 +1396,7 @@ function groupEvidenceByArtifact(evidence: AssistantEvidenceCard[]): GroupedEvid
 
 function isAudioAttachment(file: NonNullable<GetProp<typeof Attachments, 'items'>>[number]) {
   const type = file.type || file.originFileObj?.type || '';
-  return type.includes('audio') || /\.(mp3|m4a|wav|aac|flac|ogg)$/i.test(file.name || '');
+  return type === 'audio/mpeg' || type === 'audio/mp3' || type === 'audio/wav' || /\.(mp3|wav)$/i.test(file.name || '');
 }
 
 function getUploadFile(file: NonNullable<GetProp<typeof Attachments, 'items'>>[number]): File | null {
@@ -2336,38 +2243,6 @@ async function persistRemoteConversation(
   if (!response.ok) {
     throw new Error(await readApiErrorMessage(response));
   }
-}
-
-async function fetchPersonalSettings(scope: AssistantRuntimeScope): Promise<AgentPersonalSettingsResponse> {
-  const query = new URLSearchParams({
-    operatorOpenId: scope.identity.operatorOpenId,
-  });
-  const response = await fetch(`/api/agent/personal-settings?${query.toString()}`, {
-    cache: 'no-store',
-  });
-  if (!response.ok) {
-    throw new Error(await readApiErrorMessage(response));
-  }
-  return response.json() as Promise<AgentPersonalSettingsResponse>;
-}
-
-async function updatePersonalSettings(
-  scope: AssistantRuntimeScope,
-  soulPrompt: string,
-): Promise<AgentPersonalSettingsResponse> {
-  const payload: AgentPersonalSettingsUpdateRequest = {
-    operatorOpenId: scope.identity.operatorOpenId,
-    soulPrompt,
-  };
-  const response = await fetch('/api/agent/personal-settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error(await readApiErrorMessage(response));
-  }
-  return response.json() as Promise<AgentPersonalSettingsResponse>;
 }
 
 function getStoredActiveConversationKey(scope: AssistantRuntimeScope, allowedKeys: string[]) {
@@ -4583,12 +4458,7 @@ function buildRole(
         },
       },
       avatar: (
-        <Avatar
-          size={30}
-          style={{ backgroundColor: '#1677ff' }}
-        >
-          YZ
-        </Avatar>
+        <Avatar size={30} src={brandLogo} style={{ backgroundColor: 'transparent' }} />
       ),
       header: (_, { status, extraInfo }) => {
         const config = statusConfig[status as keyof typeof statusConfig];
@@ -6102,16 +5972,23 @@ function AssistantConversationRuntime({
       styles={{ content: { padding: 0 } }}
     >
       <Attachments
+        accept={AUDIO_ATTACHMENT_ACCEPT}
         beforeUpload={() => false}
         items={attachedFiles}
-        onChange={(info) => setAttachedFiles(info.fileList)}
+        onChange={(info) => {
+          const acceptedFiles = info.fileList.filter(isAudioAttachment);
+          if (acceptedFiles.length !== info.fileList.length) {
+            messageApi.warning('仅支持上传 wav、mp3 录音文件');
+          }
+          setAttachedFiles(acceptedFiles);
+        }}
         placeholder={(type) =>
           type === 'drop'
-            ? { title: '把公司资料或临时材料拖到这里' }
+            ? { title: '把 wav、mp3 录音文件拖到这里' }
             : {
                 icon: <CloudUploadOutlined />,
-                title: '上传公司材料',
-                description: '支持研究资料和临时附件',
+                title: '上传录音文件',
+                description: '仅支持 wav、mp3',
               }
         }
       />
@@ -6412,6 +6289,7 @@ function AssistantConversationRuntime({
           eidLabel: runtimeScope.identity.displayEid || runtimeScope.identity.eid,
           appIdLabel: runtimeScope.identity.appId,
         }}
+        conversationKey={activeConversationKey}
         agentTrace={latestAgentTrace}
         evidence={latestEvidence}
         recordingTasks={recordingTasks.map((task) => ({
@@ -6453,113 +6331,6 @@ function AssistantConversationRuntime({
   );
 }
 
-function PersonalSettingsPage({
-  runtimeScope,
-  settings,
-  loading,
-  styles,
-  messageApi,
-  onSettingsChange,
-}: {
-  runtimeScope: AssistantRuntimeScope;
-  settings: AgentPersonalSettingsResponse;
-  loading: boolean;
-  styles: ReturnType<typeof useStyles>['styles'];
-  messageApi: ReturnType<typeof message.useMessage>[0];
-  onSettingsChange: (settings: AgentPersonalSettingsResponse) => void;
-}) {
-  const [draft, setDraft] = useState(settings.soulPrompt);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setDraft(settings.soulPrompt);
-  }, [settings.soulPrompt]);
-
-  const handleSave = React.useCallback(async () => {
-    setSaving(true);
-    try {
-      const next = await updatePersonalSettings(runtimeScope, draft);
-      onSettingsChange(next);
-      messageApi.success('SOUL 已保存');
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : 'SOUL 保存失败');
-    } finally {
-      setSaving(false);
-    }
-  }, [draft, messageApi, onSettingsChange, runtimeScope]);
-
-  const handleRestoreDefault = React.useCallback(async () => {
-    setSaving(true);
-    try {
-      const next = await updatePersonalSettings(runtimeScope, '');
-      onSettingsChange(next);
-      setDraft(next.soulPrompt);
-      messageApi.success('已恢复默认 SOUL');
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : '恢复默认 SOUL 失败');
-    } finally {
-      setSaving(false);
-    }
-  }, [messageApi, onSettingsChange, runtimeScope]);
-
-  return (
-    <main className={styles.settingsPage}>
-      <div className={styles.settingsInner}>
-        <div className={styles.settingsHeader}>
-          <div>
-            <h1 className={styles.settingsTitle}>个人设置</h1>
-            <div className={styles.settingsDescription}>
-              SOUL 是你的销售立场配置。本轮仅保存配置，后续销售速览和拜访建议可基于它生成更贴近金蝶云之家制造业方案的内容。
-            </div>
-          </div>
-          <Space>
-            <Tag color="blue">{settings.displayName}</Tag>
-            <Tag color={settings.isDefaultSoulPrompt ? 'default' : 'green'}>
-              {settings.isDefaultSoulPrompt ? 'SOUL 未配置' : 'SOUL 已配置'}
-            </Tag>
-          </Space>
-        </div>
-        <div className={styles.settingsPanel}>
-          <div className={styles.settingsPanelBody}>
-            {loading ? (
-              <Skeleton active paragraph={{ rows: 10 }} />
-            ) : (
-              <>
-                <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                  <Text strong>SOUL 提示词</Text>
-                  <Text type="secondary">
-                    当前按租户和用户保存，绑定 eid 与 operatorOpenId，不会影响其他销售。
-                  </Text>
-                </Space>
-                <Input.TextArea
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  autoSize={{ minRows: 16, maxRows: 26 }}
-                  className={styles.settingsTextarea}
-                  placeholder="请输入你的销售立场、主推方案和输出偏好。"
-                />
-                <div className={styles.settingsActions}>
-                  <Button onClick={handleRestoreDefault} loading={saving}>
-                    恢复默认
-                  </Button>
-                  <Button type="primary" onClick={handleSave} loading={saving}>
-                    保存 SOUL
-                  </Button>
-                </div>
-                <div className={styles.settingsMeta}>
-                  {settings.updatedAt
-                    ? `上次保存：${settings.updatedAt}`
-                    : '当前使用系统默认 SOUL，保存后会生成你的个人配置。'}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    </main>
-  );
-}
-
 function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeScope }) {
   const { styles } = useStyles();
   const location = useLocation();
@@ -6567,11 +6338,6 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
   const [markdownClassName] = useMarkdownTheme();
   const [messageApi, contextHolder] = message.useMessage();
   const scene = getSceneByPath(location.pathname);
-  const isPersonalSettingsRoute = location.pathname === PERSONAL_SETTINGS_ROUTE;
-  const [personalSettings, setPersonalSettings] = useState<AgentPersonalSettingsResponse>(
-    () => buildDefaultPersonalSettings(runtimeScope.identity),
-  );
-  const [personalSettingsLoading, setPersonalSettingsLoading] = useState(true);
   const [renamingConversation, setRenamingConversation] = useState<ConversationSession | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [blankConversationKeys, setBlankConversationKeys] = useState<Set<string>>(
@@ -6611,31 +6377,6 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
   useEffect(() => {
     clearLegacyAssistantStorage();
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setPersonalSettingsLoading(true);
-    void fetchPersonalSettings(runtimeScope)
-      .then((settings) => {
-        if (!cancelled) {
-          setPersonalSettings(settings);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPersonalSettings(buildDefaultPersonalSettings(runtimeScope.identity));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setPersonalSettingsLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [runtimeScope]);
 
   const {
     conversations,
@@ -6987,20 +6728,14 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
       <div className={styles.sideFooter}>
         <Space size={8} className={styles.sideFooterInfo}>
           <Avatar size={24} style={{ backgroundColor: '#1677ff' }}>
-            {(runtimeScope.identity.userName || personalSettings.displayName).slice(0, 1)}
+            {(runtimeScope.identity.userName || '云之家用户').slice(0, 1)}
           </Avatar>
           <Space orientation="vertical" size={0} className={styles.sideFooterInfo}>
             <Text strong ellipsis>
-              {runtimeScope.identity.userName || personalSettings.displayName}
+              {runtimeScope.identity.userName || '云之家用户'}
             </Text>
           </Space>
         </Space>
-        <Button
-          type="text"
-          icon={<SettingOutlined />}
-          className={styles.sideFooterButton}
-          onClick={() => navigate(PERSONAL_SETTINGS_ROUTE)}
-        />
       </div>
     </div>
   );
@@ -7028,16 +6763,7 @@ function AssistantWorkspace({ runtimeScope }: { runtimeScope: AssistantRuntimeSc
     </Modal>
   );
 
-  const mainContent = isPersonalSettingsRoute ? (
-    <PersonalSettingsPage
-      runtimeScope={runtimeScope}
-      settings={personalSettings}
-      loading={personalSettingsLoading}
-      styles={styles}
-      messageApi={messageApi}
-      onSettingsChange={setPersonalSettings}
-    />
-  ) : (
+  const mainContent = (
     <AssistantConversationRuntime
       key={activeConversationKey}
       runtimeScope={runtimeScope}
@@ -7263,7 +6989,7 @@ function App() {
       <Route path="/" element={<Navigate to="/chat" replace />} />
       <Route path="/recording-viewer-loading" element={<RecordingViewerLoadingPage />} />
       <Route path="/chat" element={<AssistantIdentityGate />} />
-      <Route path="/settings/personal" element={<AssistantIdentityGate />} />
+      <Route path="/settings/personal" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/company-research" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/customer-analysis" element={<Navigate to="/chat" replace />} />
       <Route path="/chat/conversation-understanding" element={<Navigate to="/chat" replace />} />

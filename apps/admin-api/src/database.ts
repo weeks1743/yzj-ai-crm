@@ -207,6 +207,7 @@ export async function initializeDatabaseSchema(
         app_id TEXT NOT NULL,
         conversation_key TEXT NOT NULL,
         scene_key TEXT NOT NULL,
+        operator_open_id TEXT,
         user_input TEXT NOT NULL,
         intent_frame_json JSONB NOT NULL,
         context_subject_json JSONB,
@@ -242,6 +243,8 @@ export async function initializeDatabaseSchema(
         updated_at TEXT NOT NULL
       );
 
+      -- Legacy retained table: personal settings were disabled in 0.10.21,
+      -- but historical SOUL data is not dropped automatically.
       CREATE TABLE IF NOT EXISTS ${table('agent_personal_settings')} (
         eid TEXT NOT NULL,
         app_id TEXT NOT NULL,
@@ -272,8 +275,7 @@ export async function initializeDatabaseSchema(
         error_message TEXT,
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE (eid, app_id, file_sha256)
+        updated_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS ${table('agent_tool_calls')} (
@@ -304,6 +306,18 @@ export async function initializeDatabaseSchema(
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_runs_conversation_recent`)}
       ON ${table('agent_runs')}(conversation_key, created_at DESC, run_id DESC);
 
+      ALTER TABLE ${table('agent_runs')}
+      ADD COLUMN IF NOT EXISTS operator_open_id TEXT;
+
+      UPDATE ${table('agent_runs')} r
+      SET operator_open_id = c.operator_open_id
+      FROM ${table('agent_conversations')} c
+      WHERE r.operator_open_id IS NULL
+        AND r.conversation_key = c.conversation_key;
+
+      CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_runs_operator_recent`)}
+      ON ${table('agent_runs')}(operator_open_id, created_at DESC, run_id DESC);
+
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_conversations_operator_recent`)}
       ON ${table('agent_conversations')}(operator_open_id, updated_at DESC, conversation_key DESC);
 
@@ -312,6 +326,12 @@ export async function initializeDatabaseSchema(
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_recording_audio_tasks_recent`)}
       ON ${table('recording_audio_tasks')}(eid, app_id, updated_at DESC);
+
+      ALTER TABLE ${table('recording_audio_tasks')}
+      DROP CONSTRAINT IF EXISTS recording_audio_tasks_eid_app_id_file_sha256_key;
+
+      CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_recording_audio_tasks_file_hash`)}
+      ON ${table('recording_audio_tasks')}(eid, app_id, file_sha256, updated_at DESC);
 
       CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedSchema}_agent_tool_calls_run`)}
       ON ${table('agent_tool_calls')}(run_id, started_at ASC, tool_call_id ASC);

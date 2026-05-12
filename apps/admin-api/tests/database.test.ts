@@ -43,6 +43,7 @@ test('openDatabase creates admin-api PostgreSQL tables for fresh schema', async 
         'agent_confirmations',
         'agent_conversations',
         'agent_messages',
+        // Legacy retained table: personal settings were disabled in 0.10.21 without destructive cleanup.
         'agent_personal_settings',
         'agent_runs',
         'agent_tool_calls',
@@ -55,6 +56,18 @@ test('openDatabase creates admin-api PostgreSQL tables for fresh schema', async 
         'shadow_object_snapshots',
       ],
     );
+
+    const agentRunColumns = await database.query<{ column_name: string }>(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'agent_runs'
+        ORDER BY ordinal_position ASC
+      `,
+      [database.schema],
+    );
+
+    assert.equal(agentRunColumns.some((row) => row.column_name === 'operator_open_id'), true);
   });
 });
 
@@ -78,6 +91,48 @@ test('openDatabase initialization is idempotent', async () => {
     await second.dropSchema();
     await second.close();
   }
+});
+
+test('recording audio tasks allow duplicate file hashes for separate business cards', async () => {
+  await withAdminDatabase(async (database) => {
+    const now = new Date().toISOString();
+    const sharedHash = 'md5-duplicate-recording';
+    await database.query(
+      `
+        INSERT INTO ${database.table('recording_audio_tasks')} (
+          task_id, eid, app_id, service_task_id, provider_data_id, fixture_task_id, status,
+          file_name, mime_type, byte_size, file_sha256, anchors_json, service_payload_json,
+          artifact_id, material_path, material_source, error_message, created_by, created_at, updated_at
+        ) VALUES
+          (
+            'recording-task-dup-001', 'eid-1', 'app-1', 'audio-task-shared', 'DATA-SHARED', NULL, 'succeeded',
+            'visit.mp3', 'audio/mpeg', 12, $1, '{}'::jsonb, '{}'::jsonb,
+            'artifact-old', '/tmp/old/recording-material.md', 'generated', NULL, 'tester', $2, $2
+          ),
+          (
+            'recording-task-dup-002', 'eid-1', 'app-1', 'audio-task-shared', 'DATA-SHARED', NULL, 'succeeded',
+            'visit-copy.mp3', 'audio/mpeg', 12, $1, '{}'::jsonb, '{}'::jsonb,
+            NULL, '/tmp/old/recording-material.md', 'generated', NULL, 'tester', $2, $2
+          )
+      `,
+      [sharedHash, now],
+    );
+
+    const rows = await database.query<{ task_id: string }>(
+      `
+        SELECT task_id
+        FROM ${database.table('recording_audio_tasks')}
+        WHERE eid = 'eid-1' AND app_id = 'app-1' AND file_sha256 = $1
+        ORDER BY task_id ASC
+      `,
+      [sharedHash],
+    );
+
+    assert.deepEqual(rows.map((row) => row.task_id), [
+      'recording-task-dup-001',
+      'recording-task-dup-002',
+    ]);
+  });
 });
 
 test('SQLite to PostgreSQL migration imports legacy dictionary bindings into snapshot json', async () => {

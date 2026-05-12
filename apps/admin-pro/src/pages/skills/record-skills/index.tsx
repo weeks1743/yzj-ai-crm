@@ -4,11 +4,11 @@ import {
   StatisticCard,
 } from '@ant-design/pro-components';
 import { Link } from '@umijs/max';
-import { Alert, Button, Result, Space, Tag, Typography } from 'antd';
-import dayjs from 'dayjs';
+import { Button, Result, Space, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { ProColumns } from '@ant-design/pro-components';
 import type { ShadowObjectSummaryView } from '@shared';
+import { formatLocalDateTime } from '@/utils/time';
 import {
   fetchShadowObjectSkills,
   fetchShadowObjects,
@@ -53,12 +53,7 @@ function formatDateTime(value: string | null | undefined) {
     return '-';
   }
 
-  const parsed = dayjs(value);
-  if (!parsed.isValid()) {
-    return renderCompactText(value, { width: 180 });
-  }
-
-  return renderCompactText(parsed.format('YYYY-MM-DD HH:mm:ss'), {
+  return renderCompactText(formatLocalDateTime(value), {
     width: 180,
     copyable: true,
   });
@@ -255,13 +250,6 @@ const RecordSkillsPage = () => {
         </Button>,
       ]}
     >
-      <Alert
-        type="info"
-        showIcon
-        message="管理视图说明"
-        description="这里聚焦对象接入状态、记录系统技能覆盖情况和刷新结果，方便管理员日常查看和排查。"
-      />
-
       {errorMessage ? (
         <Result
           status="warning"

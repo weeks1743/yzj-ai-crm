@@ -68,6 +68,15 @@ export class RecordingTaskRepository {
       `
       SELECT * FROM ${this.database.table('recording_audio_tasks')}
       WHERE eid = $1 AND app_id = $2 AND file_sha256 = $3
+      ORDER BY
+        CASE
+          WHEN status = 'succeeded' THEN 0
+          WHEN status IN ('queued', 'running') THEN 1
+          ELSE 2
+        END,
+        updated_at DESC,
+        created_at DESC
+      LIMIT 1
       `,
       [input.eid, input.appId, input.md5],
     );
@@ -96,6 +105,8 @@ export class RecordingTaskRepository {
     anchors: RecordingAnchorInput;
     servicePayload: Record<string, unknown>;
     errorMessage?: string | null;
+    materialPath?: string | null;
+    materialSource?: string | null;
     createdBy: string;
   }): Promise<RecordingTaskRecord> {
     const now = new Date().toISOString();
@@ -109,7 +120,7 @@ export class RecordingTaskRepository {
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10, $11, $12::jsonb, $13::jsonb,
-        NULL, NULL, NULL, $14, $15, $16, $16
+        NULL, $14, $15, $16, $17, $18, $18
       )
       `,
       [
@@ -126,6 +137,8 @@ export class RecordingTaskRepository {
         input.file.md5,
         JSON.stringify(input.anchors),
         JSON.stringify(input.servicePayload),
+        input.materialPath ?? null,
+        input.materialSource ?? null,
         input.errorMessage ?? null,
         input.createdBy,
         now,

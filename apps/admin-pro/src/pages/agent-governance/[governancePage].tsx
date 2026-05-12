@@ -6,11 +6,13 @@ import {
   StatisticCard,
 } from '@ant-design/pro-components';
 import { useLocation } from '@umijs/max';
-import { Alert, Button, Drawer, Empty, List, Result, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Collapse, Drawer, Empty, List, Result, Space, Spin, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ProColumns } from '@ant-design/pro-components';
 import type {
+  AgentConversationProcessResponse,
   AgentConfirmationAuditRow,
+  AgentRunDiagnosticItem,
   AgentConfirmationListResponse,
   AgentRunDetailResponse,
   AgentRunListResponse,
@@ -21,6 +23,7 @@ import {
   agentToolRows,
 } from '@shared';
 import { requestJson } from '@/utils/request';
+import { formatLocalDateTime } from '@/utils/time';
 
 const { Paragraph, Text } = Typography;
 
@@ -76,6 +79,10 @@ const confirmationStatusLabels: Record<string, { label: string; color: string }>
   rejected: { label: '已拒绝', color: 'error' },
   expired: { label: '已过期', color: 'default' },
 };
+
+const executionStatusValueEnum = Object.fromEntries(
+  Object.entries(executionStatusLabels).map(([value, meta]) => [value, { text: meta.label }]),
+);
 
 function renderStatusTag(status: string) {
   const meta = executionStatusLabels[status] ?? { label: status, color: 'default' };
@@ -412,14 +419,134 @@ function RunFlowChart({ agentTrace }: { agentTrace: AdminAgentTrace | null }) {
   );
 }
 
+function renderDiagnosticIssueTag(severity: AgentRunDiagnosticItem['issue']['severity']) {
+  if (severity === 'error') {
+    return <Tag color="error">需要排查</Tag>;
+  }
+  if (severity === 'warning') {
+    return <Tag color="warning">待处理</Tag>;
+  }
+  return <Tag color="success">正常</Tag>;
+}
+
+function pickDefaultDiagnosticRunKey(
+  runs: AgentRunDiagnosticItem[],
+  currentRunId?: string,
+  attentionRunId?: string | null,
+): string | undefined {
+  return currentRunId && runs.some((item) => item.runId === currentRunId)
+    ? currentRunId
+    : attentionRunId
+      || [...runs].reverse().find((item) => item.issue.severity !== 'info')?.runId
+      || runs[runs.length - 1]?.runId;
+}
+
+function DiagnosticRunFlow({ run }: { run: AgentRunDiagnosticItem }) {
+  return (
+    <div className="yzj-run-flow">
+      {run.steps.map((node, index) => (
+        <div key={node.key} className="yzj-run-flow-item">
+          <div className="yzj-run-flow-node">
+            <div className="yzj-run-flow-node-header">
+              <Text strong>{node.title}</Text>
+              <Tag color={runFlowStatusColor[node.status]}>{node.statusLabel}</Tag>
+            </div>
+            <Text>{node.summary}</Text>
+            {node.details ? <div className="yzj-run-flow-node-details">{node.details}</div> : null}
+          </div>
+          {index < run.steps.length - 1 ? <div className="yzj-run-flow-connector" /> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ConversationDiagnosticPanel({
+  process,
+  currentRunId,
+  loading,
+  fallbackTrace,
+}: {
+  process: AgentConversationProcessResponse | null;
+  currentRunId?: string;
+  loading: boolean;
+  fallbackTrace: AdminAgentTrace | null;
+}) {
+  const diagnostics = process?.diagnostics;
+  const runs = diagnostics?.runs ?? [];
+  if (loading && !process) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center' }}>
+        <Spin tip="正在加载会话诊断..." />
+      </div>
+    );
+  }
+
+  if (!runs.length) {
+    return <RunFlowChart agentTrace={fallbackTrace} />;
+  }
+
+  const defaultRunKey = pickDefaultDiagnosticRunKey(runs, currentRunId, diagnostics?.summary.attentionRunId);
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <ProCard split="vertical" bordered>
+        <ProCard title="会话总览">
+          <Space direction="vertical" size={8}>
+            <Space wrap>
+              <Tag color="blue">意图 {diagnostics?.summary.totalRuns ?? runs.length}</Tag>
+              <Tag color="warning">等待 {diagnostics?.summary.waitingCount ?? 0}</Tag>
+              <Tag color="error">失败 {diagnostics?.summary.failedCount ?? 0}</Tag>
+            </Space>
+            <Text>{diagnostics?.summary.attentionSummary ?? '暂无明显阻断。'}</Text>
+          </Space>
+        </ProCard>
+        <ProCard title="当前关注">
+          <Space direction="vertical" size={8}>
+            <Space wrap>
+              {renderDiagnosticIssueTag(diagnostics?.summary.attentionSeverity ?? 'info')}
+              <Text strong>{diagnostics?.summary.attentionTitle ?? '本会话暂无明显阻断'}</Text>
+            </Space>
+            {diagnostics?.summary.attentionTraceId ? <Text copyable>{diagnostics.summary.attentionTraceId}</Text> : null}
+          </Space>
+        </ProCard>
+      </ProCard>
+      <Collapse
+        defaultActiveKey={defaultRunKey ? [defaultRunKey] : undefined}
+        items={runs.map((run, index) => ({
+          key: run.runId,
+          label: (
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+              <Space wrap>
+                {renderDiagnosticIssueTag(run.issue.severity)}
+                <Text strong>{`意图 ${index + 1}：${run.goal || run.userInput || run.planTitle}`}</Text>
+                <Text copyable type="secondary">{run.traceId}</Text>
+              </Space>
+              <Text type="secondary">{run.issue.title} · {run.issue.summary}</Text>
+            </Space>
+          ),
+          children: <DiagnosticRunFlow run={run} />,
+        }))}
+      />
+    </Space>
+  );
+}
+
 function getPageKey(pathname: string): GovernancePageKey | null {
   const key = pathname.split('/').filter(Boolean).pop();
   return key && key in pageMeta ? (key as GovernancePageKey) : null;
 }
 
-function renderMetricCards(items: Array<{ key: string; title: string; value: string; helper: string }>) {
+function renderMetricCards(
+  items: Array<{ key: string; title: string; value: string; helper: string }>,
+  options?: { className?: string; marginTop?: number },
+) {
   return (
-    <Space wrap size={16} style={{ width: '100%', marginTop: 16 }}>
+    <Space
+      wrap
+      size={16}
+      className={options?.className}
+      style={{ width: '100%', marginTop: options?.marginTop ?? 16 }}
+    >
       {items.map((item) => (
         <StatisticCard
           key={item.key}
@@ -482,12 +609,6 @@ function ToolsObjectsView() {
 
   return (
     <>
-      <Alert
-        type="info"
-        showIcon
-        message="工具注册表"
-        description="这里展示智能体可选择的通用工具。工具可以服务 CRM 样例，但不以固定业务流程作为运行时分类。"
-      />
       {renderMetricCards(metrics)}
       <ProTable<AgentToolRow>
         style={{ marginTop: 16 }}
@@ -534,22 +655,32 @@ function RuntimeObservabilityView() {
     () => new URLSearchParams(location.search).get('traceId')?.trim() || '',
     [location.search],
   );
+  const [runFilters, setRunFilters] = useState<{ operatorName?: string; status?: string }>({});
   const [runData, setRunData] = useState<AgentRunListResponse | null>(null);
   const [confirmationData, setConfirmationData] = useState<AgentConfirmationListResponse | null>(null);
   const [current, setCurrent] = useState<AgentRunDetailResponse | null>(null);
+  const [currentProcess, setCurrentProcess] = useState<AgentConversationProcessResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [processLoading, setProcessLoading] = useState(false);
   const [confirmationLoading, setConfirmationLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const loadRunDetail = useCallback(async (runId: string) => {
     setDetailLoading(true);
+    setProcessLoading(true);
+    setCurrentProcess(null);
     try {
-      setCurrent(await requestJson<AgentRunDetailResponse>(`/api/agent/runs/${encodeURIComponent(runId)}`));
+      const detail = await requestJson<AgentRunDetailResponse>(`/api/agent/runs/${encodeURIComponent(runId)}`);
+      setCurrent(detail);
+      setCurrentProcess(await requestJson<AgentConversationProcessResponse>(
+        `/api/agent/conversations/${encodeURIComponent(detail.run.conversationKey)}/process`,
+      ));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '运行详情加载失败');
     } finally {
       setDetailLoading(false);
+      setProcessLoading(false);
     }
   }, []);
 
@@ -564,6 +695,12 @@ function RuntimeObservabilityView() {
       if (traceIdFromQuery) {
         query.set('traceId', traceIdFromQuery);
       }
+      if (runFilters.operatorName?.trim()) {
+        query.set('operatorName', runFilters.operatorName.trim());
+      }
+      if (runFilters.status?.trim()) {
+        query.set('status', runFilters.status.trim());
+      }
       const runs = await requestJson<AgentRunListResponse>(`/api/agent/runs?${query.toString()}`);
       setRunData(runs);
       if (traceIdFromQuery && runs.items[0]) {
@@ -574,7 +711,7 @@ function RuntimeObservabilityView() {
     } finally {
       setLoading(false);
     }
-  }, [loadRunDetail, traceIdFromQuery]);
+  }, [loadRunDetail, runFilters.operatorName, runFilters.status, traceIdFromQuery]);
 
   const loadConfirmations = useCallback(async () => {
     setConfirmationLoading(true);
@@ -609,31 +746,62 @@ function RuntimeObservabilityView() {
       dataIndex: 'traceId',
       width: 210,
       copyable: true,
+      hideInSearch: true,
+      search: false,
       render: (_, record) => <a onClick={() => void loadRunDetail(record.runId)}>{record.traceId}</a>,
     },
-    { title: '用户输入', dataIndex: 'userInput', ellipsis: true },
-    { title: '目标', dataIndex: 'goal', ellipsis: true },
+    {
+      title: '用户',
+      dataIndex: 'operatorName',
+      width: 150,
+      order: 1,
+      fieldProps: { placeholder: '输入用户名' },
+      render: (_, record) => (
+        <Text
+          style={{ display: 'inline-block', maxWidth: 130, whiteSpace: 'nowrap' }}
+          ellipsis={{ tooltip: record.operatorName }}
+        >
+          {record.operatorName}
+        </Text>
+      ),
+    },
+    { title: '用户输入', dataIndex: 'userInput', ellipsis: true, hideInSearch: true, search: false },
+    { title: '目标', dataIndex: 'goal', ellipsis: true, hideInSearch: true, search: false },
     {
       title: '状态',
       dataIndex: 'status',
       width: 120,
+      order: 2,
+      valueType: 'select',
+      valueEnum: executionStatusValueEnum,
       render: (_, record) => renderStatusTag(record.status),
     },
-    { title: '计划', dataIndex: 'planTitle', ellipsis: true },
+    { title: '计划', dataIndex: 'planTitle', ellipsis: true, hideInSearch: true, search: false },
     {
       title: '工具',
       width: 90,
+      hideInSearch: true,
+      search: false,
       render: (_, record) => record.toolCallCount,
     },
     {
       title: '待确认',
       width: 100,
+      hideInSearch: true,
+      search: false,
       render: (_, record) => (
         record.pendingConfirmationCount ? <Tag color="warning">{record.pendingConfirmationCount}</Tag> : '-'
       ),
     },
-    { title: '场景', dataIndex: 'sceneKey', width: 130 },
-    { title: '时间', dataIndex: 'createdAt', width: 190 },
+    { title: '场景', dataIndex: 'sceneKey', width: 130, hideInSearch: true, search: false },
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      width: 170,
+      hideInSearch: true,
+      search: false,
+      render: (_, record) => formatLocalDateTime(record.createdAt),
+    },
   ];
 
   const confirmationColumns: ProColumns<AgentConfirmationAuditRow>[] = [
@@ -647,7 +815,12 @@ function RuntimeObservabilityView() {
       render: (_, record) => renderConfirmationStatusTag(record.status),
     },
     { title: '标题', dataIndex: 'title', ellipsis: true },
-    { title: '创建时间', dataIndex: 'createdAt', width: 190 },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      width: 170,
+      render: (_, record) => formatLocalDateTime(record.createdAt),
+    },
   ];
 
   const planSteps = Array.isArray((current?.taskPlan as any)?.steps)
@@ -670,19 +843,42 @@ function RuntimeObservabilityView() {
     { title: '输出', dataIndex: 'outputSummary', ellipsis: true },
     { title: '错误', dataIndex: 'errorMessage', ellipsis: true },
   ];
+  const processMessageColumns: ProColumns<AgentConversationProcessResponse['messages'][number]>[] = [
+    { title: '角色', dataIndex: 'role', width: 90 },
+    { title: '内容', dataIndex: 'content', ellipsis: true },
+    { title: '运行编号', dataIndex: 'runId', copyable: true, width: 220 },
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      width: 170,
+      render: (_, record) => formatLocalDateTime(record.createdAt),
+    },
+  ];
+  const processToolColumns: ProColumns<AgentConversationProcessResponse['toolCalls'][number]>[] = [
+    { title: '工具', dataIndex: 'toolCode', ellipsis: true },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 110,
+      render: (_, record) => (
+        <Tag color={record.status === 'succeeded' ? 'success' : record.status === 'failed' ? 'error' : 'processing'}>
+          {record.status}
+        </Tag>
+      ),
+    },
+    { title: '输入', dataIndex: 'inputSummary', ellipsis: true },
+    { title: '输出', dataIndex: 'outputSummary', ellipsis: true },
+    { title: '运行编号', dataIndex: 'runId', copyable: true, width: 220 },
+    {
+      title: '开始时间',
+      dataIndex: 'startedAt',
+      width: 170,
+      render: (_, record) => formatLocalDateTime(record.startedAt),
+    },
+  ];
 
   return (
     <>
-      <Alert
-        type="info"
-        showIcon
-        message="智能体运行观测"
-        description={
-          traceIdFromQuery
-            ? `已按用户 AI 端传入的追踪编号过滤：${traceIdFromQuery}`
-            : '这里看的是用户意图如何落成计划、计划如何选择工具、执行如何进入等待确认或挂起状态。'
-        }
-      />
       {errorMessage ? (
         <Alert
           type="error"
@@ -697,48 +893,78 @@ function RuntimeObservabilityView() {
         { key: 'running', title: '进行中 / 等待态', value: `${runningCount}`, helper: '运行中 / 等待类状态' },
         { key: 'failed', title: '失败或不可用', value: `${failedCount}`, helper: '失败 / 工具不可用' },
         { key: 'confirm', title: '待确认', value: `${pendingConfirmationCount}`, helper: '写入前确认' },
-      ])}
+      ], { className: 'yzj-runtime-observability-metrics', marginTop: 0 })}
       {loading && !runData ? (
         <div style={{ marginTop: 24, textAlign: 'center' }}>
           <Spin tip="正在加载真实智能体运行记录..." />
         </div>
       ) : null}
-      <ProTable<AgentRunSummary>
+      <ProCard
         style={{ marginTop: 16 }}
-        rowKey="runId"
-        search={false}
-        toolBarRender={() => [
-          <Button key="refresh" loading={loading} onClick={() => void loadData()}>
-            刷新
-          </Button>,
-        ]}
-        options={false}
-        columns={columns}
-        dataSource={runs}
-        pagination={false}
-        scroll={{ x: 1200 }}
+        tabs={{
+          items: [
+            {
+              key: 'runs',
+              label: '运行记录',
+              children: (
+                <ProTable<AgentRunSummary>
+                  rowKey="runId"
+                  search={{ labelWidth: 'auto' }}
+                  onSubmit={(params) => {
+                    setRunFilters({
+                      operatorName: typeof params.operatorName === 'string' ? params.operatorName : undefined,
+                      status: typeof params.status === 'string' ? params.status : undefined,
+                    });
+                  }}
+                  onReset={() => setRunFilters({})}
+                  toolBarRender={() => [
+                    <Button key="refresh" loading={loading} onClick={() => void loadData()}>
+                      刷新
+                    </Button>,
+                  ]}
+                  options={false}
+                  columns={columns}
+                  dataSource={runs}
+                  pagination={false}
+                  scroll={{ x: 1200 }}
+                />
+              ),
+            },
+            {
+              key: 'confirmations',
+              label: '确认审计',
+              children: (
+                <ProTable<AgentConfirmationAuditRow>
+                  rowKey="confirmationId"
+                  search={false}
+                  toolBarRender={() => [
+                    <Button
+                      key="refresh-confirmations"
+                      loading={confirmationLoading}
+                      onClick={() => void loadConfirmations()}
+                    >
+                      刷新
+                    </Button>,
+                  ]}
+                  options={false}
+                  loading={confirmationLoading && !confirmationData}
+                  pagination={false}
+                  columns={confirmationColumns}
+                  dataSource={confirmations}
+                  scroll={{ x: 1200 }}
+                />
+              ),
+            },
+          ],
+        }}
       />
-      <ProCard title="确认审计" style={{ marginTop: 16 }}>
-        <ProTable<AgentConfirmationAuditRow>
-          rowKey="confirmationId"
-          search={false}
-          toolBarRender={() => [
-            <Button key="refresh-confirmations" loading={confirmationLoading} onClick={() => void loadConfirmations()}>
-              刷新
-            </Button>,
-          ]}
-          options={false}
-          loading={confirmationLoading && !confirmationData}
-          pagination={false}
-          columns={confirmationColumns}
-          dataSource={confirmations}
-          scroll={{ x: 1200 }}
-        />
-      </ProCard>
       <Drawer
         width={880}
         open={Boolean(current) || detailLoading}
-        onClose={() => setCurrent(null)}
+        onClose={() => {
+          setCurrent(null);
+          setCurrentProcess(null);
+        }}
         title="运行观测详情"
       >
         {detailLoading && !current ? (
@@ -750,9 +976,16 @@ function RuntimeObservabilityView() {
             <ProDescriptions<AgentRunSummary> column={1} dataSource={current.run} bordered>
               <ProDescriptions.Item label="追踪编号" dataIndex="traceId" copyable />
               <ProDescriptions.Item label="运行编号" dataIndex="runId" copyable />
+              <ProDescriptions.Item label="用户">{current.run.operatorName}</ProDescriptions.Item>
               <ProDescriptions.Item label="租户 / 应用">{`${current.run.eid} / ${current.run.appId}`}</ProDescriptions.Item>
               <ProDescriptions.Item label="用户输入" dataIndex="userInput" />
               <ProDescriptions.Item label="状态">{renderStatusTag(current.run.status)}</ProDescriptions.Item>
+              <ProDescriptions.Item label="创建时间">
+                {formatLocalDateTime(current.run.createdAt)}
+              </ProDescriptions.Item>
+              <ProDescriptions.Item label="更新时间">
+                {formatLocalDateTime(current.run.updatedAt)}
+              </ProDescriptions.Item>
               <ProDescriptions.Item label="上下文主体">
                 {current.contextSubject?.name ?? '-'}
               </ProDescriptions.Item>
@@ -763,8 +996,15 @@ function RuntimeObservabilityView() {
                 items: [
                   {
                     key: 'flow',
-                    label: '运行流程',
-                    children: <RunFlowChart agentTrace={agentTrace} />,
+                    label: '会话诊断',
+                    children: (
+                      <ConversationDiagnosticPanel
+                        process={currentProcess}
+                        currentRunId={current.run.runId}
+                        loading={processLoading}
+                        fallbackTrace={agentTrace}
+                      />
+                    ),
                   },
                   {
                     key: 'plan',
@@ -802,6 +1042,64 @@ function RuntimeObservabilityView() {
                         columns={detailToolColumns}
                         dataSource={current.toolCalls}
                       />
+                    ),
+                  },
+                  {
+                    key: 'process',
+                    label: '完整过程',
+                    children: processLoading ? (
+                      <div style={{ padding: 24, textAlign: 'center' }}>
+                        <Spin tip="正在加载会话完整过程..." />
+                      </div>
+                    ) : currentProcess ? (
+                      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                        <ProTable<AgentConversationProcessResponse['messages'][number]>
+                          rowKey="messageId"
+                          headerTitle="会话消息"
+                          search={false}
+                          toolBarRender={false}
+                          options={false}
+                          pagination={false}
+                          columns={processMessageColumns}
+                          dataSource={currentProcess.messages}
+                          scroll={{ x: 1000 }}
+                        />
+                        <ProTable<AgentRunSummary>
+                          rowKey="runId"
+                          headerTitle="会话运行"
+                          search={false}
+                          toolBarRender={false}
+                          options={false}
+                          pagination={false}
+                          columns={columns}
+                          dataSource={currentProcess.runs}
+                          scroll={{ x: 1200 }}
+                        />
+                        <ProTable<AgentConversationProcessResponse['toolCalls'][number]>
+                          rowKey="id"
+                          headerTitle="会话工具调用"
+                          search={false}
+                          toolBarRender={false}
+                          options={false}
+                          pagination={false}
+                          columns={processToolColumns}
+                          dataSource={currentProcess.toolCalls}
+                          scroll={{ x: 1200 }}
+                        />
+                        <ProTable<AgentConfirmationAuditRow>
+                          rowKey="confirmationId"
+                          headerTitle="会话确认审计"
+                          search={false}
+                          toolBarRender={false}
+                          options={false}
+                          pagination={false}
+                          columns={confirmationColumns}
+                          dataSource={currentProcess.confirmations}
+                          scroll={{ x: 1200 }}
+                        />
+                      </Space>
+                    ) : (
+                      <Empty description="当前会话没有完整过程记录" />
                     ),
                   },
                   {
@@ -870,7 +1168,11 @@ export default function AgentGovernancePage() {
   }[pageKey] ?? <Empty />;
 
   return (
-    <PageContainer title={meta.title} subTitle={meta.subTitle}>
+    <PageContainer
+      title={meta.title}
+      subTitle={meta.subTitle}
+      className={pageKey === 'runtime-observability' ? 'yzj-runtime-observability-page' : undefined}
+    >
       {content}
     </PageContainer>
   );

@@ -16,6 +16,7 @@ import type {
   ShadowSkillView,
   ShadowStandardizedFieldView,
 } from '@shared';
+import { formatLocalDateTime } from '@/utils/time';
 import {
   fetchShadowObjectDetail,
   fetchShadowObjectDictionaries,
@@ -425,16 +426,14 @@ const RecordSkillDetailPage = () => {
         </Button>,
       ]}
     >
-      <Alert
-        type={errorMessage ? 'warning' : 'info'}
-        showIcon
-        message="当前对象说明"
-        description={
-          errorMessage
-            ? `对象详情加载失败：${errorMessage}`
-            : '这里主要展示对象当前可用技能、字段准备情况和字典状态，帮助管理员判断是否可以投入使用。'
-        }
-      />
+      {errorMessage ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="对象详情加载失败"
+          description={errorMessage}
+        />
+      ) : null}
 
       <Space wrap size={16} style={{ width: '100%', marginTop: 16 }}>
         <StatisticCard
@@ -452,7 +451,9 @@ const RecordSkillDetailPage = () => {
           statistic={{
             title: '快照版本',
             value: objectDetail?.snapshotVersion ?? '-',
-            description: objectDetail?.lastRefreshAt ?? '尚未刷新',
+            description: objectDetail?.lastRefreshAt
+              ? formatLocalDateTime(objectDetail.lastRefreshAt)
+              : '尚未刷新',
           }}
         />
         <StatisticCard
@@ -499,7 +500,7 @@ const RecordSkillDetailPage = () => {
             )}
           </ProDescriptions.Item>
           <ProDescriptions.Item label="最近刷新">
-            {objectDetail?.lastRefreshAt ?? '-'}
+            {formatLocalDateTime(objectDetail?.lastRefreshAt)}
           </ProDescriptions.Item>
         </ProDescriptions>
         {objectDetail?.lastError ? (
@@ -621,12 +622,6 @@ const RecordSkillDetailPage = () => {
             label: '引用资源',
             children: (
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                <Alert
-                  type="info"
-                  showIcon
-                  message="仅展示引用路径"
-                  description="本轮不在后台内联渲染原始 SKILL.md 或 template-raw.json 文件正文，管理员查看的是 bundle 路径和引用资源位置。"
-                />
                 <ProTable<ShadowSkillView>
                   rowKey="skillName"
                   search={false}

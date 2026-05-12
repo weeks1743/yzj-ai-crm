@@ -973,6 +973,8 @@ export interface AgentRunSummary {
   appId: string;
   conversationKey: string;
   sceneKey: string;
+  operatorOpenId: string | null;
+  operatorName: string;
   userInput: string;
   status: AgentExecutionStatus;
   goal: string;
@@ -1028,6 +1030,76 @@ export interface AgentConfirmationListResponse {
   items: AgentConfirmationAuditRow[];
 }
 
+export type AgentRunDiagnosticStepStatus = 'success' | 'warning' | 'error' | 'processing' | 'default';
+export type AgentRunDiagnosticIssueSeverity = 'info' | 'warning' | 'error';
+
+export interface AgentRunDiagnosticStep {
+  key: string;
+  title: string;
+  status: AgentRunDiagnosticStepStatus;
+  statusLabel: string;
+  summary: string;
+  details?: string;
+}
+
+export interface AgentRunDiagnosticIssue {
+  severity: AgentRunDiagnosticIssueSeverity;
+  title: string;
+  summary: string;
+  stepKey?: string;
+}
+
+export interface AgentRunDiagnosticItem {
+  runId: string;
+  traceId: string;
+  userInput: string;
+  goal: string;
+  targetType: AgentTargetType;
+  status: AgentExecutionStatus;
+  statusLabel: string;
+  planTitle: string;
+  planKind: AgentTaskPlanKind;
+  currentStepKey: string | null;
+  evidenceCount: number;
+  toolCallCount: number;
+  failedToolCallCount: number;
+  pendingConfirmationCount: number;
+  createdAt: string;
+  updatedAt: string;
+  selectedToolCode?: string;
+  selectedToolReason?: string;
+  toolCalls: AgentObservedToolCall[];
+  confirmations: AgentConfirmationAuditRow[];
+  steps: AgentRunDiagnosticStep[];
+  issue: AgentRunDiagnosticIssue;
+}
+
+export interface AgentConversationDiagnostics {
+  summary: {
+    totalRuns: number;
+    completedCount: number;
+    waitingCount: number;
+    failedCount: number;
+    attentionRunId: string | null;
+    attentionTraceId: string | null;
+    attentionSeverity: AgentRunDiagnosticIssueSeverity;
+    attentionTitle: string;
+    attentionSummary: string;
+    latestRunId: string | null;
+    latestTraceId: string | null;
+  };
+  runs: AgentRunDiagnosticItem[];
+}
+
+export interface AgentConversationProcessResponse {
+  conversationKey: string;
+  runs: AgentRunSummary[];
+  messages: AgentObservedMessage[];
+  toolCalls: AgentObservedToolCall[];
+  confirmations: AgentConfirmationAuditRow[];
+  diagnostics?: AgentConversationDiagnostics;
+}
+
 export interface SettingField {
   name: string;
   label: string;
@@ -1071,22 +1143,6 @@ export interface AgentConversationListResponse {
 export interface AgentConversationUpsertRequest {
   operatorOpenId?: string;
   conversation: ConversationSession;
-}
-
-export interface AgentPersonalSettingsResponse {
-  eid: string;
-  appId: string;
-  operatorOpenId: string;
-  displayName: string;
-  roleLabel: string;
-  soulPrompt: string;
-  isDefaultSoulPrompt: boolean;
-  updatedAt: string | null;
-}
-
-export interface AgentPersonalSettingsUpdateRequest {
-  operatorOpenId?: string;
-  soulPrompt?: string;
 }
 
 export interface SceneTask {

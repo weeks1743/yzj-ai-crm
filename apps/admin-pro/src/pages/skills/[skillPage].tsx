@@ -37,6 +37,7 @@ import type {
 } from '@shared';
 import { writebackPolicies } from '@shared';
 import { requestJson } from '@/utils/request';
+import { formatLocalDateTime } from '@/utils/time';
 
 const { Paragraph } = Typography;
 const { TextArea } = Input;
@@ -115,7 +116,12 @@ function buildColumns(
       { title: '审批角色', dataIndex: 'approver', width: 120 },
       { title: '审计抽样', dataIndex: 'auditSampling', width: 120 },
       { title: '回滚规则', dataIndex: 'rollbackRule' },
-      { title: '更新时间', dataIndex: 'updatedAt', width: 170 },
+      {
+        title: '更新时间',
+        dataIndex: 'updatedAt',
+        width: 170,
+        render: (_, record) => formatLocalDateTime((record as WritebackPolicy).updatedAt),
+      },
     ];
   }
 
@@ -246,17 +252,7 @@ function CompanyResearchUsageConfigPreview() {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <div>
         <Typography.Title level={5}>使用配置</Typography.Title>
-        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          这里是面向普通管理员的配置设计稿，当前只展示推荐规则，不会保存到后台规则引擎。
-        </Paragraph>
       </div>
-
-      <Alert
-        type="info"
-        showIcon
-        message="推荐规则"
-        description="已有有效公司研究时直接复用；查不到有效资料时只保留任务记录，不进入聊天可引用资料。"
-      />
 
       <Form
         disabled
@@ -362,25 +358,18 @@ function UpstreamMaterialPreview({ skill }: { skill: ExternalSkillCatalogItem })
   }
 
   return (
-    <Alert
-      type="info"
-      showIcon
-      message="可使用的上游资料"
-      description={
-        <Space direction="vertical" size={8}>
-          <Space wrap>
-            {config.materials.map((item) => (
-              <Tag key={item} color={item.includes('结构化') ? 'processing' : item === '录音资料包' ? 'blue' : 'default'}>{item}</Tag>
-            ))}
-          </Space>
-          <Typography.Text>用户看到的动作：{config.actions.join('、')}</Typography.Text>
-          <Space>
-            <Typography.Text>允许在聊天中基于录音资料使用此能力</Typography.Text>
-            <Switch checked={config.enabled} disabled checkedChildren="开启" unCheckedChildren="关闭" />
-          </Space>
-        </Space>
-      }
-    />
+    <Space direction="vertical" size={8}>
+      <Space wrap>
+        {config.materials.map((item) => (
+          <Tag key={item} color={item.includes('结构化') ? 'processing' : item === '录音资料包' ? 'blue' : 'default'}>{item}</Tag>
+        ))}
+      </Space>
+      <Typography.Text>用户看到的动作：{config.actions.join('、')}</Typography.Text>
+      <Space>
+        <Typography.Text>允许在聊天中基于录音资料使用此能力</Typography.Text>
+        <Switch checked={config.enabled} disabled checkedChildren="开启" unCheckedChildren="关闭" />
+      </Space>
+    </Space>
   );
 }
 
@@ -704,17 +693,6 @@ const SkillsCatalogPage = () => {
 
   const renderSkillJobDebugger = (skill: ExternalSkillCatalogItem) => (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Alert
-        type={skill.status === '运行中' ? 'success' : 'warning'}
-        showIcon
-        message="统一 Job 调试台"
-        description={
-          skill.status === '运行中'
-            ? '当前能力走独立 skill-runtime，支持提交调试请求、查看事件和下载 markdown 产物。'
-            : '当前能力已挂到统一调试台，但底层 runtime 或依赖存在风险，提交时会返回可读错误。'
-        }
-      />
-
       <Form<SkillJobFormValues>
         form={skillJobForm}
         layout="vertical"
@@ -801,8 +779,12 @@ const SkillsCatalogPage = () => {
             <ProDescriptions.Item label="模型">
               {skillJobResult.model ?? '无需模型'}
             </ProDescriptions.Item>
-            <ProDescriptions.Item label="创建时间">{skillJobResult.createdAt}</ProDescriptions.Item>
-            <ProDescriptions.Item label="更新时间">{skillJobResult.updatedAt}</ProDescriptions.Item>
+            <ProDescriptions.Item label="创建时间">
+              {formatLocalDateTime(skillJobResult.createdAt)}
+            </ProDescriptions.Item>
+            <ProDescriptions.Item label="更新时间">
+              {formatLocalDateTime(skillJobResult.updatedAt)}
+            </ProDescriptions.Item>
           </ProDescriptions>
 
           {readReportReadyUrl(skillJobResult) ? (
@@ -882,7 +864,7 @@ const SkillsCatalogPage = () => {
                     <Space direction="vertical" size={2} style={{ width: '100%' }}>
                       <Typography.Text>{event.message}</Typography.Text>
                       <Typography.Text type="secondary">
-                        {event.createdAt} · {event.type}
+                        {formatLocalDateTime(event.createdAt)} · {event.type}
                       </Typography.Text>
                     </Space>
                   ),
@@ -933,17 +915,6 @@ const SkillsCatalogPage = () => {
 
   return (
     <PageContainer title={config.title} subTitle={config.summary}>
-      <Alert
-        type="info"
-        showIcon
-        message={isExternalSkillsPage ? '真实目录 / 试运行台' : '目录 / 治理视图'}
-        description={
-          isExternalSkillsPage
-            ? '这里展示 ext.* 的真实目录状态；当前支持 ext.image_generate 专属试运行，以及 implementationType=skill 的统一 Job 调试。'
-            : '这里保留的是对象写回策略治理视图，不直接承担执行控制。'
-        }
-      />
-
       {errorMessage ? (
         <Alert
           style={{ marginTop: 16 }}
@@ -988,12 +959,6 @@ const SkillsCatalogPage = () => {
         {current ? (
           !isExternalSkillRecord(current) ? (
             <Space direction="vertical" size={16} style={{ width: '100%' }}>
-              <Alert
-                type="warning"
-                showIcon
-                message="写回治理说明"
-                description="本页只负责呈现当前对象的确认边界与审计要求，真正的写回执行仍应落在 shadow.* 技能和后续场景编排里。"
-              />
               <ProDescriptions<WritebackPolicy> column={1} dataSource={current}>
                 <ProDescriptions.Item label="对象">{current.objectKey}</ProDescriptions.Item>
                 <ProDescriptions.Item label="策略">{current.strategy}</ProDescriptions.Item>
@@ -1001,7 +966,9 @@ const SkillsCatalogPage = () => {
                 <ProDescriptions.Item label="审批角色">{current.approver}</ProDescriptions.Item>
                 <ProDescriptions.Item label="审计抽样">{current.auditSampling}</ProDescriptions.Item>
                 <ProDescriptions.Item label="回滚规则">{current.rollbackRule}</ProDescriptions.Item>
-                <ProDescriptions.Item label="更新时间">{current.updatedAt}</ProDescriptions.Item>
+                <ProDescriptions.Item label="更新时间">
+                  {formatLocalDateTime(current.updatedAt)}
+                </ProDescriptions.Item>
               </ProDescriptions>
             </Space>
           ) : (
@@ -1017,17 +984,6 @@ const SkillsCatalogPage = () => {
 
               {current.skillCode === 'ext.image_generate' && current.supportsInvoke ? (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  <Alert
-                    type={current.status === '运行中' ? 'success' : 'warning'}
-                    showIcon
-                    message="图片试运行台"
-                    description={
-                      current.status === '运行中'
-                        ? '当前走真实 HTTP provider，生成结果仅用于后台即时预览，不进入正式任务沉淀。'
-                        : '当前仍可试运行，但如果缺少本地 .env 配置，接口会返回可读错误而不会静默失败。'
-                    }
-                  />
-
                   <Form<ImageGenerationRequest>
                     form={imageForm}
                     layout="vertical"

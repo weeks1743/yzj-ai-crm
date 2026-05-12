@@ -5,8 +5,10 @@ import {
 } from '@ant-design/icons';
 import type { ThoughtChainItemProps } from '@ant-design/x';
 import { ThoughtChain } from '@ant-design/x';
-import { Alert, Button, Card, Drawer, Empty, List, Space, Tag, Tabs, Typography } from 'antd';
+import { Alert, Button, Card, Collapse, Drawer, Empty, List, Space, Spin, Tag, Tabs, Typography } from 'antd';
 import { createStyles } from 'antd-style';
+import { useEffect, useMemo, useState } from 'react';
+import type { AgentConversationProcessResponse, AgentRunDiagnosticItem } from '@shared/types';
 import type {
   AssistantChatMessage,
   AssistantEvidenceCard,
@@ -60,6 +62,7 @@ interface RunInsightDrawerProps {
   sourceTags: string[];
   slashCommand: string;
   tenantContext: RunInsightTenantContext;
+  conversationKey: string;
   agentTrace?: AgentTrace;
   evidence?: AssistantEvidenceCard[];
   recordingTasks?: RecordingInsightTask[];
@@ -104,6 +107,12 @@ const useStyles = createStyles(({ token, css }) => ({
     display: flex;
     flex-direction: column;
     gap: 8px;
+  `,
+  intentHeader: css`
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
   `,
   flowNode: css`
     border: 1px solid ${token.colorBorderSecondary};
@@ -206,6 +215,16 @@ function renderJson(value: unknown, className: string) {
   );
 }
 
+async function fetchConversationProcess(conversationKey: string): Promise<AgentConversationProcessResponse> {
+  const response = await fetch(`/api/agent/conversations/${encodeURIComponent(conversationKey)}/process`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(response.statusText || `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<AgentConversationProcessResponse>;
+}
+
 function renderSummaryRows(rows?: AssistantRecordWritePreviewRow[]) {
   if (!rows?.length) {
     return null;
@@ -261,6 +280,228 @@ function RunInsightFlow({
         </div>
       ))}
     </div>
+  );
+}
+
+function DiagnosticFlow({
+  run,
+  styles,
+}: {
+  run: AgentRunDiagnosticItem;
+  styles: ReturnType<typeof useStyles>['styles'];
+}) {
+  return (
+    <div className={styles.flowCanvas}>
+      {run.steps.map((node, index) => (
+        <div key={node.key}>
+          <div className={styles.flowNode}>
+            <div className={styles.flowNodeHeader}>
+              <Text strong>{node.title}</Text>
+              <Tag color={flowStatusColor[node.status]}>{node.statusLabel}</Tag>
+            </div>
+            <Text>{node.summary}</Text>
+            {node.details ? <div className={styles.flowNodeDetails}>{node.details}</div> : null}
+          </div>
+          {index < run.steps.length - 1 ? <div className={styles.flowConnector} /> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function pickDefaultDiagnosticRunKey(runs: AgentRunDiagnosticItem[], attentionRunId?: string | null): string | undefined {
+  return attentionRunId
+    || [...runs].reverse().find((item) => item.issue.severity !== 'info')?.runId
+    || runs[runs.length - 1]?.runId;
+}
+
+export function buildFallbackDiagnosticRun(agentTrace: AgentTrace): AgentRunDiagnosticItem {
+  const steps = buildRunFlowNodes(agentTrace).map((node): AgentRunDiagnosticItem['steps'][number] => ({
+    ...node,
+    statusLabel: flowStatusText[node.status],
+  }));
+  const status = agentTrace.executionState?.status ?? 'completed';
+  const errorStep = steps.find((step) => step.status === 'error');
+  const warningStep = steps.find((step) => step.status === 'warning');
+  return {
+    runId: agentTrace.executionState?.runId || agentTrace.traceId,
+    traceId: agentTrace.traceId,
+    userInput: '当前消息',
+    goal: agentTrace.intentFrame?.goal || '当前 Agent 任务',
+    targetType: agentTrace.intentFrame?.targetType || 'unknown',
+    status,
+    statusLabel: executionStatusMeta[status]?.label || status,
+    planTitle: agentTrace.taskPlan?.title || 'Agent 任务',
+    planKind: agentTrace.taskPlan?.kind || 'unknown_clarify',
+    currentStepKey: agentTrace.executionState?.currentStepKey ?? null,
+    evidenceCount: 0,
+    toolCallCount: agentTrace.toolCalls?.length ?? 0,
+    failedToolCallCount: agentTrace.toolCalls?.filter((item) => item.status === 'failed').length ?? 0,
+    pendingConfirmationCount: agentTrace.pendingConfirmation ? 1 : 0,
+    createdAt: agentTrace.executionState?.startedAt || '',
+    updatedAt: agentTrace.executionState?.finishedAt || agentTrace.executionState?.startedAt || '',
+    selectedToolCode: agentTrace.selectedTool?.toolCode,
+    selectedToolReason: agentTrace.selectedTool?.reason,
+    toolCalls: (agentTrace.toolCalls ?? []).map((item, index) => ({
+      id: item.id || `${agentTrace.traceId}-tool-${index}`,
+      runId: item.runId || agentTrace.executionState?.runId || agentTrace.traceId,
+      toolCode: item.toolCode,
+      status: item.status as AgentRunDiagnosticItem['toolCalls'][number]['status'],
+      inputSummary: item.inputSummary || '',
+      outputSummary: item.outputSummary || '',
+      startedAt: item.startedAt || '',
+      finishedAt: item.finishedAt ?? null,
+      errorMessage: item.errorMessage ?? null,
+      errorDetails: item.errorDetails,
+    })),
+    confirmations: [],
+    steps,
+    issue: errorStep
+      ? {
+          severity: 'error',
+          title: `卡在${errorStep.title.replace(/^\d+\.\s*/, '')}`,
+          summary: errorStep.key === 'policy'
+            ? errorStep.summary || errorStep.details || '策略守卫需要关注。'
+            : errorStep.details || errorStep.summary,
+          stepKey: errorStep.key,
+        }
+      : warningStep
+        ? {
+            severity: 'warning',
+            title: `需要关注：${warningStep.title.replace(/^\d+\.\s*/, '')}`,
+            summary: warningStep.details || warningStep.summary,
+            stepKey: warningStep.key,
+          }
+        : {
+            severity: 'info',
+            title: '本轮已完成',
+            summary: '这个意图已经正常处理完成。',
+            stepKey: 'state',
+          },
+  };
+}
+
+export function buildDiagnosticRuns(
+  process?: AgentConversationProcessResponse | null,
+  agentTrace?: AgentTrace,
+): AgentRunDiagnosticItem[] {
+  const diagnosticRuns = process?.diagnostics?.runs ?? [];
+  if (diagnosticRuns.length) {
+    return diagnosticRuns;
+  }
+  return agentTrace ? [buildFallbackDiagnosticRun(agentTrace)] : [];
+}
+
+function renderIssueTag(severity: AgentRunDiagnosticItem['issue']['severity']) {
+  if (severity === 'error') {
+    return <Tag color="error">需要排查</Tag>;
+  }
+  if (severity === 'warning') {
+    return <Tag color="warning">待处理</Tag>;
+  }
+  return <Tag color="success">正常</Tag>;
+}
+
+function DiagnosticOverview({
+  process,
+  diagnosticRuns,
+  loading,
+  error,
+  styles,
+}: {
+  process?: AgentConversationProcessResponse | null;
+  diagnosticRuns: AgentRunDiagnosticItem[];
+  loading: boolean;
+  error?: string | null;
+  styles: ReturnType<typeof useStyles>['styles'];
+}) {
+  const summary = process?.diagnostics?.summary;
+  const attentionRun = diagnosticRuns.find((item) => item.runId === summary?.attentionRunId)
+    ?? diagnosticRuns.find((item) => item.issue.severity !== 'info')
+    ?? diagnosticRuns[diagnosticRuns.length - 1];
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      {loading ? <Spin tip="正在读取会话完整过程..." /> : null}
+      {error ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="已使用当前消息的本地 Trace"
+          description="会话级完整过程暂时读取失败，当前视图仍可查看最近一次 Agent 任务。"
+        />
+      ) : null}
+      <Card className={styles.insightCard} title="本会话概览">
+        <div className={styles.summaryGrid}>
+          <div className={styles.summaryItem}>
+            <Text type="secondary">处理意图</Text>
+            <div><Text strong>{summary?.totalRuns ?? diagnosticRuns.length}</Text></div>
+          </div>
+          <div className={styles.summaryItem}>
+            <Text type="secondary">需要关注</Text>
+            <div><Text strong>{diagnosticRuns.filter((item) => item.issue.severity !== 'info').length}</Text></div>
+          </div>
+          <div className={styles.summaryItem}>
+            <Text type="secondary">等待处理</Text>
+            <div><Text strong>{summary?.waitingCount ?? diagnosticRuns.filter((item) => item.status.startsWith('waiting_')).length}</Text></div>
+          </div>
+          <div className={styles.summaryItem}>
+            <Text type="secondary">失败 / 阻断</Text>
+            <div><Text strong>{summary?.failedCount ?? diagnosticRuns.filter((item) => item.issue.severity === 'error').length}</Text></div>
+          </div>
+        </div>
+      </Card>
+      <Card className={styles.insightCard} title="问题定位">
+        {attentionRun ? (
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <Space wrap>
+              {renderIssueTag(attentionRun.issue.severity)}
+              <Text strong>{attentionRun.issue.title}</Text>
+              <Text copyable type="secondary">{attentionRun.traceId}</Text>
+            </Space>
+            <Text>{attentionRun.issue.summary}</Text>
+            <Text type="secondary">
+              对应意图：{attentionRun.goal || attentionRun.userInput || '-'}
+            </Text>
+          </Space>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="发送请求后会展示问题定位" />
+        )}
+      </Card>
+    </Space>
+  );
+}
+
+function ConversationDiagnosticFlow({
+  runs,
+  attentionRunId,
+  styles,
+}: {
+  runs: AgentRunDiagnosticItem[];
+  attentionRunId?: string | null;
+  styles: ReturnType<typeof useStyles>['styles'];
+}) {
+  if (!runs.length) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前会话暂无 Agent 诊断流程" />;
+  }
+  const defaultKey = pickDefaultDiagnosticRunKey(runs, attentionRunId);
+  return (
+    <Collapse
+      defaultActiveKey={defaultKey ? [defaultKey] : undefined}
+      items={runs.map((run, index) => ({
+        key: run.runId,
+        label: (
+          <div className={styles.intentHeader}>
+            <Space wrap>
+              {renderIssueTag(run.issue.severity)}
+              <Text strong>{`意图 ${index + 1}：${run.goal || run.userInput || run.planTitle}`}</Text>
+            </Space>
+            <Text type="secondary">{run.issue.title} · {run.issue.summary}</Text>
+          </div>
+        ),
+        children: <DiagnosticFlow run={run} styles={styles} />,
+      }))}
+    />
   );
 }
 
@@ -518,12 +759,16 @@ export function RunInsightDrawer({
   sourceTags,
   slashCommand,
   tenantContext,
+  conversationKey,
   agentTrace,
   evidence = [],
   recordingTasks = [],
   adminBaseUrl,
 }: RunInsightDrawerProps) {
   const { styles } = useStyles();
+  const [conversationProcess, setConversationProcess] = useState<AgentConversationProcessResponse | null>(null);
+  const [processLoading, setProcessLoading] = useState(false);
+  const [processError, setProcessError] = useState<string | null>(null);
   const traceId = agentTrace?.traceId;
   const executionState = agentTrace?.executionState;
   const taskPlan = agentTrace?.taskPlan;
@@ -535,6 +780,41 @@ export function RunInsightDrawer({
   const pendingInteraction = agentTrace?.pendingInteraction;
   const toolArbitration = agentTrace?.toolArbitration;
   const adminTraceUrl = traceId ? buildAdminTraceUrl(adminBaseUrl, traceId) : '';
+  const diagnosticRuns = useMemo(
+    () => buildDiagnosticRuns(conversationProcess, agentTrace),
+    [agentTrace, conversationProcess],
+  );
+  const diagnosticsSummary = conversationProcess?.diagnostics?.summary;
+
+  useEffect(() => {
+    if (!open || !conversationKey) {
+      return;
+    }
+    let cancelled = false;
+    setProcessLoading(true);
+    setProcessError(null);
+    fetchConversationProcess(conversationKey)
+      .then((payload) => {
+        if (!cancelled) {
+          setConversationProcess(payload);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setProcessError(error instanceof Error ? error.message : '会话完整过程加载失败');
+          setConversationProcess(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProcessLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationKey, open]);
+
   const skillJobs = recordingTasks.flatMap((task) => (
     task.skillJobs.map((job) => ({
       ...job,
@@ -542,7 +822,6 @@ export function RunInsightDrawer({
       fileName: task.fileName,
     }))
   ));
-  const defaultActiveKey = agentTrace ? 'agent' : recordingTasks.length ? 'recording' : 'raw';
   const agentTaskPanel = agentTrace ? (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Card className={styles.insightCard} title="运行状态">
@@ -581,7 +860,15 @@ export function RunInsightDrawer({
         </Space>
       </Card>
       <Card className={styles.insightCard} title="诊断流程图">
-        <RunInsightFlow agentTrace={agentTrace} styles={styles} />
+        {diagnosticRuns.length ? (
+          <ConversationDiagnosticFlow
+            runs={diagnosticRuns}
+            attentionRunId={diagnosticsSummary?.attentionRunId}
+            styles={styles}
+          />
+        ) : (
+          <RunInsightFlow agentTrace={agentTrace} styles={styles} />
+        )}
       </Card>
       <Card className={styles.insightCard} title={taskPlan?.title || '任务计划'}>
         {planSteps.length ? (
@@ -786,6 +1073,19 @@ export function RunInsightDrawer({
     <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未触发下游外部技能" />
   );
   const tabItems = [
+    diagnosticRuns.length || processLoading || processError ? {
+      key: 'diagnostics',
+      label: '问题定位',
+      children: (
+        <DiagnosticOverview
+          process={conversationProcess}
+          diagnosticRuns={diagnosticRuns}
+          loading={processLoading}
+          error={processError}
+          styles={styles}
+        />
+      ),
+    } : null,
     agentTrace ? {
       key: 'agent',
       label: 'Agent 任务',
@@ -803,10 +1103,17 @@ export function RunInsightDrawer({
     } : null,
     {
       key: 'raw',
-      label: '原始 Trace',
-      children: renderJson({ agentTrace: agentTrace ?? null, recordingTasks }, styles.jsonText),
+      label: '高级 / 原始 Trace',
+      children: renderJson({ diagnostics: conversationProcess?.diagnostics ?? null, agentTrace: agentTrace ?? null, recordingTasks }, styles.jsonText),
     },
   ].filter(Boolean) as NonNullable<Parameters<typeof Tabs>[0]['items']>;
+  const defaultActiveKey = diagnosticRuns.length || processLoading || processError
+    ? 'diagnostics'
+    : agentTrace
+      ? 'agent'
+      : recordingTasks.length
+        ? 'recording'
+        : 'raw';
 
   return (
     <Drawer

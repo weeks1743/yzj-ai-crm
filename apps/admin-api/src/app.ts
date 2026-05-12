@@ -5,7 +5,6 @@ import type {
   AppConfig,
   AgentChatRequest,
   AgentConversationUpsertRequest,
-  AgentPersonalSettingsUpdateRequest,
   AgentMetaQuestionOptionsRequest,
   AgentRecordSearchPageRequest,
   ArtifactSearchRequest,
@@ -28,7 +27,6 @@ import type {
 import { ApprovalFileService } from './approval-file-service.js';
 import type { AgentConversationService } from './agent-conversation-service.js';
 import type { AgentObservabilityService } from './agent-observability-service.js';
-import type { AgentPersonalSettingsService } from './agent-personal-settings-service.js';
 import { AgentService } from './agent-service.js';
 import { ArtifactImageService } from './artifact-image-service.js';
 import { AppError, BadRequestError, ServiceUnavailableError } from './errors.js';
@@ -58,7 +56,6 @@ interface CreateAdminApiServerOptions {
   recordingTaskService?: RecordingTaskService;
   agentService?: AgentService;
   agentConversationService?: AgentConversationService;
-  agentPersonalSettingsService?: AgentPersonalSettingsService;
   agentObservabilityService?: AgentObservabilityService;
 }
 
@@ -392,32 +389,6 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
         return;
       }
 
-      if (method === 'GET' && url.pathname === '/api/agent/personal-settings') {
-        if (!options.agentPersonalSettingsService) {
-          throw new ServiceUnavailableError('Agent 个人设置服务未启用');
-        }
-        writeJson(
-          response,
-          200,
-          await options.agentPersonalSettingsService.getSettings(
-            resolveOperatorOpenId(options.config, url.searchParams.get('operatorOpenId')),
-          ),
-        );
-        return;
-      }
-
-      if (method === 'PUT' && url.pathname === '/api/agent/personal-settings') {
-        if (!options.agentPersonalSettingsService) {
-          throw new ServiceUnavailableError('Agent 个人设置服务未启用');
-        }
-        const payload = await readJsonBody<AgentPersonalSettingsUpdateRequest>(request);
-        writeJson(response, 200, await options.agentPersonalSettingsService.updateSettings({
-          ...payload,
-          operatorOpenId: resolveOperatorOpenId(options.config, payload.operatorOpenId),
-        }));
-        return;
-      }
-
       if (method === 'GET' && url.pathname === '/api/agent/runs') {
         if (!options.agentObservabilityService) {
           throw new ServiceUnavailableError('Agent 观测服务未启用');
@@ -429,8 +400,24 @@ export function createAdminApiServer(options: CreateAdminApiServerOptions) {
           sceneKey: url.searchParams.get('sceneKey') ?? undefined,
           conversationKey: url.searchParams.get('conversationKey') ?? undefined,
           traceId: url.searchParams.get('traceId') ?? undefined,
+          operatorName: url.searchParams.get('operatorName') ?? undefined,
         }));
         return;
+      }
+
+      if (method === 'GET' && url.pathname.startsWith('/api/agent/conversations/')) {
+        if (!options.agentObservabilityService) {
+          throw new ServiceUnavailableError('Agent 观测服务未启用');
+        }
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length === 5 && parts[4] === 'process') {
+          const conversationKey = decodeURIComponent(parts[3] ?? '').trim();
+          if (!conversationKey) {
+            throw new BadRequestError('缺少会话编号');
+          }
+          writeJson(response, 200, await options.agentObservabilityService.getConversationProcess(conversationKey));
+          return;
+        }
       }
 
       if (method === 'GET' && url.pathname === '/api/agent/confirmations') {

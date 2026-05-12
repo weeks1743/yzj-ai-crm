@@ -343,7 +343,12 @@ function renderStatusTag(status: MetricStatus) {
 const AnalysisPage = () => {
   return (
     <PageContainer
-      title="分析运营看板"
+      title={
+        <Space>
+          <span>分析运营看板</span>
+          <Tag color="blue">DEMO 静态页面</Tag>
+        </Space>
+      }
       subTitle="面向销售 AI 助手的会话运行、能力使用、写回确认和资料沉淀运营视图"
     >
       <Row gutter={[16, 16]}>

@@ -1741,6 +1741,26 @@ test('HTTP endpoints expose settings, org sync, and shadow metadata flow', async
     const missingRunResponse = await fetch(`${runtime.baseUrl}/api/agent/runs/missing-run`);
     assert.equal(missingRunResponse.status, 404);
 
+    const personalSettingsResponse = await fetch(`${runtime.baseUrl}/api/agent/personal-settings`);
+    assert.equal(personalSettingsResponse.status, 404);
+
+    const processResponse = await fetch(
+      `${runtime.baseUrl}/api/agent/conversations/${encodeURIComponent('conv-empty')}/process`,
+    );
+    assert.equal(processResponse.status, 200);
+    const processPayload = (await processResponse.json()) as {
+      conversationKey: string;
+      runs: unknown[];
+      messages: unknown[];
+      toolCalls: unknown[];
+      confirmations: unknown[];
+    };
+    assert.equal(processPayload.conversationKey, 'conv-empty');
+    assert.deepEqual(processPayload.runs, []);
+    assert.deepEqual(processPayload.messages, []);
+    assert.deepEqual(processPayload.toolCalls, []);
+    assert.deepEqual(processPayload.confirmations, []);
+
     const authResponse = await fetch(`${runtime.baseUrl}/api/settings/yzj-auth`);
     const authPayload = (await authResponse.json()) as {
       tokenScopes: string[];

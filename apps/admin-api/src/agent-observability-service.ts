@@ -1,4 +1,5 @@
 import type {
+  AgentConversationProcessResponse,
   AgentConfirmationListResponse,
   AgentRunDetailResponse,
   AgentRunListResponse,
@@ -13,6 +14,7 @@ export interface AgentRunListQuery {
   sceneKey?: string;
   conversationKey?: string;
   traceId?: string;
+  operatorName?: string;
 }
 
 export interface AgentConfirmationListQuery {
@@ -35,6 +37,10 @@ export class AgentObservabilityService {
       throw new NotFoundError(`未找到 Agent 运行记录：${runId}`);
     }
     return detail;
+  }
+
+  async getConversationProcess(conversationKey: string): Promise<AgentConversationProcessResponse> {
+    return this.repository.getConversationProcess(conversationKey);
   }
 
   async listConfirmations(query: AgentConfirmationListQuery): Promise<AgentConfirmationListResponse> {

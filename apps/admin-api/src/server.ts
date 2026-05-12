@@ -4,7 +4,6 @@ import { ApprovalFileService } from './approval-file-service.js';
 import { ApprovalClient } from './approval-client.js';
 import { AgentObservabilityService } from './agent-observability-service.js';
 import { AgentConversationService } from './agent-conversation-service.js';
-import { AgentPersonalSettingsService } from './agent-personal-settings-service.js';
 import { AgentRunRepository } from './agent-run-repository.js';
 import { MainAgentRuntime } from './agent-runtime.js';
 import { AgentService } from './agent-service.js';
@@ -187,11 +186,6 @@ const recordingTaskService = new RecordingTaskService({
 const agentRunRepository = new AgentRunRepository(database);
 const agentObservabilityService = new AgentObservabilityService(agentRunRepository);
 const agentConversationService = new AgentConversationService(agentRunRepository);
-const agentPersonalSettingsService = new AgentPersonalSettingsService({
-  config,
-  database,
-  orgSyncRepository,
-});
 const agentRuntimeParts = createCrmAgentRuntimeParts({
   config,
   repository: agentRunRepository,
@@ -238,7 +232,6 @@ const server = createAdminApiServer({
   recordingTaskService,
   agentService,
   agentConversationService,
-  agentPersonalSettingsService,
   agentObservabilityService,
 });
 

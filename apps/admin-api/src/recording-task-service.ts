@@ -167,38 +167,38 @@ export class RecordingTaskService {
       throw new BadRequestError('录音文件不能为空');
     }
     const md5 = createHash('md5').update(input.content).digest('hex');
+    const anchors = normalizeAnchors(input.anchors);
     const existing = await this.options.repository.findByFileHash({ eid, appId, md5 });
     if (existing && existing.status !== 'failed') {
-      return toRecordingTaskResponse(await this.reuseExistingTask(existing));
+      const record = await this.options.repository.createTask({
+        eid,
+        appId,
+        serviceTaskId: existing.serviceTaskId,
+        providerDataId: existing.providerDataId,
+        fixtureTaskId: existing.fixtureTaskId,
+        status: existing.status,
+        file: {
+          fileName,
+          mimeType: input.mimeType || 'application/octet-stream',
+          size: input.content.byteLength,
+          md5,
+        },
+        anchors,
+        servicePayload: buildDuplicateUploadServicePayload(existing),
+        errorMessage: existing.errorMessage,
+        materialPath: existing.materialPath,
+        materialSource: existing.materialSource,
+        createdBy: input.createdBy?.trim() || 'assistant-web',
+      });
+      return toRecordingTaskResponse(record);
     }
 
     const serviceTask = await this.options.client.uploadTask({
       fileName,
       mimeType: input.mimeType || 'application/octet-stream',
       content: input.content,
-      anchors: normalizeAnchors(input.anchors),
+      anchors,
     });
-    if (existing) {
-      const restarted = await this.options.repository.replaceFromService({
-        taskId: existing.taskId,
-        serviceTaskId: serviceTask.taskId,
-        providerDataId: serviceTask.providerDataId,
-        fixtureTaskId: serviceTask.fixtureTaskId,
-        status: serviceTask.status,
-        file: readServiceFile(serviceTask, {
-          fileName,
-          mimeType: input.mimeType || 'application/octet-stream',
-          size: input.content.byteLength,
-          md5,
-        }),
-        anchors: normalizeAnchors(input.anchors),
-        servicePayload: serviceTask as unknown as Record<string, unknown>,
-        errorMessage: serviceTask.errorMessage,
-        materialPath: serviceTask.material?.path,
-        materialSource: serviceTask.material?.source,
-      });
-      return toRecordingTaskResponse(restarted);
-    }
 
     const record = await this.options.repository.createTask({
       eid,
@@ -213,9 +213,11 @@ export class RecordingTaskService {
         size: input.content.byteLength,
         md5,
       }),
-      anchors: normalizeAnchors(input.anchors),
+      anchors,
       servicePayload: serviceTask as unknown as Record<string, unknown>,
       errorMessage: serviceTask.errorMessage,
+      materialPath: serviceTask.material?.path,
+      materialSource: serviceTask.material?.source,
       createdBy: input.createdBy?.trim() || 'assistant-web',
     });
     return toRecordingTaskResponse(record);
@@ -754,7 +756,7 @@ export class RecordingTaskService {
       status: serviceTask.status,
       providerDataId: serviceTask.providerDataId,
       fixtureTaskId: serviceTask.fixtureTaskId,
-      anchors: serviceTask.anchors,
+      anchors: record.anchors,
       servicePayload: mergeServicePayload(record.servicePayload, serviceTask as unknown as Record<string, unknown>),
       errorMessage: serviceTask.errorMessage,
       materialPath: serviceTask.material?.path,
@@ -786,7 +788,7 @@ export class RecordingTaskService {
         status: serviceTask.status,
         providerDataId: serviceTask.providerDataId,
         fixtureTaskId: serviceTask.fixtureTaskId,
-        anchors: serviceTask.anchors,
+        anchors: record.anchors,
         servicePayload: mergeServicePayload(record.servicePayload, serviceTask as unknown as Record<string, unknown>),
         errorMessage: serviceTask.errorMessage,
         materialPath: serviceTask.material?.path,
@@ -999,6 +1001,31 @@ function removePendingArchive(payload: Record<string, unknown>): Record<string, 
   return rest;
 }
 
+function buildDuplicateUploadServicePayload(record: RecordingTaskRecord): Record<string, unknown> {
+  const {
+    archivedArtifactId: _archivedArtifactId,
+    archivedFollowupId: _archivedFollowupId,
+    pendingArchive: _pendingArchive,
+    skillJobs: _skillJobs,
+    anchors: _anchors,
+    ...rest
+  } = record.servicePayload;
+  return {
+    ...rest,
+    reusedProcessingFromTaskId: record.taskId,
+    taskId: record.serviceTaskId,
+    providerDataId: record.providerDataId,
+    fixtureTaskId: record.fixtureTaskId,
+    status: record.status,
+    file: record.file,
+    material: {
+      available: Boolean(record.materialPath),
+      path: record.materialPath,
+      source: record.materialSource,
+    },
+  };
+}
+
 function readPendingArchivePayload(value: unknown): PendingArchivePayload | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -1082,6 +1109,9 @@ function assertProcessFilesExcluded(markdown: string): void {
 }
 
 function buildRecordingJobSourceSignals(record: RecordingTaskRecord): string[] {
+  if (readPayloadString(record.servicePayload.reusedProcessingFromTaskId)) {
+    return [record.taskId];
+  }
   return [
     record.taskId,
     record.serviceTaskId,
@@ -1280,6 +1310,7 @@ function buildRecordingSkillRequestText(label: string, record: RecordingTaskReco
     hasFormalContext
       ? '本次请求已提供正式客户、商机和跟进记录锚点；Markdown 标题和正文不得输出“未关联客户/商机”“未关联商机”“录音未绑定”等旧上下文描述。'
       : '如缺少正式客户或商机锚点，请在标题和结论中明确标记为待绑定上下文。',
+    `录音任务：${record.taskId}。`,
     '必须优先读取附件中的通义结构化分析 JSON（mindMapSummary.json、summarization.json、meetingAssistance.json、autoChapters.json），再参考 recording-material.md 或 profile-analysis/*.md，并据此抽取具体需求、待办和风险；只有附件确实没有对应内容时，才标记为待澄清。',
     '只读取“可用输入文件”清单中的具体附件；不要读取 transcription.json、translations.json、textPolish.json、task-result.json、create-task.json、summary.txt 等原始过程文件。',
     '请输出结构化 Markdown，并保留可继续被后续拜访分析能力消费的标题层级。',

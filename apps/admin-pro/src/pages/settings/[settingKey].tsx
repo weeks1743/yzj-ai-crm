@@ -25,6 +25,7 @@ import type {
   YzjAuthSettingsResponse,
 } from '@shared';
 import { settingPages, traceLogs } from '@shared';
+import { formatLocalDateTime } from '@/utils/time';
 
 const { Text } = Typography;
 
@@ -48,7 +49,12 @@ const observabilityColumns: ProColumns<TraceLog>[] = [
     render: (_, record) => record.toolChain.join(' -> '),
   },
   { title: '写回结果', dataIndex: 'writebackResult' },
-  { title: '时间', dataIndex: 'timestamp', width: 170 },
+  {
+    title: '时间',
+    dataIndex: 'timestamp',
+    width: 170,
+    render: (_, record) => formatLocalDateTime(record.timestamp),
+  },
 ];
 
 const credentialColumns: ProColumns<CredentialSummary>[] = [
@@ -107,12 +113,17 @@ const orgSyncRunColumns: ProColumns<OrgSyncRunSummary>[] = [
       return <Tag color="processing">运行中</Tag>;
     },
   },
-  { title: '开始时间', dataIndex: 'startedAt', width: 180 },
+  {
+    title: '开始时间',
+    dataIndex: 'startedAt',
+    width: 170,
+    render: (_, record) => formatLocalDateTime(record.startedAt),
+  },
   {
     title: '完成时间',
     dataIndex: 'finishedAt',
-    width: 180,
-    render: (_, record) => record.finishedAt ?? '-',
+    width: 170,
+    render: (_, record) => formatLocalDateTime(record.finishedAt),
   },
   { title: '分页数', dataIndex: 'pageCount', width: 90 },
   { title: '拉取数', dataIndex: 'fetchedCount', width: 90 },
@@ -284,13 +295,6 @@ const SettingsPage = () => {
 
     return (
       <PageContainer title={title} subTitle={subTitle}>
-        <Alert
-          type="info"
-          showIcon
-          message="真实联调设置"
-          description="这三类设置页已接入 admin-api：凭据从本地 .env 读取，页面只做只读展示与手动同步操作，不在后台明文保存任何密钥。"
-        />
-
         {loading && !realPageData ? (
           <div style={{ marginTop: 24, textAlign: 'center' }}>
             <Spin tip="正在加载真实设置..." />
@@ -499,14 +503,6 @@ const SettingsPage = () => {
 
         {!loading && !errorMessage && realPageData && pageKey === 'org-sync' ? (
           <>
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginTop: 16 }}
-              message="当前阶段口径"
-              description="只支持手动触发的一次性全量同步，只同步在职人员；不做定时任务、不做增量同步，也不处理部门、角色与上下级关系。"
-            />
-
             {renderMetrics([
               {
                 key: 'employeeCount',
@@ -528,10 +524,12 @@ const SettingsPage = () => {
                     ? '成功'
                     : realPageData.lastRun?.status === 'failed'
                       ? '失败'
-                      : realPageData.isSyncing
-                        ? '运行中'
-                        : '未执行',
-                helper: realPageData.lastRun?.finishedAt ?? '尚未完成过同步',
+                    : realPageData.isSyncing
+                      ? '运行中'
+                      : '未执行',
+                helper: realPageData.lastRun?.finishedAt
+                  ? formatLocalDateTime(realPageData.lastRun.finishedAt)
+                  : '尚未完成过同步',
               },
             ])}
 
@@ -580,13 +578,6 @@ const SettingsPage = () => {
 
   return (
     <PageContainer title={config.title} subTitle={config.summary}>
-      <Alert
-        type="info"
-        showIcon
-        message="配置说明"
-        description="这些设置以正式后台能力组织，不简化成一个普通“设置页”，并为后续真实云之家联调与模型接入预留位置。"
-      />
-
       <Space wrap size={16} style={{ width: '100%', marginTop: 16 }}>
         {config.metrics.map((item) => (
           <StatisticCard
@@ -619,22 +610,6 @@ const SettingsPage = () => {
         {config.groups.map((group) => (
           <div key={group.key}>
             <Divider orientation="left">{group.title}</Divider>
-            <Alert
-              type="success"
-              showIcon
-              message={group.summary}
-              description={
-                <>
-                  {group.healthNote}
-                  <div style={{ marginTop: 8 }}>
-                    {group.tags.map((tag) => (
-                      <Tag key={tag}>{tag}</Tag>
-                    ))}
-                  </div>
-                </>
-              }
-              style={{ marginBottom: 16 }}
-            />
             {group.fields.map((field) => {
               if (field.kind === 'switch') {
                 return (

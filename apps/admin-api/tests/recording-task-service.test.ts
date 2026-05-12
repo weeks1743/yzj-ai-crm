@@ -508,7 +508,7 @@ test('requestArchiveTask repairs downstream analysis for already archived record
   }
 });
 
-test('uploadTask falls back to completed md5 cache when audio service sync is unavailable', async () => {
+test('uploadTask creates a new unarchived business task from completed md5 cache when audio service sync is unavailable', async () => {
   const config = createTestConfig({ embeddingApiKey: null });
   const content = Buffer.from('same mp3 bytes');
   const md5 = '1db4760d0720e8749f4199c5c4ceb332';
@@ -527,7 +527,19 @@ test('uploadTask falls back to completed md5 cache when audio service sync is un
       md5,
     },
     anchors: { customer: '星海精工' },
-    servicePayload: {},
+    servicePayload: {
+      stages: [{ key: 'uploaded', label: '已上传', status: 'succeeded' }],
+      playback: { available: true, path: '/tmp/playback.mp3' },
+      archivedArtifactId: 'artifact-recording-cached',
+      archivedFollowupId: 'followup-old',
+      pendingArchive: {
+        customerId: 'customer-old',
+        opportunityId: 'opportunity-old',
+        followupId: 'followup-pending-old',
+        createdBy: 'tester',
+        requestedAt: new Date().toISOString(),
+      },
+    },
     artifactId: 'artifact-recording-cached',
     materialPath: '/tmp/recording-material.md',
     materialSource: 'generated',
@@ -538,12 +550,37 @@ test('uploadTask falls back to completed md5 cache when audio service sync is un
   };
   let lookupHash = '';
   let serviceUploadCalled = false;
+  let createInput: any = null;
+  let createdRecord: RecordingTaskRecord | null = null;
   const service = new RecordingTaskService({
     config,
     repository: {
       findByFileHash: async (input: any) => {
         lookupHash = input.md5;
         return cachedRecord;
+      },
+      createTask: async (input: any) => {
+        createInput = input;
+        createdRecord = {
+          taskId: 'recording-task-new-cache',
+          eid: input.eid,
+          appId: input.appId,
+          serviceTaskId: input.serviceTaskId,
+          providerDataId: input.providerDataId ?? null,
+          fixtureTaskId: input.fixtureTaskId ?? null,
+          status: input.status,
+          file: input.file,
+          anchors: input.anchors,
+          servicePayload: input.servicePayload,
+          artifactId: null,
+          materialPath: input.materialPath ?? null,
+          materialSource: input.materialSource ?? null,
+          errorMessage: input.errorMessage ?? null,
+          createdBy: input.createdBy,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        return createdRecord;
       },
     } as any,
     client: {
@@ -566,11 +603,25 @@ test('uploadTask falls back to completed md5 cache when audio service sync is un
 
   assert.equal(lookupHash, md5);
   assert.equal(serviceUploadCalled, false);
-  assert.equal(response.taskId, cachedRecord.taskId);
-  assert.equal(response.material?.artifactId, 'artifact-recording-cached');
+  assert.equal(response.taskId, 'recording-task-new-cache');
+  assert.notEqual(response.taskId, cachedRecord.taskId);
+  assert.equal(response.serviceTaskId, cachedRecord.serviceTaskId);
+  assert.equal(response.providerDataId, cachedRecord.providerDataId);
+  assert.equal(response.material?.available, true);
+  assert.equal(response.material?.path, '/tmp/recording-material.md');
+  assert.equal(response.material?.artifactId, undefined);
+  assert.equal(response.archive?.status, 'unarchived');
+  assert.equal(response.archive?.followupId, undefined);
+  assert.deepEqual(response.anchors, {});
+  assert.deepEqual(createInput.servicePayload.stages, cachedRecord.servicePayload.stages);
+  assert.deepEqual(createInput.servicePayload.playback, cachedRecord.servicePayload.playback);
+  assert.equal(createInput.servicePayload.reusedProcessingFromTaskId, cachedRecord.taskId);
+  assert.equal('archivedArtifactId' in createInput.servicePayload, false);
+  assert.equal('archivedFollowupId' in createInput.servicePayload, false);
+  assert.equal('pendingArchive' in createInput.servicePayload, false);
 });
 
-test('uploadTask reuses completed md5 cache without creating a new provider task', async () => {
+test('uploadTask reuses completed md5 processing base without creating a new provider task', async () => {
   const config = createTestConfig({ embeddingApiKey: null });
   const content = Buffer.from('same mp3 bytes');
   const md5 = '1db4760d0720e8749f4199c5c4ceb332';
@@ -588,8 +639,15 @@ test('uploadTask reuses completed md5 cache without creating a new provider task
       size: content.byteLength,
       md5,
     },
-    anchors: {},
-    servicePayload: {},
+    anchors: {
+      customer: 'customer-old',
+      opportunity: 'opportunity-old',
+      followup: 'followup-old',
+    },
+    servicePayload: {
+      archivedArtifactId: 'artifact-old',
+      archivedFollowupId: 'followup-old',
+    },
     artifactId: 'artifact-old',
     materialPath: '/tmp/old/recording-material.md',
     materialSource: 'generated',
@@ -598,15 +656,18 @@ test('uploadTask reuses completed md5 cache without creating a new provider task
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  let replacementInput: any = null;
+  let createInput: any = null;
   let serviceUploadCalled = false;
   const service = new RecordingTaskService({
     config,
     repository: {
       findByFileHash: async () => cachedRecord,
-      replaceFromService: async (input: any) => {
-        replacementInput = input;
-        Object.assign(cachedRecord, {
+      createTask: async (input: any) => {
+        createInput = input;
+        return {
+          taskId: 'recording-task-duplicate',
+          eid: input.eid,
+          appId: input.appId,
           serviceTaskId: input.serviceTaskId,
           providerDataId: input.providerDataId ?? null,
           fixtureTaskId: input.fixtureTaskId ?? null,
@@ -618,8 +679,10 @@ test('uploadTask reuses completed md5 cache without creating a new provider task
           materialPath: input.materialPath ?? null,
           materialSource: input.materialSource ?? null,
           errorMessage: input.errorMessage ?? null,
-        });
-        return cachedRecord;
+          createdBy: input.createdBy,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
       },
     } as any,
     client: {
@@ -638,16 +701,24 @@ test('uploadTask reuses completed md5 cache without creating a new provider task
     fileName: '贝斯美拜访.mp3',
     mimeType: 'audio/mpeg',
     content,
+    anchors: { customer: 'customer-new' },
   });
 
-  assert.equal(replacementInput, null);
   assert.equal(serviceUploadCalled, false);
+  assert.equal(response.taskId, 'recording-task-duplicate');
+  assert.notEqual(response.taskId, cachedRecord.taskId);
   assert.equal(response.providerDataId, 'pqngDD3wjSwf');
   assert.equal(response.fixtureTaskId ?? null, null);
-  assert.equal(response.material?.artifactId, 'artifact-old');
+  assert.equal(response.material?.path, '/tmp/old/recording-material.md');
+  assert.equal(response.material?.artifactId, undefined);
+  assert.equal(response.archive?.status, 'unarchived');
+  assert.deepEqual(response.anchors, { customer: 'customer-new' });
+  assert.deepEqual(createInput.anchors, { customer: 'customer-new' });
+  assert.equal(createInput.servicePayload.archivedArtifactId, undefined);
+  assert.equal(createInput.servicePayload.archivedFollowupId, undefined);
 });
 
-test('uploadTask restarts failed md5 cache instead of returning stale dependency error', async () => {
+test('uploadTask creates a new business task when failed md5 cache is retried', async () => {
   const config = createTestConfig({ embeddingApiKey: null });
   const content = Buffer.from('same mp3 bytes');
   const md5 = '1db4760d0720e8749f4199c5c4ceb332';
@@ -678,24 +749,32 @@ test('uploadTask restarts failed md5 cache instead of returning stale dependency
     updatedAt: new Date().toISOString(),
   };
   let providerUploadCalled = false;
-  let replacementInput: any = null;
+  let createInput: any = null;
   const service = new RecordingTaskService({
     config,
     repository: {
       findByFileHash: async () => failedRecord,
-      replaceFromService: async (input: any) => {
-        replacementInput = input;
-        Object.assign(failedRecord, {
+      createTask: async (input: any) => {
+        createInput = input;
+        return {
+          taskId: 'recording-task-retry-new',
+          eid: input.eid,
+          appId: input.appId,
           serviceTaskId: input.serviceTaskId,
+          providerDataId: input.providerDataId ?? null,
+          fixtureTaskId: input.fixtureTaskId ?? null,
           status: input.status,
           file: input.file,
           anchors: input.anchors,
           servicePayload: input.servicePayload,
-          errorMessage: input.errorMessage ?? null,
+          artifactId: null,
           materialPath: input.materialPath ?? null,
           materialSource: input.materialSource ?? null,
-        });
-        return failedRecord;
+          errorMessage: input.errorMessage ?? null,
+          createdBy: input.createdBy,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
       },
     } as any,
     client: {
@@ -729,8 +808,9 @@ test('uploadTask restarts failed md5 cache instead of returning stale dependency
   });
 
   assert.equal(providerUploadCalled, true);
-  assert.equal(replacementInput.serviceTaskId, 'audio-task-retry');
-  assert.equal(response.taskId, failedRecord.taskId);
+  assert.equal(createInput.serviceTaskId, 'audio-task-retry');
+  assert.equal(response.taskId, 'recording-task-retry-new');
+  assert.notEqual(response.taskId, failedRecord.taskId);
   assert.equal(response.serviceTaskId, 'audio-task-retry');
   assert.equal(response.status, 'running');
   assert.equal(response.errorMessage, null);
@@ -976,6 +1056,117 @@ test('createSkillJob sends structured Tongyi analysis JSON before recording mark
     assert.match(receivedInput.requestText, /不要读取 transcription\.json/);
     assert.doesNotMatch(receivedInput.requestText, /客户：星海精工|商机：MES 试点/);
     assert.equal(receivedInput.attachments.some((item: string) => item.includes('transcription.json')), false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('duplicate recording business task starts downstream analysis with the new recording task id', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'recording-duplicate-skill-'));
+  try {
+    const materialPath = join(tempDir, 'recording-material.md');
+    writeFileSync(materialPath, '# 录音资料包\n\n客户关注预算。', 'utf8');
+    const config = createTestConfig({ embeddingApiKey: null });
+    const record: RecordingTaskRecord = {
+      taskId: 'recording-task-new-duplicate',
+      eid: config.yzj.eid,
+      appId: config.yzj.lightCloud.appId,
+      serviceTaskId: 'audio-task-shared-md5',
+      providerDataId: 'DATA-SHARED',
+      fixtureTaskId: null,
+      status: 'succeeded',
+      file: {
+        fileName: '贝斯美拜访-copy.mp3',
+        mimeType: 'audio/mpeg',
+        size: 456,
+        md5: 'md5-shared',
+      },
+      anchors: {},
+      servicePayload: {
+        taskId: 'audio-task-shared-md5',
+        providerDataId: 'DATA-SHARED',
+        status: 'succeeded',
+        reusedProcessingFromTaskId: 'recording-task-old-duplicate',
+      },
+      artifactId: null,
+      materialPath,
+      materialSource: 'generated',
+      errorMessage: null,
+      createdBy: 'tester',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    let receivedInput: any = null;
+    const service = new RecordingTaskService({
+      config,
+      repository: {
+        getTask: async () => record,
+        updateFromService: async (input: any) => {
+          Object.assign(record, {
+            status: input.status,
+            providerDataId: input.providerDataId ?? record.providerDataId,
+            fixtureTaskId: input.fixtureTaskId ?? record.fixtureTaskId,
+            anchors: input.anchors ?? record.anchors,
+            servicePayload: input.servicePayload,
+            materialPath: input.materialPath ?? record.materialPath,
+            materialSource: input.materialSource ?? record.materialSource,
+            errorMessage: input.errorMessage ?? null,
+          });
+          return record;
+        },
+      } as any,
+      client: {
+        getTask: async () => {
+          throw new Error('audio service offline during duplicate skill lookup');
+        },
+        materialize: async () => ({
+          taskId: 'audio-task-shared-md5',
+          provider: 'tongyi-tingwu',
+          status: 'succeeded',
+          providerDataId: 'DATA-SHARED',
+          fixtureTaskId: null,
+          file: record.file,
+          anchors: { customer: 'old-customer', opportunity: 'old-opportunity', followup: 'old-followup' },
+          stages: [],
+          material: {
+            available: true,
+            path: materialPath,
+            source: 'generated',
+            markdown: '# 录音资料包\n\n客户关注预算。',
+          },
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }),
+      } as any,
+      artifactService: {} as any,
+      externalSkillService: {
+        createSkillJob: async (skillCode: string, input: any) => {
+          receivedInput = input;
+          return {
+            jobId: 'job-duplicate-skill',
+            skillCode,
+            runtimeSkillName: 'visit-conversation-understanding',
+            model: 'deepseek-v4-flash',
+            status: 'queued',
+            finalText: null,
+            events: [],
+            artifacts: [],
+            error: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        },
+      } as any,
+    });
+
+    const response = await service.createSkillJob(record.taskId, {
+      skillCode: 'ext.visit_conversation_understanding',
+    });
+
+    assert.equal(response.jobId, 'job-duplicate-skill');
+    assert.match(receivedInput.requestText, /录音任务：recording-task-new-duplicate/);
+    assert.doesNotMatch(receivedInput.requestText, /old-customer|old-opportunity|old-followup/);
+    assert.deepEqual(record.anchors, {});
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

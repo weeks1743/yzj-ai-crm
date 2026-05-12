@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { summarizeContextFlow, summarizeSelectedToolInput } from './RunInsightDrawer';
+import {
+  buildDiagnosticRuns,
+  buildFallbackDiagnosticRun,
+  summarizeContextFlow,
+  summarizeSelectedToolInput,
+} from './RunInsightDrawer';
 
 test('RunInsightDrawer marks bare collection queries as skipped context', () => {
   const flow = summarizeContextFlow({
@@ -79,4 +84,105 @@ test('RunInsightDrawer labels record search filter sources', () => {
     }),
     /过滤来源：用户显式条件/,
   );
+});
+
+test('RunInsightDrawer prefers conversation diagnostics over latest local trace', () => {
+  const runs = buildDiagnosticRuns({
+    conversationKey: 'conv-001',
+    runs: [],
+    messages: [],
+    toolCalls: [],
+    confirmations: [],
+    diagnostics: {
+      summary: {
+        totalRuns: 2,
+        completedCount: 1,
+        waitingCount: 1,
+        failedCount: 0,
+        attentionRunId: 'run-001',
+        attentionTraceId: 'trace-001',
+        attentionSeverity: 'warning',
+        attentionTitle: '等待用户确认',
+        attentionSummary: '系统正在等待确认。',
+        latestRunId: 'run-002',
+        latestTraceId: 'trace-002',
+      },
+      runs: [
+        {
+          runId: 'run-001',
+          traceId: 'trace-001',
+          userInput: '新增跟进记录',
+          goal: '新增跟进记录',
+          targetType: 'followup',
+          status: 'waiting_confirmation',
+          statusLabel: '等待确认',
+          planTitle: '写回跟进记录',
+          planKind: 'tool_confirmation',
+          currentStepKey: 'confirm',
+          evidenceCount: 0,
+          toolCallCount: 1,
+          failedToolCallCount: 0,
+          pendingConfirmationCount: 1,
+          createdAt: '2026-04-29T08:00:00.000Z',
+          updatedAt: '2026-04-29T08:00:01.000Z',
+          toolCalls: [],
+          confirmations: [],
+          steps: [{ key: 'state', title: '7. 最终状态', status: 'warning', statusLabel: '需关注', summary: '等待确认' }],
+          issue: { severity: 'warning', title: '等待用户确认', summary: '系统正在等待确认。', stepKey: 'state' },
+        },
+        {
+          runId: 'run-002',
+          traceId: 'trace-002',
+          userInput: '谢谢',
+          goal: '回应用户',
+          targetType: 'unknown',
+          status: 'completed',
+          statusLabel: '已完成',
+          planTitle: '普通回复',
+          planKind: 'unknown_clarify',
+          currentStepKey: null,
+          evidenceCount: 0,
+          toolCallCount: 0,
+          failedToolCallCount: 0,
+          pendingConfirmationCount: 0,
+          createdAt: '2026-04-29T08:01:00.000Z',
+          updatedAt: '2026-04-29T08:01:01.000Z',
+          toolCalls: [],
+          confirmations: [],
+          steps: [{ key: 'state', title: '7. 最终状态', status: 'success', statusLabel: '通过', summary: '已完成' }],
+          issue: { severity: 'info', title: '本轮已完成', summary: '这个意图已经正常处理完成。', stepKey: 'state' },
+        },
+      ],
+    },
+  } as any, {
+    traceId: 'trace-local',
+    intentFrame: { goal: '本地最后一轮', targetType: 'unknown' },
+    executionState: { status: 'completed' },
+    taskPlan: {},
+    toolCalls: [],
+  } as any);
+
+  assert.deepEqual(runs.map((item) => item.runId), ['run-001', 'run-002']);
+  assert.equal(runs[0]?.issue.title, '等待用户确认');
+});
+
+test('RunInsightDrawer builds fallback diagnostic from local trace', () => {
+  const run = buildFallbackDiagnosticRun({
+    traceId: 'trace-local',
+    intentFrame: { goal: '更新客户字段', actionType: 'write', targetType: 'customer' },
+    executionState: { runId: 'run-local', status: 'waiting_confirmation', message: '等待确认', currentStepKey: 'confirm' },
+    taskPlan: { title: '写回客户', kind: 'tool_confirmation' },
+    selectedTool: {
+      toolCode: 'record.customer.preview_update',
+      reason: '写入前预览',
+      input: { params: {} },
+    },
+    toolCalls: [],
+    policyDecisions: [{ policyCode: 'record.preview_empty_payload_guard', action: 'block', reason: '空写入' }],
+  } as any);
+
+  assert.equal(run.runId, 'run-local');
+  assert.equal(run.issue.severity, 'error');
+  assert.match(run.issue.summary, /空写入守卫|写入参数/);
+  assert.equal(run.steps.map((item) => item.key).join(','), 'intent,context,tool,input,tool-result,policy,state');
 });

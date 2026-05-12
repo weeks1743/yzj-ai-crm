@@ -3,12 +3,17 @@ import type { QueryResultRow } from 'pg';
 import type {
   AgentChatMessage,
   AgentChatRequest,
+  AgentConversationDiagnostics,
+  AgentConversationProcessResponse,
   AgentConfirmationAuditRow,
   AgentConfirmationListResponse,
   AgentConfirmationStatus,
   AgentEvidenceCard,
   AgentExecutionStatus,
   AgentObservedMessage,
+  AgentRunDiagnosticItem,
+  AgentRunDiagnosticIssue,
+  AgentRunDiagnosticStep,
   AgentToolCall,
   ExecutionState,
   IntentFrame,
@@ -57,6 +62,7 @@ interface AgentRunListQuery {
   sceneKey?: string;
   conversationKey?: string;
   traceId?: string;
+  operatorName?: string;
 }
 
 interface AgentConfirmationListQuery {
@@ -77,6 +83,9 @@ interface AgentRunRow extends QueryResultRow {
   app_id: string;
   conversation_key: string;
   scene_key: string;
+  operator_open_id: string | null;
+  resolved_operator_open_id?: string | null;
+  operator_name?: string | null;
   user_input: string;
   intent_frame_json: unknown;
   context_subject_json: unknown;
@@ -125,6 +134,15 @@ interface AgentToolCallRow extends QueryResultRow {
   started_at: string;
   finished_at: string | null;
   error_message: string | null;
+}
+
+interface AgentRunDiagnosticSource {
+  run: AgentRunSummary;
+  intentFrame: IntentFrame;
+  taskPlan: TaskPlan;
+  executionState: ExecutionState;
+  contextSubject: ContextFrameSubject | null;
+  evidenceRefs: AgentEvidenceCard[];
 }
 
 interface PendingInteractionStateRow extends QueryResultRow {
@@ -220,16 +238,32 @@ export class AgentRunRepository {
     const { page, pageSize, offset } = normalizePagination(query.page, query.pageSize);
     const where = buildRunWhere(query);
     const totalRow = await this.database.queryOne<CountRow>(
-      `SELECT COUNT(*) AS total FROM ${this.database.table('agent_runs')} r ${where.sql}`,
+      `
+        SELECT COUNT(*) AS total
+        FROM ${this.database.table('agent_runs')} r
+        LEFT JOIN ${this.database.table('agent_conversations')} conv ON conv.conversation_key = r.conversation_key
+        LEFT JOIN ${this.database.table('org_employees')} emp
+          ON emp.eid = r.eid
+         AND emp.app_id = r.app_id
+         AND emp.open_id = COALESCE(r.operator_open_id, conv.operator_open_id)
+        ${where.sql}
+      `,
       where.params,
     );
     const rows = await this.database.query<AgentRunRow>(
       `
         SELECT r.*,
+               COALESCE(r.operator_open_id, conv.operator_open_id) AS resolved_operator_open_id,
+               NULLIF(emp.name, '') AS operator_name,
                (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id) AS tool_call_count,
                (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
                (SELECT COUNT(*) FROM ${this.database.table('agent_confirmations')} c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
         FROM ${this.database.table('agent_runs')} r
+        LEFT JOIN ${this.database.table('agent_conversations')} conv ON conv.conversation_key = r.conversation_key
+        LEFT JOIN ${this.database.table('org_employees')} emp
+          ON emp.eid = r.eid
+         AND emp.app_id = r.app_id
+         AND emp.open_id = COALESCE(r.operator_open_id, conv.operator_open_id)
         ${where.sql}
         ORDER BY r.created_at DESC, r.run_id DESC
         LIMIT $${where.params.length + 1} OFFSET $${where.params.length + 2}
@@ -249,10 +283,17 @@ export class AgentRunRepository {
     const row = await this.database.queryMaybeOne<AgentRunRow>(
       `
         SELECT r.*,
+               COALESCE(r.operator_open_id, conv.operator_open_id) AS resolved_operator_open_id,
+               NULLIF(emp.name, '') AS operator_name,
                (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id) AS tool_call_count,
                (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
                (SELECT COUNT(*) FROM ${this.database.table('agent_confirmations')} c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
         FROM ${this.database.table('agent_runs')} r
+        LEFT JOIN ${this.database.table('agent_conversations')} conv ON conv.conversation_key = r.conversation_key
+        LEFT JOIN ${this.database.table('org_employees')} emp
+          ON emp.eid = r.eid
+         AND emp.app_id = r.app_id
+         AND emp.open_id = COALESCE(r.operator_open_id, conv.operator_open_id)
         WHERE r.run_id = $1
         LIMIT 1
       `,
@@ -295,6 +336,88 @@ export class AgentRunRepository {
       messages: messages.map(mapObservedMessage),
       toolCalls: toolCalls.map(mapToolCallRow),
       confirmations: (await this.listConfirmations({ runId, page: 1, pageSize: 200 })).items,
+    };
+  }
+
+  async getConversationProcess(conversationKey: string): Promise<AgentConversationProcessResponse> {
+    const normalizedConversationKey = conversationKey.trim();
+    const runRows = await this.database.query<AgentRunRow>(
+      `
+        SELECT r.*,
+               COALESCE(r.operator_open_id, conv.operator_open_id) AS resolved_operator_open_id,
+               NULLIF(emp.name, '') AS operator_name,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id) AS tool_call_count,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_tool_calls')} t WHERE t.run_id = r.run_id AND t.status = 'failed') AS failed_tool_call_count,
+               (SELECT COUNT(*) FROM ${this.database.table('agent_confirmations')} c WHERE c.run_id = r.run_id AND c.status = 'pending') AS pending_confirmation_count
+        FROM ${this.database.table('agent_runs')} r
+        LEFT JOIN ${this.database.table('agent_conversations')} conv ON conv.conversation_key = r.conversation_key
+        LEFT JOIN ${this.database.table('org_employees')} emp
+          ON emp.eid = r.eid
+         AND emp.app_id = r.app_id
+         AND emp.open_id = COALESCE(r.operator_open_id, conv.operator_open_id)
+        WHERE r.conversation_key = $1
+        ORDER BY r.created_at ASC, r.run_id ASC
+        LIMIT 100
+      `,
+      [normalizedConversationKey],
+    );
+    const messages = await this.database.query<AgentMessageRow>(
+      `
+        SELECT *
+        FROM ${this.database.table('agent_messages')}
+        WHERE conversation_key = $1
+        ORDER BY
+          created_at ASC,
+          run_id ASC,
+          CASE role WHEN 'user' THEN 0 WHEN 'assistant' THEN 1 ELSE 2 END ASC,
+          message_id ASC
+      `,
+      [normalizedConversationKey],
+    );
+    const toolCalls = await this.database.query<AgentToolCallRow>(
+      `
+        SELECT t.*
+        FROM ${this.database.table('agent_tool_calls')} t
+        INNER JOIN ${this.database.table('agent_runs')} r ON r.run_id = t.run_id
+        WHERE r.conversation_key = $1
+        ORDER BY t.started_at ASC, t.tool_call_id ASC
+      `,
+      [normalizedConversationKey],
+    );
+    const confirmations = await this.database.query<ConfirmationAuditRow>(
+      `
+        SELECT c.*, r.trace_id
+        FROM ${this.database.table('agent_confirmations')} c
+        INNER JOIN ${this.database.table('agent_runs')} r ON r.run_id = c.run_id
+        WHERE r.conversation_key = $1
+        ORDER BY c.created_at ASC, c.confirmation_id ASC
+      `,
+      [normalizedConversationKey],
+    );
+
+    const runSummaries = runRows.map(mapRunSummary);
+    const mappedToolCalls = toolCalls.map(mapToolCallRow);
+    const mappedConfirmations = confirmations.map(mapConfirmationAuditRow);
+
+    return {
+      conversationKey: normalizedConversationKey,
+      runs: runSummaries,
+      messages: messages.map(mapObservedMessage),
+      toolCalls: mappedToolCalls,
+      confirmations: mappedConfirmations,
+      diagnostics: buildConversationDiagnostics(
+        runRows.map((row, index) => ({
+          run: runSummaries[index] ?? mapRunSummary(row),
+          intentFrame: parseJson<IntentFrame>(row.intent_frame_json, fallbackIntentFrame()),
+          taskPlan: parseJson<TaskPlan>(row.task_plan_json, fallbackTaskPlan()),
+          executionState: parseJson<ExecutionState>(row.execution_state_json, fallbackExecutionState(row)),
+          contextSubject: parseContextSubject(row.context_subject_json),
+          evidenceRefs: parseEvidenceRefs(row.evidence_refs_json),
+        })),
+        mappedToolCalls,
+        mappedConfirmations,
+        messages.map(mapObservedMessage),
+      ),
     };
   }
 
@@ -538,20 +661,22 @@ export class AgentRunRepository {
     message: AgentChatMessage;
   }): Promise<void> {
     const now = new Date().toISOString();
+    const operatorOpenId = input.request.tenantContext?.operatorOpenId?.trim() || null;
     await this.database.query(
       `
         INSERT INTO ${this.database.table('agent_runs')} (
           run_id, trace_id, eid, app_id, conversation_key, scene_key, user_input,
           intent_frame_json, context_subject_json, task_plan_json, execution_state_json, evidence_refs_json,
-          status, created_at, updated_at
+          status, operator_open_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15, $16)
         ON CONFLICT (run_id) DO UPDATE SET
           trace_id = EXCLUDED.trace_id,
           eid = EXCLUDED.eid,
           app_id = EXCLUDED.app_id,
           conversation_key = EXCLUDED.conversation_key,
           scene_key = EXCLUDED.scene_key,
+          operator_open_id = EXCLUDED.operator_open_id,
           user_input = EXCLUDED.user_input,
           intent_frame_json = EXCLUDED.intent_frame_json,
           context_subject_json = EXCLUDED.context_subject_json,
@@ -575,6 +700,7 @@ export class AgentRunRepository {
         JSON.stringify(input.executionState),
         JSON.stringify(input.evidence),
         input.executionState.status,
+        operatorOpenId,
         now,
         now,
       ],
@@ -676,6 +802,7 @@ export class AgentRunRepository {
         ...row,
         eid: '',
         app_id: '',
+        operator_open_id: null,
         user_input: '',
         intent_frame_json: null,
         evidence_refs_json: [],
@@ -990,6 +1117,9 @@ function buildRunWhere(query: AgentRunListQuery) {
   if (query.conversationKey?.trim()) {
     clauses.push(`r.conversation_key = $${params.push(query.conversationKey.trim())}`);
   }
+  if (query.operatorName?.trim()) {
+    clauses.push(`emp.name LIKE $${params.push(`%${escapeLike(query.operatorName.trim())}%`)} ESCAPE '\\'`);
+  }
   if (query.traceId?.trim()) {
     const traceId = query.traceId.trim();
     const traceIndex = params.push(traceId);
@@ -1001,6 +1131,435 @@ function buildRunWhere(query: AgentRunListQuery) {
     sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '',
     params,
   };
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
+const executionStatusLabels: Record<string, string> = {
+  draft: '草稿',
+  running: '运行中',
+  waiting_input: '等待补充信息',
+  waiting_selection: '等待选择',
+  waiting_confirmation: '等待确认',
+  paused: '已暂停',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+  tool_unavailable: '工具不可用',
+};
+
+const diagnosticStepLabels: Record<AgentRunDiagnosticStep['status'], string> = {
+  success: '通过',
+  warning: '需关注',
+  error: '阻断',
+  processing: '运行中',
+  default: '记录',
+};
+
+function buildConversationDiagnostics(
+  sources: AgentRunDiagnosticSource[],
+  toolCalls: AgentToolCall[],
+  confirmations: AgentConfirmationAuditRow[],
+  messages: AgentObservedMessage[],
+): AgentConversationDiagnostics {
+  const runs = sources.map((source) => buildRunDiagnosticItem({
+    source,
+    toolCalls: toolCalls.filter((item) => item.runId === source.run.runId),
+    confirmations: confirmations.filter((item) => item.runId === source.run.runId),
+    messages: messages.filter((item) => item.runId === source.run.runId),
+  }));
+  const attention = pickAttentionDiagnosticRun(runs);
+  const latest = runs[runs.length - 1] ?? null;
+  const failedCount = runs.filter((item) => item.issue.severity === 'error').length;
+  const waitingCount = runs.filter((item) => item.status.startsWith('waiting_')).length;
+  const completedCount = runs.filter((item) => item.status === 'completed').length;
+
+  return {
+    summary: {
+      totalRuns: runs.length,
+      completedCount,
+      waitingCount,
+      failedCount,
+      attentionRunId: attention?.runId ?? null,
+      attentionTraceId: attention?.traceId ?? null,
+      attentionSeverity: attention?.issue.severity ?? 'info',
+      attentionTitle: attention?.issue.title ?? (runs.length ? '本会话暂无明显阻断' : '当前会话暂无 Agent 任务'),
+      attentionSummary: attention?.issue.summary ?? (runs.length
+        ? '所有已记录意图都没有触发失败、等待或阻断信号。'
+        : '发送请求后，这里会展示每个意图的处理过程。'),
+      latestRunId: latest?.runId ?? null,
+      latestTraceId: latest?.traceId ?? null,
+    },
+    runs,
+  };
+}
+
+function buildRunDiagnosticItem(input: {
+  source: AgentRunDiagnosticSource;
+  toolCalls: AgentToolCall[];
+  confirmations: AgentConfirmationAuditRow[];
+  messages: AgentObservedMessage[];
+}): AgentRunDiagnosticItem {
+  const { source, toolCalls, confirmations, messages } = input;
+  const trace = extractAgentTraceFromMessages(messages);
+  const selectedTool = readRecord(trace.selectedTool);
+  const policyDecisions = Array.isArray(trace.policyDecisions)
+    ? trace.policyDecisions.filter((item): item is Record<string, unknown> => Boolean(readRecord(item)))
+    : [];
+  const resolvedContext = readRecord(trace.resolvedContext);
+  const semanticResolution = readRecord(trace.semanticResolution);
+  const pendingInteraction = readRecord(trace.pendingInteraction);
+  const pendingConfirmation = readRecord(trace.pendingConfirmation);
+  const steps = buildRunDiagnosticSteps({
+    source,
+    toolCalls,
+    confirmations,
+    selectedTool,
+    policyDecisions,
+    resolvedContext,
+    semanticResolution,
+    pendingInteraction,
+    pendingConfirmation,
+  });
+  const issue = buildRunDiagnosticIssue(source.run, steps, toolCalls, confirmations);
+
+  return {
+    runId: source.run.runId,
+    traceId: source.run.traceId,
+    userInput: source.run.userInput,
+    goal: source.run.goal,
+    targetType: source.run.targetType,
+    status: source.run.status,
+    statusLabel: formatExecutionStatus(source.run.status),
+    planTitle: source.run.planTitle,
+    planKind: source.run.planKind,
+    currentStepKey: source.run.currentStepKey,
+    evidenceCount: source.run.evidenceCount,
+    toolCallCount: source.run.toolCallCount,
+    failedToolCallCount: source.run.failedToolCallCount,
+    pendingConfirmationCount: source.run.pendingConfirmationCount,
+    createdAt: source.run.createdAt,
+    updatedAt: source.run.updatedAt,
+    selectedToolCode: typeof selectedTool.toolCode === 'string' ? selectedTool.toolCode : undefined,
+    selectedToolReason: typeof selectedTool.reason === 'string' ? selectedTool.reason : undefined,
+    toolCalls,
+    confirmations,
+    steps,
+    issue,
+  };
+}
+
+function buildRunDiagnosticSteps(input: {
+  source: AgentRunDiagnosticSource;
+  toolCalls: AgentToolCall[];
+  confirmations: AgentConfirmationAuditRow[];
+  selectedTool: Record<string, unknown>;
+  policyDecisions: Array<Record<string, unknown>>;
+  resolvedContext: Record<string, unknown>;
+  semanticResolution: Record<string, unknown>;
+  pendingInteraction: Record<string, unknown>;
+  pendingConfirmation: Record<string, unknown>;
+}): AgentRunDiagnosticStep[] {
+  const { source, toolCalls, confirmations, selectedTool, policyDecisions } = input;
+  const lastToolCall = toolCalls[toolCalls.length - 1];
+  const selectedToolInput = readRecord(selectedTool.input);
+  const selectedToolCode = typeof selectedTool.toolCode === 'string' ? selectedTool.toolCode : '';
+  const params = readSelectedToolParams(selectedToolInput);
+  const paramsEmpty = selectedToolCode.includes('.preview_') && Object.keys(params).length === 0;
+  const emptyGuard = policyDecisions.some((item) => item.policyCode === 'record.preview_empty_payload_guard');
+  const blockingPolicy = [...policyDecisions].reverse().find((item) => item.action && item.action !== 'audit');
+  const contextStep = summarizeDiagnosticContext(input);
+
+  return [
+    createDiagnosticStep({
+      key: 'intent',
+      title: '1. 意图识别',
+      status: 'success',
+      summary: source.intentFrame.goal || source.run.goal || '已识别用户想做的事',
+      details: [
+        source.intentFrame.actionType ? `动作：${source.intentFrame.actionType}` : '',
+        source.intentFrame.targetType ? `对象：${source.intentFrame.targetType}` : '',
+      ].filter(Boolean).join('；') || undefined,
+    }),
+    createDiagnosticStep({
+      key: 'context',
+      title: '2. 上下文绑定',
+      status: contextStep.status,
+      summary: contextStep.summary,
+      details: contextStep.details,
+    }),
+    createDiagnosticStep({
+      key: 'tool',
+      title: '3. 工具选择',
+      status: selectedToolCode || toolCalls.length ? 'success' : 'warning',
+      summary: selectedToolCode || toolCalls[0]?.toolCode || '没有选出可执行工具',
+      details: typeof selectedTool.reason === 'string' ? selectedTool.reason : undefined,
+    }),
+    createDiagnosticStep({
+      key: 'input',
+      title: '4. 工具输入',
+      status: paramsEmpty ? 'warning' : selectedToolCode || toolCalls.length ? 'success' : 'default',
+      summary: selectedToolCode
+        ? summarizeSelectedToolInput(selectedToolInput)
+        : toolCalls[0]?.inputSummary || '暂无工具输入',
+      details: paramsEmpty ? '写入参数为空，后续预览无法生成真实写入字段。' : undefined,
+    }),
+    createDiagnosticStep({
+      key: 'tool-result',
+      title: '5. 工具结果',
+      status: lastToolCall?.status === 'succeeded'
+        ? 'success'
+        : lastToolCall?.status === 'failed'
+          ? 'error'
+          : lastToolCall?.status === 'skipped'
+            ? 'warning'
+            : source.executionState.status === 'running'
+              ? 'processing'
+              : 'default',
+      summary: lastToolCall?.outputSummary || '暂无工具执行结果',
+      details: lastToolCall?.errorMessage ?? undefined,
+    }),
+    createDiagnosticStep({
+      key: 'policy',
+      title: '6. 策略 / 守卫',
+      status: emptyGuard ? 'error' : blockingPolicy ? 'warning' : 'success',
+      summary: emptyGuard
+        ? '字段抽取为空，空写入守卫已阻断'
+        : typeof blockingPolicy?.reason === 'string'
+          ? blockingPolicy.reason
+          : confirmations.some((item) => item.status === 'pending')
+            ? '已进入写回确认，等待用户确认后继续'
+            : '未触发阻断策略',
+      details: typeof blockingPolicy?.policyCode === 'string' ? blockingPolicy.policyCode : undefined,
+    }),
+    createDiagnosticStep({
+      key: 'state',
+      title: '7. 最终状态',
+      status: source.executionState.status === 'completed'
+        ? 'success'
+        : source.executionState.status === 'failed' || source.executionState.status === 'tool_unavailable'
+          ? 'error'
+          : source.executionState.status.startsWith('waiting_')
+            ? 'warning'
+            : source.executionState.status === 'running'
+              ? 'processing'
+              : 'default',
+      summary: source.executionState.message || formatExecutionStatus(source.executionState.status),
+      details: formatFinalStateDetails(input),
+    }),
+  ];
+}
+
+function createDiagnosticStep(input: Omit<AgentRunDiagnosticStep, 'statusLabel'>): AgentRunDiagnosticStep {
+  return {
+    ...input,
+    statusLabel: diagnosticStepLabels[input.status],
+  };
+}
+
+function summarizeDiagnosticContext(input: {
+  source: AgentRunDiagnosticSource;
+  resolvedContext: Record<string, unknown>;
+  semanticResolution: Record<string, unknown>;
+  pendingInteraction: Record<string, unknown>;
+}): Pick<AgentRunDiagnosticStep, 'status' | 'summary' | 'details'> {
+  const resolvedSubject = readRecord(input.resolvedContext.subject);
+  if (input.resolvedContext.usedContext && Object.keys(resolvedSubject).length) {
+    return {
+      status: 'success',
+      summary: `已使用上下文：${formatContextSubject(resolvedSubject)}`,
+      details: typeof input.resolvedContext.reason === 'string' ? input.resolvedContext.reason : undefined,
+    };
+  }
+
+  if (input.resolvedContext.usageMode === 'skipped_collection_query'
+    || input.semanticResolution.usageMode === 'skipped_collection_query'
+    || input.resolvedContext.skipReasonCode === 'record.collection_query') {
+    return {
+      status: 'default',
+      summary: '本轮是集合查询，没有承接上一轮单个对象',
+      details: typeof input.resolvedContext.reason === 'string' ? input.resolvedContext.reason : undefined,
+    };
+  }
+
+  const selectedCandidate = readRecord(input.semanticResolution.selectedCandidate);
+  const candidateSubject = readRecord(selectedCandidate.subject);
+  if (Object.keys(candidateSubject).length) {
+    return {
+      status: 'default',
+      summary: `仅记录候选：${formatContextSubject(candidateSubject)}`,
+      details: [
+        typeof input.resolvedContext.reason === 'string' ? input.resolvedContext.reason : '',
+        typeof input.semanticResolution.reason === 'string' ? input.semanticResolution.reason : '',
+      ].filter(Boolean).join('；') || undefined,
+    };
+  }
+
+  const pendingSubject = readRecord(input.pendingInteraction.contextSubject);
+  if (Object.keys(pendingSubject).length) {
+    return {
+      status: 'warning',
+      summary: `等待态上下文：${formatContextSubject(pendingSubject)}`,
+      details: typeof input.pendingInteraction.summary === 'string' ? input.pendingInteraction.summary : undefined,
+    };
+  }
+
+  if (input.source.contextSubject) {
+    return {
+      status: 'success',
+      summary: `已记录上下文：${formatContextSubject(input.source.contextSubject)}`,
+    };
+  }
+
+  return {
+    status: 'default',
+    summary: '本轮没有绑定明确上下文主体',
+    details: [
+      typeof input.resolvedContext.reason === 'string' ? input.resolvedContext.reason : '',
+      typeof input.semanticResolution.reason === 'string' ? input.semanticResolution.reason : '',
+    ].filter(Boolean).join('；') || undefined,
+  };
+}
+
+function buildRunDiagnosticIssue(
+  run: AgentRunSummary,
+  steps: AgentRunDiagnosticStep[],
+  toolCalls: AgentToolCall[],
+  confirmations: AgentConfirmationAuditRow[],
+): AgentRunDiagnosticIssue {
+  const errorStep = steps.find((step) => step.status === 'error');
+  if (errorStep) {
+    return {
+      severity: 'error',
+      title: `卡在${stripStepOrder(errorStep.title)}`,
+      summary: summarizeIssueStep(errorStep),
+      stepKey: errorStep.key,
+    };
+  }
+
+  const failedTool = [...toolCalls].reverse().find((item) => item.status === 'failed');
+  if (failedTool) {
+    return {
+      severity: 'error',
+      title: '工具调用失败',
+      summary: failedTool.errorMessage || failedTool.outputSummary || `${failedTool.toolCode} 执行失败。`,
+      stepKey: 'tool-result',
+    };
+  }
+
+  if (run.status === 'failed' || run.status === 'tool_unavailable') {
+    return {
+      severity: 'error',
+      title: formatExecutionStatus(run.status),
+      summary: steps.find((step) => step.key === 'state')?.summary || '本轮意图没有成功完成。',
+      stepKey: 'state',
+    };
+  }
+
+  const waitingStep = steps.find((step) => step.status === 'warning');
+  if (run.status.startsWith('waiting_') || confirmations.some((item) => item.status === 'pending') || waitingStep) {
+    return {
+      severity: 'warning',
+      title: run.status === 'waiting_confirmation' ? '等待用户确认' : `需要关注${waitingStep ? `：${stripStepOrder(waitingStep.title)}` : ''}`,
+      summary: confirmations.some((item) => item.status === 'pending')
+        ? '系统已经准备好写回内容，正在等待用户确认。'
+        : waitingStep?.details || waitingStep?.summary || '本轮意图还需要补充信息或选择。',
+      stepKey: waitingStep?.key ?? 'state',
+    };
+  }
+
+  return {
+    severity: 'info',
+    title: '本轮已完成',
+    summary: run.status === 'completed'
+      ? '这个意图已经正常处理完成。'
+      : `当前状态：${formatExecutionStatus(run.status)}。`,
+    stepKey: 'state',
+  };
+}
+
+function pickAttentionDiagnosticRun(runs: AgentRunDiagnosticItem[]): AgentRunDiagnosticItem | null {
+  return [...runs].reverse().find((item) => item.issue.severity === 'error')
+    ?? [...runs].reverse().find((item) => item.issue.severity === 'warning')
+    ?? runs[runs.length - 1]
+    ?? null;
+}
+
+function extractAgentTraceFromMessages(messages: AgentObservedMessage[]): Record<string, unknown> {
+  for (const message of [...messages].reverse()) {
+    const extraInfo = readRecord(message.extraInfo);
+    const trace = readRecord(extraInfo.agentTrace);
+    if (Object.keys(trace).length) {
+      return trace;
+    }
+  }
+  return {};
+}
+
+function readSelectedToolParams(input?: Record<string, unknown>): Record<string, unknown> {
+  const params = input?.params;
+  return params && typeof params === 'object' && !Array.isArray(params)
+    ? params as Record<string, unknown>
+    : {};
+}
+
+function summarizeSelectedToolInput(input?: Record<string, unknown>): string {
+  if (!input || !Object.keys(input).length) {
+    return '暂无工具输入';
+  }
+  const filters = Array.isArray(input.filters) ? input.filters : null;
+  if (filters) {
+    return filters.length
+      ? `查询条件：${filters.map(formatSearchFilter).join('、')}`
+      : '查询条件：无';
+  }
+  const formInstId = typeof input.formInstId === 'string' && input.formInstId ? '已绑定记录' : '';
+  const params = readSelectedToolParams(input);
+  const paramKeys = Object.keys(params);
+  const paramsText = paramKeys.length ? `写入字段：${paramKeys.join('、')}` : '写入字段：无';
+  return [formInstId, paramsText].filter(Boolean).join('；') || JSON.stringify(input);
+}
+
+function formatSearchFilter(filter: unknown): string {
+  if (!filter || typeof filter !== 'object') {
+    return String(filter);
+  }
+  const record = filter as { field?: unknown; operator?: unknown; value?: unknown };
+  return `${String(record.field ?? '-')}${String(record.operator ?? '=')}${String(record.value ?? '')}`;
+}
+
+function formatContextSubject(subject: { kind?: unknown; type?: unknown; id?: unknown; name?: unknown }): string {
+  return `${String(subject.type ?? subject.kind ?? 'subject')}：${String(subject.name ?? subject.id ?? '-')}`;
+}
+
+function formatExecutionStatus(status?: string): string {
+  return executionStatusLabels[status ?? ''] ?? status ?? '未知状态';
+}
+
+function formatFinalStateDetails(input: {
+  pendingConfirmation: Record<string, unknown>;
+  pendingInteraction: Record<string, unknown>;
+  confirmations: AgentConfirmationAuditRow[];
+}): string | undefined {
+  if (Object.keys(input.pendingConfirmation).length || input.confirmations.some((item) => item.status === 'pending')) {
+    return '已进入写回确认。';
+  }
+  if (typeof input.pendingInteraction.summary === 'string') {
+    return input.pendingInteraction.summary;
+  }
+  return undefined;
+}
+
+function stripStepOrder(title: string): string {
+  return title.replace(/^\d+\.\s*/, '');
+}
+
+function summarizeIssueStep(step: AgentRunDiagnosticStep): string {
+  return step.key === 'policy'
+    ? step.summary || step.details || '策略守卫需要关注。'
+    : step.details || step.summary;
 }
 
 function buildConfirmationWhere(query: AgentConfirmationListQuery) {
@@ -1025,6 +1584,7 @@ function mapRunSummary(row: AgentRunRow): AgentRunSummary {
   const taskPlan = parseJson<TaskPlan | null>(row.task_plan_json, null);
   const executionState = parseJson<ExecutionState | null>(row.execution_state_json, null);
   const evidenceRefs = parseEvidenceRefs(row.evidence_refs_json);
+  const operatorOpenId = row.resolved_operator_open_id ?? row.operator_open_id ?? null;
 
   return {
     runId: row.run_id,
@@ -1033,6 +1593,8 @@ function mapRunSummary(row: AgentRunRow): AgentRunSummary {
     appId: row.app_id,
     conversationKey: row.conversation_key,
     sceneKey: row.scene_key,
+    operatorOpenId,
+    operatorName: row.operator_name ?? '-',
     userInput: row.user_input,
     status: row.status as AgentExecutionStatus,
     goal: intentFrame?.goal ?? '-',
@@ -1047,6 +1609,11 @@ function mapRunSummary(row: AgentRunRow): AgentRunSummary {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function compareRunSummaryAsc(left: AgentRunSummary, right: AgentRunSummary): number {
+  const timeCompare = left.createdAt.localeCompare(right.createdAt);
+  return timeCompare || left.runId.localeCompare(right.runId);
 }
 
 function mapObservedMessage(row: AgentMessageRow): AgentObservedMessage {
